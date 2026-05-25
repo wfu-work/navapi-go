@@ -1,0 +1,40 @@
+system:
+  app-name: navapi-go
+  addr: 8888
+  db-type: sqlite
+  oss-type: local
+  router-prefix: /api
+  iplimit-count: 15000
+  iplimit-time: 3600
+  use-mongo: false
+  use-multipoint: false
+  use-redis: false
+  use-strict-auth: false
+
+jwt:
+  issuer: navapi-go
+  signing-key: navapi-go-change-me
+  expires-time: 7d
+  buffer-time: 1d
+
+local:
+  oss-path: ./data/oss
+  proxy-oss-path: /oss
+  cache-path: ./data/cache.json
+  ip2geo-path: ./data/ip2geo
+
+sqlite:
+  path: ./data/
+  db-name: navapi
+  log-mode: error
+  log-zap: false
+  max-idle-conns: 10
+  max-open-conns: 100
+
+zap:
+  level: info
+  format: console
+  director: logback
+  log-in-console: true
+  show-line: true
+  retention-day: -1
