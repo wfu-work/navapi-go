@@ -1,6 +1,7 @@
 package services
 
 import (
+	"sort"
 	"time"
 
 	"navapi-go/domains"
@@ -22,6 +23,36 @@ type DailyUsageData struct {
 	Success  int64  `json:"success"`
 	Errors   int64  `json:"errors"`
 	UserGuid string `json:"userGuid,omitempty"`
+}
+
+type UsageDimensionStat struct {
+	Name             string `json:"name"`
+	Requests         int64  `json:"requests"`
+	Success          int64  `json:"success"`
+	Errors           int64  `json:"errors"`
+	Quota            int64  `json:"quota"`
+	PromptTokens     int64  `json:"promptTokens"`
+	CompletionTokens int64  `json:"completionTokens"`
+	Tokens           int64  `json:"tokens"`
+	AvgUseTimeMs     int64  `json:"avgUseTimeMs"`
+}
+
+type UsageSummary struct {
+	Days             int                  `json:"days"`
+	TotalRequests    int64                `json:"totalRequests"`
+	SuccessRequests  int64                `json:"successRequests"`
+	ErrorRequests    int64                `json:"errorRequests"`
+	Quota            int64                `json:"quota"`
+	PromptTokens     int64                `json:"promptTokens"`
+	CompletionTokens int64                `json:"completionTokens"`
+	Tokens           int64                `json:"tokens"`
+	AvgUseTimeMs     int64                `json:"avgUseTimeMs"`
+	StreamRequests   int64                `json:"streamRequests"`
+	Series           []DailyUsageData     `json:"series"`
+	ByModel          []UsageDimensionStat `json:"byModel"`
+	ByChannel        []UsageDimensionStat `json:"byChannel"`
+	ByToken          []UsageDimensionStat `json:"byToken"`
+	ByUser           []UsageDimensionStat `json:"byUser,omitempty"`
 }
 
 func (s LogService) Create(log *domains.UsageLog) error {
@@ -123,6 +154,127 @@ func (s LogService) DailyData(userGuid string, days int) ([]DailyUsageData, erro
 		out = append(out, DailyUsageData{Date: date, UserGuid: userGuid})
 	}
 	return out, nil
+}
+
+// UsageSummary builds dashboard-ready aggregates without relying on
+// database-specific date functions, keeping the statistics portable.
+func (s LogService) UsageSummary(userGuid string, days int, topN int) (UsageSummary, error) {
+	if days <= 0 {
+		days = 7
+	}
+	if days > 90 {
+		days = 90
+	}
+	if topN <= 0 {
+		topN = 10
+	}
+	if topN > 50 {
+		topN = 50
+	}
+	series, err := s.DailyData(userGuid, days)
+	if err != nil {
+		return UsageSummary{}, err
+	}
+	start := beginningOfDay(time.Now()).AddDate(0, 0, -(days - 1))
+	db := global.NAV_DB.Model(&domains.UsageLog{}).Where("create_time >= ?", start.UnixMilli())
+	if userGuid != "" {
+		db = db.Where("user_guid = ?", userGuid)
+	}
+	var logs []domains.UsageLog
+	if err := db.Select("user_guid", "username", "token_guid", "token_name", "channel_guid", "channel_name", "model_name", "quota", "prompt_tokens", "completion_tokens", "use_time_ms", "is_stream", "status").
+		Find(&logs).Error; err != nil {
+		return UsageSummary{}, err
+	}
+	summary := UsageSummary{Days: days, Series: series}
+	byModel := map[string]*UsageDimensionStat{}
+	byChannel := map[string]*UsageDimensionStat{}
+	byToken := map[string]*UsageDimensionStat{}
+	byUser := map[string]*UsageDimensionStat{}
+	for _, log := range logs {
+		applyUsageStat(&summary, log)
+		applyDimensionStat(byModel, fallbackName(log.ModelName, "unknown"), log)
+		applyDimensionStat(byChannel, fallbackName(log.ChannelName, log.ChannelGuid), log)
+		applyDimensionStat(byToken, fallbackName(log.TokenName, log.TokenGuid), log)
+		if userGuid == "" {
+			applyDimensionStat(byUser, fallbackName(log.Username, log.UserGuid), log)
+		}
+	}
+	if summary.TotalRequests > 0 {
+		summary.AvgUseTimeMs = summary.AvgUseTimeMs / summary.TotalRequests
+	}
+	summary.ByModel = topUsageStats(byModel, topN)
+	summary.ByChannel = topUsageStats(byChannel, topN)
+	summary.ByToken = topUsageStats(byToken, topN)
+	if userGuid == "" {
+		summary.ByUser = topUsageStats(byUser, topN)
+	}
+	return summary, nil
+}
+
+func applyUsageStat(summary *UsageSummary, log domains.UsageLog) {
+	summary.TotalRequests++
+	if log.Status == "success" {
+		summary.SuccessRequests++
+	} else {
+		summary.ErrorRequests++
+	}
+	if log.IsStream {
+		summary.StreamRequests++
+	}
+	summary.Quota += log.Quota
+	summary.PromptTokens += log.PromptTokens
+	summary.CompletionTokens += log.CompletionTokens
+	summary.Tokens += log.PromptTokens + log.CompletionTokens
+	summary.AvgUseTimeMs += log.UseTimeMs
+}
+
+func applyDimensionStat(items map[string]*UsageDimensionStat, name string, log domains.UsageLog) {
+	item := items[name]
+	if item == nil {
+		item = &UsageDimensionStat{Name: name}
+		items[name] = item
+	}
+	item.Requests++
+	if log.Status == "success" {
+		item.Success++
+	} else {
+		item.Errors++
+	}
+	item.Quota += log.Quota
+	item.PromptTokens += log.PromptTokens
+	item.CompletionTokens += log.CompletionTokens
+	item.Tokens += log.PromptTokens + log.CompletionTokens
+	item.AvgUseTimeMs += log.UseTimeMs
+}
+
+func topUsageStats(items map[string]*UsageDimensionStat, limit int) []UsageDimensionStat {
+	out := make([]UsageDimensionStat, 0, len(items))
+	for _, item := range items {
+		if item.Requests > 0 {
+			item.AvgUseTimeMs = item.AvgUseTimeMs / item.Requests
+		}
+		out = append(out, *item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Quota == out[j].Quota {
+			return out[i].Requests > out[j].Requests
+		}
+		return out[i].Quota > out[j].Quota
+	})
+	if len(out) > limit {
+		return out[:limit]
+	}
+	return out
+}
+
+func fallbackName(primary string, fallback string) string {
+	if primary != "" {
+		return primary
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "unknown"
 }
 
 func beginningOfDay(t time.Time) time.Time {

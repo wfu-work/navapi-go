@@ -3,6 +3,9 @@ package services
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -50,4 +53,20 @@ func intMax(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func validateOptionalJSONObject(raw string, field string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var value map[string]any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return fmt.Errorf("%s must be a JSON object: %w", field, err)
+	}
+	return nil
+}
+
+func int64ToString(value int64) string {
+	return strconv.FormatInt(value, 10)
 }

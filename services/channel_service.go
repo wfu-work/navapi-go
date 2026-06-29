@@ -15,6 +15,7 @@ import (
 
 	"navapi-go/constants"
 	"navapi-go/domains"
+	"navapi-go/dto"
 
 	"github.com/wfu-work/nav-common-go-lib/global"
 	"gorm.io/gorm"
@@ -43,6 +44,14 @@ type ChannelTestResult struct {
 	OK           bool     `json:"ok"`
 	ResponseTime int64    `json:"responseTime"`
 	Models       []string `json:"models,omitempty"`
+}
+
+type ChannelUpstreamConfig struct {
+	Type           string `json:"type"`
+	BaseURL        string `json:"baseUrl"`
+	HeaderOverride string `json:"headerOverride"`
+	ParamOverride  string `json:"paramOverride"`
+	TestModel      string `json:"testModel"`
 }
 
 func (s ChannelService) Create(channel *domains.Channel) error {
@@ -255,11 +264,17 @@ func (s ChannelService) AutoDisable(id uint, reason string) error {
 	if len(reason) > 255 {
 		reason = reason[:255]
 	}
-	return global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).
+	err := global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).
 		Updates(map[string]any{
 			"status":          constants.StatusDisabled,
 			"disabled_reason": reason,
 		}).Error
+	if err == nil {
+		if channel, loadErr := s.GetByID(id); loadErr == nil {
+			_ = s.CreateHealthLog(channel, false, 0, 0, nil, reason, "auto_disable")
+		}
+	}
+	return err
 }
 
 func (s ChannelService) BatchStatus(ids []uint, status int) error {
@@ -299,16 +314,22 @@ func (s ChannelService) SetStatusByTag(tag string, status int) error {
 }
 
 func (s ChannelService) Test(id uint) (*ChannelTestResult, error) {
+	channel, err := s.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
 	start := time.Now()
-	models, err := s.FetchModels(id, false)
+	models, err := s.fetchModels(channel)
 	responseTime := time.Since(start).Milliseconds()
 	if err != nil {
 		_ = s.SetTestResult(id, responseTime)
+		_ = s.CreateHealthLog(channel, false, responseTime, 0, nil, err.Error(), "manual")
 		return nil, err
 	}
 	if err := s.SetTestResult(id, responseTime); err != nil {
 		return nil, err
 	}
+	_ = s.CreateHealthLog(channel, true, responseTime, http.StatusOK, models, "", "manual")
 	return &ChannelTestResult{OK: true, ResponseTime: responseTime, Models: models}, nil
 }
 
@@ -383,6 +404,110 @@ func (s ChannelService) GetChannelKey(id uint) (string, error) {
 		return "", errors.New("channel key is empty")
 	}
 	return channel.Key, nil
+}
+
+// UpdateChannelKey replaces all upstream keys for a channel. Multiple keys can
+// still be stored as comma/newline separated text and rotated by NextKey.
+func (s ChannelService) UpdateChannelKey(id uint, key string) error {
+	if strings.TrimSpace(key) == "" {
+		return errors.New("channel key is required")
+	}
+	return global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).Update("key", key).Error
+}
+
+// UpdateUpstreamConfig isolates provider endpoint changes from the general
+// channel update path so callers can safely edit base URL/header/query details.
+func (s ChannelService) UpdateUpstreamConfig(id uint, config ChannelUpstreamConfig) error {
+	updates := map[string]any{
+		"base_url":        strings.TrimSpace(config.BaseURL),
+		"header_override": strings.TrimSpace(config.HeaderOverride),
+		"param_override":  strings.TrimSpace(config.ParamOverride),
+		"test_model":      strings.TrimSpace(config.TestModel),
+	}
+	if strings.TrimSpace(config.Type) != "" {
+		updates["type"] = strings.TrimSpace(config.Type)
+	}
+	return global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).Updates(updates).Error
+}
+
+func (s ChannelService) GetModelMapping(id uint) (map[string]string, error) {
+	channel, err := s.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	mapping := map[string]string{}
+	if strings.TrimSpace(channel.ModelMapping) == "" {
+		return mapping, nil
+	}
+	if err := json.Unmarshal([]byte(channel.ModelMapping), &mapping); err != nil {
+		return nil, err
+	}
+	return mapping, nil
+}
+
+// UpdateModelMapping stores the public-model -> upstream-model mapping as JSON.
+// Empty mapped values are ignored so accidental blank fields do not break relay.
+func (s ChannelService) UpdateModelMapping(id uint, mapping map[string]string) error {
+	normalized := map[string]string{}
+	for source, target := range mapping {
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		if source != "" && target != "" {
+			normalized[source] = target
+		}
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return err
+	}
+	return global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).Update("model_mapping", string(raw)).Error
+}
+
+func (s ChannelService) CreateHealthLog(channel *domains.Channel, ok bool, responseTime int64, statusCode int, models []string, errorMessage string, trigger string) error {
+	if channel == nil {
+		return errors.New("channel is required")
+	}
+	if len(errorMessage) > 2000 {
+		errorMessage = errorMessage[:2000]
+	}
+	status := "error"
+	if ok {
+		status = "success"
+	}
+	log := domains.ChannelHealthLog{
+		ChannelGuid:  channel.Guid,
+		ChannelName:  channel.Name,
+		ChannelID:    channel.Id,
+		OK:           ok,
+		Status:       status,
+		StatusCode:   statusCode,
+		ResponseTime: responseTime,
+		Models:       strings.Join(models, ","),
+		Error:        errorMessage,
+		Trigger:      trigger,
+		CheckedAt:    time.Now().Unix(),
+	}
+	return global.NAV_DB.Create(&log).Error
+}
+
+func (s ChannelService) ListHealthLogs(channelID uint, query dto.PageQuery) (dto.PageResult, error) {
+	query.Normalize()
+	var logs []domains.ChannelHealthLog
+	var total int64
+	db := global.NAV_DB.Model(&domains.ChannelHealthLog{})
+	if channelID > 0 {
+		db = db.Where("channel_id = ?", channelID)
+	}
+	if query.Q != "" {
+		db = db.Where("channel_name LIKE ? OR status LIKE ? OR error LIKE ? OR trigger LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+	}
+	if err := db.Count(&total).Error; err != nil {
+		return dto.PageResult{}, err
+	}
+	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&logs).Error; err != nil {
+		return dto.PageResult{}, err
+	}
+	return dto.PageResult{List: logs, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s ChannelService) NextKey(channel *domains.Channel) string {

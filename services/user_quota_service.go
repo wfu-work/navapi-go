@@ -20,7 +20,18 @@ func (s UserQuotaService) Ensure(tx *gorm.DB, userGuid string) error {
 	if userGuid == "" {
 		return nil
 	}
-	account := domains.UserQuota{UserGuid: userGuid, Group: constants.DefaultGroup}
+	settings := RegisterSettingServiceApp.Get()
+	group := settings.DefaultGroup
+	if group == "" {
+		group = constants.DefaultGroup
+	}
+	account := domains.UserQuota{
+		UserGuid:      userGuid,
+		RemainQuota:   settings.DefaultQuota,
+		TotalQuota:    settings.DefaultQuota,
+		Group:         group,
+		AllowedGroups: settings.AllowedGroups,
+	}
 	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error
 }
 
@@ -94,6 +105,19 @@ func (s UserQuotaService) AddQuota(tx *gorm.DB, userGuid string, quota int64) er
 		}).Error
 }
 
+// Recharge adds quota to the user account and optionally to one API token.
+// Payments and subscriptions both use this path so recharge accounting stays
+// consistent regardless of the source.
+func (s UserQuotaService) Recharge(tx *gorm.DB, userGuid string, tokenID uint, quota int64) error {
+	if quota <= 0 {
+		return errors.New("quota must be greater than zero")
+	}
+	if tokenID > 0 {
+		return TokenServiceApp.AddQuota(tx, tokenID, userGuid, quota)
+	}
+	return s.AddQuota(tx, userGuid, quota)
+}
+
 func (s UserQuotaService) Consume(tx *gorm.DB, userGuid string, quota int64) error {
 	if userGuid == "" || quota <= 0 {
 		return nil
@@ -105,6 +129,19 @@ func (s UserQuotaService) Consume(tx *gorm.DB, userGuid string, quota int64) err
 		Updates(map[string]any{
 			"used_quota": gorm.Expr("used_quota + ?", quota),
 		}).Error
+}
+
+// Refund only rolls back used_quota because user quota currently acts as an
+// aggregate account; token quota is the balance that is actually decremented.
+func (s UserQuotaService) Refund(tx *gorm.DB, userGuid string, quota int64) error {
+	if userGuid == "" || quota <= 0 {
+		return nil
+	}
+	if err := s.Ensure(tx, userGuid); err != nil {
+		return err
+	}
+	return tx.Model(&domains.UserQuota{}).Where("user_guid = ?", userGuid).
+		Update("used_quota", gorm.Expr("CASE WHEN used_quota >= ? THEN used_quota - ? ELSE 0 END", quota, quota)).Error
 }
 
 func (s UserQuotaService) CheckGroup(userGuid string, group string) error {

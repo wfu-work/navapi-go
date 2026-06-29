@@ -49,6 +49,14 @@ type RelayResult struct {
 	Usage      dto.Usage
 }
 
+type preparedRelay struct {
+	Body          []byte
+	ModelName     string
+	Candidates    []domains.Channel
+	IsStream      bool
+	ReservedQuota int64
+}
+
 type RelayHTTPError struct {
 	StatusCode int
 	Message    string
@@ -58,7 +66,22 @@ func (e *RelayHTTPError) Error() string {
 	return e.Message
 }
 
-func (s RelayService) Relay(c *gin.Context, token *domains.ApiToken, endpoint RelayEndpoint) (*RelayResult, error) {
+// RelayHTTP is the single entry point used by handlers. It prepares the request
+// once, reserves quota before touching upstream, then chooses buffered or live
+// streaming delivery based on the original client payload.
+func (s RelayService) RelayHTTP(c *gin.Context, token *domains.ApiToken, endpoint RelayEndpoint) (*RelayResult, bool, error) {
+	prepared, err := s.prepareRelay(c, token, endpoint)
+	if err != nil {
+		return nil, false, err
+	}
+	if prepared.IsStream {
+		return nil, true, s.relayStream(c, token, endpoint, prepared)
+	}
+	result, err := s.relayBuffered(c, token, endpoint, prepared)
+	return result, false, err
+}
+
+func (s RelayService) prepareRelay(c *gin.Context, token *domains.ApiToken, endpoint RelayEndpoint) (*preparedRelay, error) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
@@ -91,25 +114,36 @@ func (s RelayService) Relay(c *gin.Context, token *domains.ApiToken, endpoint Re
 		return nil, fmt.Errorf("no available channel for model %s", modelName)
 	}
 	candidates = ChannelServiceApp.ApplyAffinity(token.Guid, modelName, candidates)
+	reservedQuota := int64(0)
+	if !endpoint.NoBilling {
+		reservedQuota = PricingServiceApp.CalculateQuota(modelName, token.Group, dto.Usage{}, estimateQuotaFromBody(body))
+		if err := s.reserveQuota(token, reservedQuota); err != nil {
+			return nil, err
+		}
+	}
+	return &preparedRelay{
+		Body:          body,
+		ModelName:     modelName,
+		Candidates:    candidates,
+		IsStream:      isStreamRequest(body),
+		ReservedQuota: reservedQuota,
+	}, nil
+}
+
+func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, endpoint RelayEndpoint, prepared *preparedRelay) (*RelayResult, error) {
 	start := time.Now()
 	var channel *domains.Channel
 	var result *RelayResult
-	for i := range candidates {
-		current := candidates[i]
-		upstreamModel := ChannelServiceApp.MapModel(&current, modelName)
-		forwardBody := body
-		upstreamPath := endpoint.UpstreamPath
-		if endpoint.ModelFromPath {
-			upstreamPath = rewriteModelInPath(upstreamPath, upstreamModel)
-		} else {
-			forwardBody = rewriteBodyModel(body, upstreamModel, c.GetHeader("Content-Type"))
-		}
+	var err error
+	for i := range prepared.Candidates {
+		current := prepared.Candidates[i]
+		forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
 		channel = &current
 		result, err = s.forward(c.Request.Context(), &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery)
-		if err != nil && i < len(candidates)-1 {
+		if err != nil && i < len(prepared.Candidates)-1 {
 			continue
 		}
-		if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && i < len(candidates)-1 {
+		if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && i < len(prepared.Candidates)-1 {
 			maybeAutoDisableChannel(&current, result)
 			continue
 		}
@@ -118,40 +152,91 @@ func (s RelayService) Relay(c *gin.Context, token *domains.ApiToken, endpoint Re
 	useTime := time.Since(start).Milliseconds()
 	status := "success"
 	content := ""
-	quota := int64(0)
-	if result != nil && !endpoint.NoBilling {
-		quota = calculateQuota(result.Usage)
-		if quota == 0 {
-			quota = estimateQuotaFromBody(body)
-		}
-		quota = PricingServiceApp.CalculateQuota(modelName, token.Group, result.Usage, quota)
-	}
 	if err != nil {
 		status = "error"
 		content = err.Error()
-		_ = LogServiceApp.Create(buildUsageLog(c, token, channel, modelName, dto.Usage{}, 0, useTime, isStreamRequest(body), status, content))
+		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
+		_ = LogServiceApp.Create(buildUsageLog(c, token, channel, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, status, content))
 		return nil, err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
 		status = "error"
 		content = string(result.Body)
 		maybeAutoDisableChannel(channel, result)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, channel, modelName, result.Usage, 0, useTime, isStreamRequest(body), status, content))
+		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
+		_ = LogServiceApp.Create(buildUsageLog(c, token, channel, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, status, content))
 		return result, nil
 	}
 	if channel != nil {
-		ChannelServiceApp.RememberAffinity(token.Guid, modelName, channel.Id)
+		ChannelServiceApp.RememberAffinity(token.Guid, prepared.ModelName, channel.Id)
 	}
-	if quota > 0 {
-		if err := s.settleQuota(token, channel, quota); err != nil {
+	quota := calculateFinalQuota(prepared.ModelName, token.Group, result.Usage, prepared.Body, prepared.ReservedQuota)
+	if !endpoint.NoBilling {
+		if err := s.settleReservedQuota(token, channel, prepared.ReservedQuota, quota); err != nil {
 			status = "error"
 			content = err.Error()
-			_ = LogServiceApp.Create(buildUsageLog(c, token, channel, modelName, result.Usage, 0, useTime, isStreamRequest(body), status, content))
+			_ = LogServiceApp.Create(buildUsageLog(c, token, channel, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, status, content))
 			return nil, err
 		}
+	} else {
+		quota = 0
 	}
-	_ = LogServiceApp.Create(buildUsageLog(c, token, channel, modelName, result.Usage, quota, useTime, isStreamRequest(body), status, content))
+	_ = LogServiceApp.Create(buildUsageLog(c, token, channel, prepared.ModelName, result.Usage, quota, useTime, prepared.IsStream, status, content))
 	return result, nil
+}
+
+func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpoint RelayEndpoint, prepared *preparedRelay) error {
+	start := time.Now()
+	var channel *domains.Channel
+	var result *RelayResult
+	var err error
+	for i := range prepared.Candidates {
+		current := prepared.Candidates[i]
+		forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
+		channel = &current
+		result, err = s.forwardStream(c, &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery, i < len(prepared.Candidates)-1)
+		if err != nil && i < len(prepared.Candidates)-1 {
+			continue
+		}
+		if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && i < len(prepared.Candidates)-1 {
+			maybeAutoDisableChannel(&current, result)
+			continue
+		}
+		break
+	}
+
+	useTime := time.Since(start).Milliseconds()
+	if err != nil {
+		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
+		_ = LogServiceApp.Create(buildUsageLog(c, token, channel, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error()))
+		return err
+	}
+	if result == nil {
+		err = errors.New("upstream response is empty")
+		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
+		_ = LogServiceApp.Create(buildUsageLog(c, token, channel, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error()))
+		return err
+	}
+	if result.StatusCode >= http.StatusBadRequest {
+		maybeAutoDisableChannel(channel, result)
+		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
+		_ = LogServiceApp.Create(buildUsageLog(c, token, channel, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, "error", string(result.Body)))
+		return nil
+	}
+	if channel != nil {
+		ChannelServiceApp.RememberAffinity(token.Guid, prepared.ModelName, channel.Id)
+	}
+	quota := calculateFinalQuota(prepared.ModelName, token.Group, result.Usage, prepared.Body, prepared.ReservedQuota)
+	if endpoint.NoBilling {
+		quota = 0
+	} else if err := s.settleReservedQuota(token, channel, prepared.ReservedQuota, quota); err != nil {
+		// The stream may already be on the wire, so settlement failures are
+		// recorded in logs instead of trying to replace the response body.
+		_ = LogServiceApp.Create(buildUsageLog(c, token, channel, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, "error", err.Error()))
+		return nil
+	}
+	_ = LogServiceApp.Create(buildUsageLog(c, token, channel, prepared.ModelName, result.Usage, quota, useTime, prepared.IsStream, "success", ""))
+	return nil
 }
 
 func checkModelRateLimit(token *domains.ApiToken, modelName string) error {
@@ -197,6 +282,14 @@ func maybeAutoDisableChannel(channel *domains.Channel, result *RelayResult) {
 	_ = ChannelServiceApp.AutoDisable(channel.Id, reason)
 }
 
+func buildUpstreamRequest(channel *domains.Channel, modelName string, endpoint RelayEndpoint, body []byte, contentType string) ([]byte, string) {
+	upstreamModel := ChannelServiceApp.MapModel(channel, modelName)
+	if endpoint.ModelFromPath {
+		return body, rewriteModelInPath(endpoint.UpstreamPath, upstreamModel)
+	}
+	return rewriteBodyModel(body, upstreamModel, contentType), endpoint.UpstreamPath
+}
+
 func (s RelayService) forward(ctx context.Context, channel *domains.Channel, method string, upstreamPath string, body []byte, incoming http.Header, rawQuery string) (*RelayResult, error) {
 	baseURL := strings.TrimRight(channel.BaseURL, "/")
 	if baseURL == "" {
@@ -232,6 +325,91 @@ func (s RelayService) forward(ctx context.Context, channel *domains.Channel, met
 		Body:       respBody,
 		Usage:      parseUsage(respBody, resp.Header.Get("Content-Type")),
 	}, nil
+}
+
+func (s RelayService) forwardStream(c *gin.Context, channel *domains.Channel, method string, upstreamPath string, body []byte, incoming http.Header, rawQuery string, canRetry bool) (*RelayResult, error) {
+	baseURL := strings.TrimRight(channel.BaseURL, "/")
+	if baseURL == "" {
+		baseURL = defaultBaseURL(channel.Type)
+	}
+	targetURL := baseURL + upstreamPath
+	if rawQuery != "" && channel.Type != constants.ChannelTypeGemini {
+		targetURL += "?" + rawQuery
+	}
+	if channel.Type == constants.ChannelTypeGemini {
+		targetURL = attachGeminiKey(targetURL, channel.Key, rawQuery)
+	}
+	targetURL = applyParamOverride(targetURL, channel.ParamOverride)
+	req, err := http.NewRequestWithContext(c.Request.Context(), method, targetURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	copyForwardHeaders(req.Header, incoming)
+	setupAuthHeaders(req.Header, channel)
+	applyHeaderOverride(req.Header, channel.HeaderOverride)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusBadRequest || (canRetry && shouldRetryRelayStatus(resp.StatusCode)) {
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if !canRetry {
+			copyResponseHeaders(c.Writer.Header(), resp.Header)
+			c.Data(resp.StatusCode, contentTypeOrJSON(resp.Header), respBody)
+		}
+		return &RelayResult{
+			StatusCode: resp.StatusCode,
+			Header:     resp.Header.Clone(),
+			Body:       respBody,
+			Usage:      parseUsage(respBody, resp.Header.Get("Content-Type")),
+		}, nil
+	}
+
+	copyResponseHeaders(c.Writer.Header(), resp.Header)
+	c.Status(resp.StatusCode)
+	tracker := &streamUsageTracker{}
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			tracker.Write(chunk)
+			if _, writeErr := c.Writer.Write(chunk); writeErr != nil {
+				return nil, writeErr
+			}
+			c.Writer.Flush()
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+	return &RelayResult{StatusCode: resp.StatusCode, Header: resp.Header.Clone(), Usage: tracker.Finish()}, nil
+}
+
+func copyResponseHeaders(dst http.Header, src http.Header) {
+	for key, values := range src {
+		if key == "Content-Length" || key == "Transfer-Encoding" {
+			continue
+		}
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
+
+func contentTypeOrJSON(header http.Header) string {
+	if contentType := header.Get("Content-Type"); contentType != "" {
+		return contentType
+	}
+	return "application/json"
 }
 
 func applyHeaderOverride(header http.Header, raw string) {
@@ -283,16 +461,57 @@ func applyParamOverride(targetURL string, raw string) string {
 	return u.String()
 }
 
-func (s RelayService) settleQuota(token *domains.ApiToken, channel *domains.Channel, quota int64) error {
+func (s RelayService) reserveQuota(token *domains.ApiToken, quota int64) error {
+	if quota <= 0 {
+		return nil
+	}
 	return global.NAV_DB.Transaction(func(tx *gorm.DB) error {
 		if err := TokenServiceApp.Consume(tx, token.Id, quota); err != nil {
 			return err
 		}
-		if err := UserQuotaServiceApp.Consume(tx, token.UserGuid, quota); err != nil {
+		return UserQuotaServiceApp.Consume(tx, token.UserGuid, quota)
+	})
+}
+
+func (s RelayService) refundReservedQuota(token *domains.ApiToken, quota int64) error {
+	if quota <= 0 {
+		return nil
+	}
+	return global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+		if err := TokenServiceApp.Refund(tx, token.Id, quota); err != nil {
 			return err
 		}
+		return UserQuotaServiceApp.Refund(tx, token.UserGuid, quota)
+	})
+}
+
+// settleReservedQuota converts the reservation into the final charge. Only the
+// delta touches token/user counters because reserveQuota already moved them.
+func (s RelayService) settleReservedQuota(token *domains.ApiToken, channel *domains.Channel, reservedQuota int64, finalQuota int64) error {
+	return global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+		delta := finalQuota - reservedQuota
+		switch {
+		case delta > 0:
+			if err := TokenServiceApp.Consume(tx, token.Id, delta); err != nil {
+				return err
+			}
+			if err := UserQuotaServiceApp.Consume(tx, token.UserGuid, delta); err != nil {
+				return err
+			}
+		case delta < 0:
+			refund := -delta
+			if err := TokenServiceApp.Refund(tx, token.Id, refund); err != nil {
+				return err
+			}
+			if err := UserQuotaServiceApp.Refund(tx, token.UserGuid, refund); err != nil {
+				return err
+			}
+		}
+		if channel == nil || finalQuota <= 0 {
+			return nil
+		}
 		return tx.Model(&domains.Channel{}).Where("id = ?", channel.Id).
-			UpdateColumn("used_quota", gorm.Expr("used_quota + ?", quota)).Error
+			UpdateColumn("used_quota", gorm.Expr("used_quota + ?", finalQuota)).Error
 	})
 }
 
@@ -496,11 +715,66 @@ func parseStreamUsage(body []byte) dto.Usage {
 	return usage
 }
 
+type streamUsageTracker struct {
+	pending string
+	usage   dto.Usage
+}
+
+// Write incrementally parses SSE "data:" lines while bytes are being proxied.
+// This keeps streaming live without waiting to buffer the entire upstream body.
+func (t *streamUsageTracker) Write(chunk []byte) {
+	t.pending += string(chunk)
+	for {
+		idx := strings.IndexByte(t.pending, '\n')
+		if idx < 0 {
+			if len(t.pending) > 1<<20 {
+				t.pending = t.pending[len(t.pending)-(1<<20):]
+			}
+			return
+		}
+		t.consumeLine(t.pending[:idx])
+		t.pending = t.pending[idx+1:]
+	}
+}
+
+func (t *streamUsageTracker) Finish() dto.Usage {
+	if strings.TrimSpace(t.pending) != "" {
+		t.consumeLine(t.pending)
+	}
+	return t.usage
+}
+
+func (t *streamUsageTracker) consumeLine(line string) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "data:") {
+		return
+	}
+	data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	if data == "" || data == "[DONE]" {
+		return
+	}
+	parsed := parseUsage([]byte(data), "application/json")
+	if parsed.TotalTokens > 0 || parsed.PromptTokens > 0 || parsed.CompletionTokens > 0 {
+		t.usage = parsed
+	}
+}
+
 func calculateQuota(usage dto.Usage) int64 {
 	if usage.TotalTokens > 0 {
 		return usage.TotalTokens
 	}
 	return usage.PromptTokens + usage.CompletionTokens
+}
+
+func calculateFinalQuota(modelName string, group string, usage dto.Usage, body []byte, reservedQuota int64) int64 {
+	quota := calculateQuota(usage)
+	if quota > 0 {
+		return PricingServiceApp.CalculateQuota(modelName, group, usage, quota)
+	}
+	if reservedQuota > 0 {
+		return reservedQuota
+	}
+	return PricingServiceApp.CalculateQuota(modelName, group, usage, estimateQuotaFromBody(body))
 }
 
 func estimateQuotaFromBody(body []byte) int64 {

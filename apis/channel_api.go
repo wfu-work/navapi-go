@@ -5,6 +5,7 @@ import (
 
 	"navapi-go/constants"
 	"navapi-go/domains"
+	"navapi-go/dto"
 	"navapi-go/services"
 
 	"github.com/gin-gonic/gin"
@@ -25,6 +26,14 @@ type channelBatchRequest struct {
 
 type channelTagRequest struct {
 	Tag string `json:"tag" binding:"required"`
+}
+
+type channelKeyUpdateRequest struct {
+	Key string `json:"key" binding:"required"`
+}
+
+type channelModelMappingRequest struct {
+	Mapping map[string]string `json:"mapping" binding:"required"`
 }
 
 func (a ChannelApi) List(c *gin.Context) {
@@ -119,6 +128,101 @@ func (a ChannelApi) Key(c *gin.Context) {
 		return
 	}
 	response.Ok(gin.H{"key": key}, c)
+}
+
+func (a ChannelApi) SetKey(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	var req channelKeyUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	if err := services.ChannelServiceApp.UpdateChannelKey(id, req.Key); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(true, c)
+}
+
+func (a ChannelApi) UpdateUpstream(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	var config services.ChannelUpstreamConfig
+	if err := c.ShouldBindJSON(&config); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	if err := services.ChannelServiceApp.UpdateUpstreamConfig(id, config); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(true, c)
+}
+
+func (a ChannelApi) GetModelMapping(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	mapping, err := services.ChannelServiceApp.GetModelMapping(id)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(gin.H{"mapping": mapping}, c)
+}
+
+func (a ChannelApi) SetModelMapping(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	var req channelModelMappingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	if err := services.ChannelServiceApp.UpdateModelMapping(id, req.Mapping); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(true, c)
+}
+
+func (a ChannelApi) HealthLogs(c *gin.Context) {
+	var query dto.PageQuery
+	_ = c.ShouldBindQuery(&query)
+	result, err := services.ChannelServiceApp.ListHealthLogs(0, query)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(result, c)
+}
+
+func (a ChannelApi) ChannelHealthLogs(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	var query dto.PageQuery
+	_ = c.ShouldBindQuery(&query)
+	result, err := services.ChannelServiceApp.ListHealthLogs(id, query)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(result, c)
 }
 
 func (a ChannelApi) Test(c *gin.Context) {

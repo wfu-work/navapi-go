@@ -157,6 +157,26 @@ func (s TokenService) Consume(tx *gorm.DB, id uint, quota int64) error {
 	return tx.Model(&domains.ApiToken{}).Where("id = ?", id).Updates(updates).Error
 }
 
+// Refund reverses a previous quota reservation/charge. It is intentionally
+// bounded at zero for used_quota so repeated cleanup cannot drive counters
+// negative after retries or client disconnects.
+func (s TokenService) Refund(tx *gorm.DB, id uint, quota int64) error {
+	if quota <= 0 {
+		return nil
+	}
+	var token domains.ApiToken
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&token, id).Error; err != nil {
+		return err
+	}
+	updates := map[string]any{
+		"used_quota": gorm.Expr("CASE WHEN used_quota >= ? THEN used_quota - ? ELSE 0 END", quota, quota),
+	}
+	if !token.UnlimitedQuota {
+		updates["remain_quota"] = gorm.Expr("remain_quota + ?", quota)
+	}
+	return tx.Model(&domains.ApiToken{}).Where("id = ?", id).Updates(updates).Error
+}
+
 func (s TokenService) AddQuota(tx *gorm.DB, id uint, userGuid string, quota int64) error {
 	if quota <= 0 {
 		return errors.New("quota must be greater than zero")

@@ -13,4 +13,10 @@ type ApiGroup struct {
 	RedemptionApi
 	PricingApi
 	QuotaApi
+	ProviderApi
+	AnnouncementApi
+	SubscriptionApi
+	PaymentApi
+	InvitationApi
+	CheckinApi
 }

@@ -28,6 +28,15 @@ func (a RedemptionApi) List(c *gin.Context) {
 	response.Ok(result, c)
 }
 
+func (a RedemptionApi) Stats(c *gin.Context) {
+	stats, err := services.RedemptionServiceApp.Stats()
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(stats, c)
+}
+
 func (a RedemptionApi) Create(c *gin.Context) {
 	var redemption domains.Redemption
 	if err := c.ShouldBindJSON(&redemption); err != nil {
@@ -39,6 +48,20 @@ func (a RedemptionApi) Create(c *gin.Context) {
 		return
 	}
 	response.Ok(redemption, c)
+}
+
+func (a RedemptionApi) BatchCreate(c *gin.Context) {
+	var req services.RedemptionBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	cards, err := services.RedemptionServiceApp.BatchCreate(req)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(cards, c)
 }
 
 func (a RedemptionApi) Update(c *gin.Context) {

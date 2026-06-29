@@ -36,6 +36,40 @@ func (a OptionApi) Set(c *gin.Context) {
 	response.Ok(true, c)
 }
 
+func (a OptionApi) RiskControl(c *gin.Context) {
+	response.Ok(services.RiskControlServiceApp.Get(), c)
+}
+
+func (a OptionApi) SetRiskControl(c *gin.Context) {
+	var settings services.RiskControlSettings
+	if err := c.ShouldBindJSON(&settings); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	if err := services.RiskControlServiceApp.Set(settings); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(services.RiskControlServiceApp.Get(), c)
+}
+
+func (a OptionApi) RegisterSettings(c *gin.Context) {
+	response.Ok(services.RegisterSettingServiceApp.Get(), c)
+}
+
+func (a OptionApi) SetRegisterSettings(c *gin.Context) {
+	var settings services.RegisterSettings
+	if err := c.ShouldBindJSON(&settings); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	if err := services.RegisterSettingServiceApp.Set(settings); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(services.RegisterSettingServiceApp.Get(), c)
+}
+
 func (a OptionApi) Delete(c *gin.Context) {
 	if err := services.OptionServiceApp.Delete(c.Param("key")); err != nil {
 		response.FailWithMessage(err.Error(), c)

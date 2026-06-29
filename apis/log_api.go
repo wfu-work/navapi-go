@@ -71,10 +71,36 @@ func (a UsageLogApi) SelfData(c *gin.Context) {
 	response.Ok(data, c)
 }
 
+func (a UsageLogApi) UsageSummary(c *gin.Context) {
+	summary, err := services.LogServiceApp.UsageSummary("", parseDaysQuery(c), parseTopQuery(c))
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(summary, c)
+}
+
+func (a UsageLogApi) SelfUsageSummary(c *gin.Context) {
+	summary, err := services.LogServiceApp.UsageSummary(utils.GetUserGuid(c), parseDaysQuery(c), parseTopQuery(c))
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(summary, c)
+}
+
 func parseDaysQuery(c *gin.Context) int {
 	days, err := strconv.Atoi(c.DefaultQuery("days", "7"))
 	if err != nil {
 		return 7
 	}
 	return days
+}
+
+func parseTopQuery(c *gin.Context) int {
+	top, err := strconv.Atoi(c.DefaultQuery("top", "10"))
+	if err != nil {
+		return 10
+	}
+	return top
 }

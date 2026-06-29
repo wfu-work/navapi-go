@@ -38,14 +38,20 @@ func (a RelayApi) Relay(c *gin.Context, endpoint services.RelayEndpoint) {
 		openAIError(c, http.StatusUnauthorized, "token is invalid")
 		return
 	}
-	result, err := services.RelayServiceApp.Relay(c, token, endpoint)
+	result, streamed, err := services.RelayServiceApp.RelayHTTP(c, token, endpoint)
 	if err != nil {
+		if streamed && c.Writer.Written() {
+			return
+		}
 		var relayErr *services.RelayHTTPError
 		if errors.As(err, &relayErr) {
 			openAIError(c, relayErr.StatusCode, relayErr.Message)
 			return
 		}
 		openAIError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	if streamed {
 		return
 	}
 	for key, values := range result.Header {
