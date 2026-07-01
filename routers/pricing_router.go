@@ -5,7 +5,7 @@ import "github.com/gin-gonic/gin"
 type PricingRouter struct{}
 
 func (r PricingRouter) InitPricingRouter(privateGroup *gin.RouterGroup, publicGroup *gin.RouterGroup) {
-	publicGroup.GET("pricing/list", pricingApi.Public)
+	publicGroup.GET("pricing", pricingApi.Public)
 
 	group := privateGroup.Group("pricing")
 	{

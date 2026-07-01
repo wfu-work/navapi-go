@@ -5,7 +5,7 @@ import "github.com/gin-gonic/gin"
 type SubscriptionRouter struct{}
 
 func (r SubscriptionRouter) InitSubscriptionRouter(privateGroup *gin.RouterGroup, publicGroup *gin.RouterGroup) {
-	publicGroup.GET("subscription/plans", subscriptionApi.PublicPlans)
+	publicGroup.GET("subscription/public/plans", subscriptionApi.PublicPlans)
 
 	group := privateGroup.Group("subscription")
 	{

@@ -271,12 +271,14 @@ after relay:
 
 接口：
 
-- `GET /api/log/`
-- `GET /api/log/self`
-- `GET /api/log/stat`
-- `GET /api/log/self/stat`
-- `GET /api/data/`
-- `GET /api/data/self`
+- `GET /api/usage/list`
+- `GET /api/usage/self/list`
+- `GET /api/usage/stat`
+- `GET /api/usage/self/stat`
+- `GET /api/usage/summary`
+- `GET /api/usage/self/summary`
+- `GET /api/data/list`
+- `GET /api/data/self/list`
 
 ### 10. 动态配置
 
@@ -364,8 +366,8 @@ POST   /api/token/
 PUT    /api/token/
 DELETE /api/token/:id
 
-GET    /api/log/
-GET    /api/log/self
+GET    /api/usage/list
+GET    /api/usage/self/list
 
 GET    /api/task/
 GET    /api/task/self
@@ -518,8 +520,8 @@ P3：
 
 - 接入 `nav-common-go-lib` 启动、配置、数据库、日志、JWT 后台鉴权。
 - 新增业务表：渠道、API Token、用户额度账户、模型元数据、供应商元数据、价格倍率、使用日志、动态选项、任务、兑换码、额度日期。
-- 新增后台接口：`/api/channel/*`、`/api/token/*`、`/api/quota/*`、`/api/log/*`、`/api/models/*`、`/api/vendors/*`、`/api/pricing/*`、`/api/option/*`、`/api/task/*`、`/api/redemption/*`。
-- 一般列表接口统一使用 `/list` 前缀，例如 `/api/channel/list`、`/api/token/list`、`/api/log/self/list`。
+- 新增后台接口：`/api/channel/*`、`/api/token/*`、`/api/quota/*`、`/api/usage/*`、`/api/models/*`、`/api/vendors/*`、`/api/pricing/*`、`/api/option/*`、`/api/task/*`、`/api/redemption/*`。
+- 一般列表接口统一使用 `/list` 前缀，例如 `/api/channel/list`、`/api/token/list`、`/api/usage/self/list`。
 - 渠道管理支持上游模型拉取、连通性测试、批量状态更新、按标签启停。
 - 价格模块支持公开 `/api/pricing` 查询和后台倍率维护，Relay 额度结算会应用模型/分组倍率、缓存命中倍率。
 - Token 管理支持 `/api/usage/token/` 使用统计，日志模块支持 `/api/data/list` 和 `/api/data/self/list` 近 N 天用量聚合。

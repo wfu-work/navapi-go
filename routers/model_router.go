@@ -5,8 +5,8 @@ import "github.com/gin-gonic/gin"
 type ModelRouter struct{}
 
 func (r ModelRouter) InitModelRouter(privateGroup *gin.RouterGroup, publicGroup *gin.RouterGroup) {
-	publicGroup.GET("models/list", relayApi.Models)
-	publicGroup.GET("vendors/list", modelApi.PublicVendors)
+	publicGroup.GET("models", relayApi.Models)
+	publicGroup.GET("vendors", modelApi.PublicVendors)
 
 	group := privateGroup.Group("models")
 	{

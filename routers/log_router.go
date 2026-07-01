@@ -7,10 +7,8 @@ type LogRouter struct{}
 func (r LogRouter) InitLogRouter(router *gin.RouterGroup) {
 	router.GET("data/list", logApi.Data)
 	router.GET("data/self/list", logApi.SelfData)
-	router.GET("usage/summary", logApi.UsageSummary)
-	router.GET("usage/self/summary", logApi.SelfUsageSummary)
 
-	group := router.Group("log")
+	group := router.Group("usage")
 	{
 		group.GET("/list", logApi.List)
 		group.GET("/stat", logApi.Stats)
