@@ -8,12 +8,21 @@ import (
 	"navapi-go/domains"
 	"navapi-go/dto"
 
-	"github.com/wfu-work/nav-common-go-lib/global"
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
+	"gorm.io/gorm"
 )
 
-type ProviderService struct{}
+type ProviderService struct {
+	commonServices.CrudService[domains.VendorMeta]
+}
 
-var ProviderServiceApp = ProviderService{}
+var ProviderServiceApp = new(ProviderService)
+
+func (s *ProviderService) WithDB(db *gorm.DB) *ProviderService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	return &cloned
+}
 
 type ProviderChannelRequest struct {
 	Name     string `json:"name"`
@@ -28,7 +37,11 @@ func (s ProviderService) List(query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var providers []domains.VendorMeta
 	var total int64
-	db := global.NAV_DB.Model(&domains.VendorMeta{})
+	db := s.DB()
+	if db == nil {
+		return dto.PageResult{}, errors.New("database is not initialized")
+	}
+	db = db.Model(&domains.VendorMeta{})
 	if query.Q != "" {
 		db = db.Where("vendor_name LIKE ? OR display_name LIKE ? OR type LIKE ? OR base_url LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
@@ -42,11 +55,17 @@ func (s ProviderService) List(query dto.PageQuery) (dto.PageResult, error) {
 }
 
 func (s ProviderService) GetByID(id uint) (*domains.VendorMeta, error) {
-	var provider domains.VendorMeta
-	if err := global.NAV_DB.First(&provider, id).Error; err != nil {
+	if id == 0 {
+		return nil, errors.New("id is required")
+	}
+	provider, err := s.GetById(id)
+	if err != nil {
 		return nil, err
 	}
-	return &provider, nil
+	if provider == nil {
+		return nil, errors.New("provider not found")
+	}
+	return provider, nil
 }
 
 // Save normalizes provider defaults and validates JSON override fields before
@@ -70,11 +89,27 @@ func (s ProviderService) Save(provider *domains.VendorMeta) error {
 	if err := validateOptionalJSONObject(provider.ParamOverride, "paramOverride"); err != nil {
 		return err
 	}
-	return global.NAV_DB.Save(provider).Error
+	if provider.Id == 0 {
+		return createWithCrud(&s.CrudService, provider)
+	}
+	existing, err := s.GetByID(provider.Id)
+	if err != nil {
+		return err
+	}
+	provider.Guid = existing.Guid
+	provider.CreateTime = existing.CreateTime
+	provider.Creater = existing.Creater
+	updating := *provider
+	updating.Id = 0
+	if err := createWithCrud(&s.CrudService, &updating); err != nil {
+		return err
+	}
+	*provider = updating
+	return nil
 }
 
 func (s ProviderService) Delete(id uint) error {
-	return global.NAV_DB.Delete(&domains.VendorMeta{}, id).Error
+	return deleteByIDWithCrud(&s.CrudService, id, "provider not found")
 }
 
 func (s ProviderService) GetKey(id uint) (string, error) {
@@ -92,7 +127,11 @@ func (s ProviderService) SetKey(id uint, key string) error {
 	if strings.TrimSpace(key) == "" {
 		return errors.New("provider key is required")
 	}
-	return global.NAV_DB.Model(&domains.VendorMeta{}).Where("id = ?", id).Update("key", key).Error
+	provider, err := s.GetByID(id)
+	if err != nil {
+		return err
+	}
+	return s.Update(*provider, "key", key)
 }
 
 // CreateChannel materializes a provider template into a runnable relay channel.

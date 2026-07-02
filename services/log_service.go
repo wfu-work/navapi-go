@@ -7,13 +7,21 @@ import (
 	"navapi-go/domains"
 	"navapi-go/dto"
 
-	"github.com/wfu-work/nav-common-go-lib/global"
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
 )
 
-type LogService struct{}
+type LogService struct {
+	commonServices.CrudService[domains.UsageLog]
+}
 
-var LogServiceApp = LogService{}
+var LogServiceApp = new(LogService)
+
+func (s *LogService) WithDB(db *gorm.DB) *LogService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	return &cloned
+}
 
 type DailyUsageData struct {
 	Date     string `json:"date"`
@@ -56,14 +64,14 @@ type UsageSummary struct {
 }
 
 func (s LogService) Create(log *domains.UsageLog) error {
-	return global.NAV_DB.Create(log).Error
+	return createWithCrud(&s.CrudService, log)
 }
 
 func (s LogService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var logs []domains.UsageLog
 	var total int64
-	db := global.NAV_DB.Model(&domains.UsageLog{})
+	db := s.DB().Model(&domains.UsageLog{})
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -80,7 +88,7 @@ func (s LogService) List(userGuid string, query dto.PageQuery) (dto.PageResult, 
 }
 
 func (s LogService) Stats(userGuid string) (map[string]any, error) {
-	db := global.NAV_DB.Model(&domains.UsageLog{})
+	db := s.DB().Model(&domains.UsageLog{})
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -119,7 +127,7 @@ func (s LogService) DailyData(userGuid string, days int) ([]DailyUsageData, erro
 	}
 	end := time.Now()
 	start := beginningOfDay(end).AddDate(0, 0, -(days - 1))
-	db := global.NAV_DB.Model(&domains.UsageLog{}).Where("create_time >= ?", start.UnixMilli())
+	db := s.DB().Model(&domains.UsageLog{}).Where("create_time >= ?", start.UnixMilli())
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -176,7 +184,7 @@ func (s LogService) UsageSummary(userGuid string, days int, topN int) (UsageSumm
 		return UsageSummary{}, err
 	}
 	start := beginningOfDay(time.Now()).AddDate(0, 0, -(days - 1))
-	db := global.NAV_DB.Model(&domains.UsageLog{}).Where("create_time >= ?", start.UnixMilli())
+	db := s.DB().Model(&domains.UsageLog{}).Where("create_time >= ?", start.UnixMilli())
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}

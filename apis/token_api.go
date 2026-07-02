@@ -11,6 +11,15 @@ import (
 
 type TokenApi struct{}
 
+// List 令牌列表
+// @Summary 令牌列表
+// @Description 令牌列表
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Success 200 {object} response.Response{data=[]domains.ApiToken,msg=string}
+// @Router /token/list [get]
 func (a TokenApi) List(c *gin.Context) {
 	tokens, err := services.TokenServiceApp.List(utils.GetUserGuid(c))
 	if err != nil {
@@ -23,6 +32,16 @@ func (a TokenApi) List(c *gin.Context) {
 	response.Ok(tokens, c)
 }
 
+// Get 令牌详情
+// @Summary 令牌详情
+// @Description 令牌详情
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Success 200 {object} response.Response{data=domains.ApiToken,msg=string}
+// @Router /token/{id} [get]
 func (a TokenApi) Get(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -38,6 +57,16 @@ func (a TokenApi) Get(c *gin.Context) {
 	response.Ok(token, c)
 }
 
+// Create 创建令牌
+// @Summary 创建令牌
+// @Description 创建令牌
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body domains.ApiToken true "令牌对象"
+// @Success 200 {object} response.Response{data=object,msg=string}
+// @Router /token [post]
 func (a TokenApi) Create(c *gin.Context) {
 	var token domains.ApiToken
 	if err := c.ShouldBindJSON(&token); err != nil {
@@ -52,6 +81,16 @@ func (a TokenApi) Create(c *gin.Context) {
 	response.Ok(gin.H{"token": token, "key": token.Key}, c)
 }
 
+// Update 更新令牌
+// @Summary 更新令牌
+// @Description 更新令牌
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body domains.ApiToken true "令牌对象"
+// @Success 200 {object} response.Response{data=domains.ApiToken,msg=string}
+// @Router /token [put]
 func (a TokenApi) Update(c *gin.Context) {
 	var token domains.ApiToken
 	if err := c.ShouldBindJSON(&token); err != nil {
@@ -78,6 +117,16 @@ func (a TokenApi) Update(c *gin.Context) {
 	response.Ok(token, c)
 }
 
+// Delete 删除令牌
+// @Summary 删除令牌
+// @Description 删除令牌
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Success 200 {object} response.Response{data=bool,msg=string}
+// @Router /token/{id} [delete]
 func (a TokenApi) Delete(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -91,6 +140,16 @@ func (a TokenApi) Delete(c *gin.Context) {
 	response.Ok(true, c)
 }
 
+// Key 查看令牌密钥
+// @Summary 查看令牌密钥
+// @Description 查看令牌密钥
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Success 200 {object} response.Response{data=object,msg=string}
+// @Router /token/{id}/key [post]
 func (a TokenApi) Key(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -105,6 +164,15 @@ func (a TokenApi) Key(c *gin.Context) {
 	response.Ok(gin.H{"key": token.Key}, c)
 }
 
+// Usage 当前用户令牌用量
+// @Summary 当前用户令牌用量
+// @Description 当前用户令牌用量
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Success 200 {object} response.Response{data=object,msg=string}
+// @Router /usage/token [get]
 func (a TokenApi) Usage(c *gin.Context) {
 	usage, err := services.TokenServiceApp.Usage(utils.GetUserGuid(c))
 	if err != nil {

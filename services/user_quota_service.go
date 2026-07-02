@@ -3,18 +3,25 @@ package services
 import (
 	"errors"
 
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"navapi-go/constants"
 	"navapi-go/domains"
 	"navapi-go/dto"
-
-	"github.com/wfu-work/nav-common-go-lib/global"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
-type UserQuotaService struct{}
+type UserQuotaService struct {
+	commonServices.CrudService[domains.UserQuota]
+}
 
-var UserQuotaServiceApp = UserQuotaService{}
+var UserQuotaServiceApp = new(UserQuotaService)
+
+func (s *UserQuotaService) WithDB(db *gorm.DB) *UserQuotaService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	return &cloned
+}
 
 func (s UserQuotaService) Ensure(tx *gorm.DB, userGuid string) error {
 	if userGuid == "" {
@@ -39,27 +46,32 @@ func (s UserQuotaService) Get(userGuid string) (*domains.UserQuota, error) {
 	if userGuid == "" {
 		return nil, errors.New("user guid is required")
 	}
-	var account domains.UserQuota
-	err := global.NAV_DB.Where("user_guid = ?", userGuid).First(&account).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		if err := global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+	accounts, err := s.ListByFields(map[string]any{"userGuid": userGuid})
+	if err != nil {
+		return nil, err
+	}
+	if len(accounts) == 0 {
+		if err := s.DB().Transaction(func(tx *gorm.DB) error {
 			return s.Ensure(tx, userGuid)
 		}); err != nil {
 			return nil, err
 		}
-		err = global.NAV_DB.Where("user_guid = ?", userGuid).First(&account).Error
+		accounts, err = s.ListByFields(map[string]any{"userGuid": userGuid})
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &account, nil
+	if len(accounts) == 0 {
+		return nil, errors.New("user quota not found")
+	}
+	return &accounts[0], nil
 }
 
 func (s UserQuotaService) List(query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var accounts []domains.UserQuota
 	var total int64
-	db := global.NAV_DB.Model(&domains.UserQuota{})
+	db := s.DB().Model(&domains.UserQuota{})
 	if query.Q != "" {
 		db = db.Where("user_guid LIKE ? OR group_name LIKE ? OR allowed_groups LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
@@ -79,7 +91,7 @@ func (s UserQuotaService) Update(account *domains.UserQuota) error {
 	if account.Group == "" {
 		account.Group = constants.DefaultGroup
 	}
-	return global.NAV_DB.Clauses(clause.OnConflict{
+	return s.DB().Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_guid"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"remain_quota",

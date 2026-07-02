@@ -36,6 +36,15 @@ type channelModelMappingRequest struct {
 	Mapping map[string]string `json:"mapping" binding:"required"`
 }
 
+// List 渠道列表
+// @Summary 渠道列表
+// @Description 渠道列表
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Success 200 {object} response.Response{data=[]domains.Channel,msg=string}
+// @Router /channel/list [get]
 func (a ChannelApi) List(c *gin.Context) {
 	channels, err := services.ChannelServiceApp.List()
 	if err != nil {
@@ -48,6 +57,16 @@ func (a ChannelApi) List(c *gin.Context) {
 	response.Ok(channels, c)
 }
 
+// Get 渠道详情
+// @Summary 渠道详情
+// @Description 渠道详情
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Success 200 {object} response.Response{data=domains.Channel,msg=string}
+// @Router /channel/{id} [get]
 func (a ChannelApi) Get(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -63,6 +82,16 @@ func (a ChannelApi) Get(c *gin.Context) {
 	response.Ok(channel, c)
 }
 
+// Create 创建渠道
+// @Summary 创建渠道
+// @Description 创建渠道
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body domains.Channel true "渠道对象"
+// @Success 200 {object} response.Response{data=domains.Channel,msg=string}
+// @Router /channel [post]
 func (a ChannelApi) Create(c *gin.Context) {
 	var channel domains.Channel
 	if err := c.ShouldBindJSON(&channel); err != nil {
@@ -77,6 +106,16 @@ func (a ChannelApi) Create(c *gin.Context) {
 	response.Ok(channel, c)
 }
 
+// Update 更新渠道
+// @Summary 更新渠道
+// @Description 更新渠道
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body domains.Channel true "渠道对象"
+// @Success 200 {object} response.Response{data=domains.Channel,msg=string}
+// @Router /channel [put]
 func (a ChannelApi) Update(c *gin.Context) {
 	var channel domains.Channel
 	if err := c.ShouldBindJSON(&channel); err != nil {
@@ -103,6 +142,16 @@ func (a ChannelApi) Update(c *gin.Context) {
 	response.Ok(channel, c)
 }
 
+// Delete 删除渠道
+// @Summary 删除渠道
+// @Description 删除渠道
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Success 200 {object} response.Response{data=bool,msg=string}
+// @Router /channel/{id} [delete]
 func (a ChannelApi) Delete(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -116,6 +165,17 @@ func (a ChannelApi) Delete(c *gin.Context) {
 	response.Ok(true, c)
 }
 
+// Key 渠道密钥
+// @Summary 渠道密钥
+// @Description 渠道密钥
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Success 200 {object} response.Response{data=object,msg=string}
+// @Router /channel/{id}/key [get]
+// @Router /channel/{id}/key [post]
 func (a ChannelApi) Key(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -130,6 +190,17 @@ func (a ChannelApi) Key(c *gin.Context) {
 	response.Ok(gin.H{"key": key}, c)
 }
 
+// SetKey 设置渠道密钥
+// @Summary 设置渠道密钥
+// @Description 设置渠道密钥
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Param data body channelKeyUpdateRequest true "渠道密钥对象"
+// @Success 200 {object} response.Response{data=bool,msg=string}
+// @Router /channel/{id}/key [put]
 func (a ChannelApi) SetKey(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -148,6 +219,17 @@ func (a ChannelApi) SetKey(c *gin.Context) {
 	response.Ok(true, c)
 }
 
+// UpdateUpstream 更新渠道上游配置
+// @Summary 更新渠道上游配置
+// @Description 更新渠道上游配置
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Param data body services.ChannelUpstreamConfig true "渠道上游配置"
+// @Success 200 {object} response.Response{data=bool,msg=string}
+// @Router /channel/{id}/upstream [put]
 func (a ChannelApi) UpdateUpstream(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -166,6 +248,16 @@ func (a ChannelApi) UpdateUpstream(c *gin.Context) {
 	response.Ok(true, c)
 }
 
+// GetModelMapping 渠道模型映射
+// @Summary 渠道模型映射
+// @Description 渠道模型映射
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Success 200 {object} response.Response{data=object,msg=string}
+// @Router /channel/{id}/model_mapping [get]
 func (a ChannelApi) GetModelMapping(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -180,6 +272,17 @@ func (a ChannelApi) GetModelMapping(c *gin.Context) {
 	response.Ok(gin.H{"mapping": mapping}, c)
 }
 
+// SetModelMapping 设置渠道模型映射
+// @Summary 设置渠道模型映射
+// @Description 设置渠道模型映射
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Param data body channelModelMappingRequest true "模型映射对象"
+// @Success 200 {object} response.Response{data=bool,msg=string}
+// @Router /channel/{id}/model_mapping [put]
 func (a ChannelApi) SetModelMapping(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -198,6 +301,18 @@ func (a ChannelApi) SetModelMapping(c *gin.Context) {
 	response.Ok(true, c)
 }
 
+// HealthLogs 渠道健康日志
+// @Summary 渠道健康日志
+// @Description 渠道健康日志
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param page query int false "页码"
+// @Param size query int false "每页数量"
+// @Param q query string false "关键词"
+// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Router /channel/health_logs [get]
 func (a ChannelApi) HealthLogs(c *gin.Context) {
 	var query dto.PageQuery
 	_ = c.ShouldBindQuery(&query)
@@ -209,6 +324,19 @@ func (a ChannelApi) HealthLogs(c *gin.Context) {
 	response.Ok(result, c)
 }
 
+// ChannelHealthLogs 指定渠道健康日志
+// @Summary 指定渠道健康日志
+// @Description 指定渠道健康日志
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Param page query int false "页码"
+// @Param size query int false "每页数量"
+// @Param q query string false "关键词"
+// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Router /channel/{id}/health_logs [get]
 func (a ChannelApi) ChannelHealthLogs(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -225,6 +353,16 @@ func (a ChannelApi) ChannelHealthLogs(c *gin.Context) {
 	response.Ok(result, c)
 }
 
+// Test 测试渠道
+// @Summary 测试渠道
+// @Description 测试渠道
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Success 200 {object} response.Response{data=object,msg=string}
+// @Router /channel/test/{id} [get]
 func (a ChannelApi) Test(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -239,6 +377,15 @@ func (a ChannelApi) Test(c *gin.Context) {
 	response.Ok(result, c)
 }
 
+// Models 渠道可用模型
+// @Summary 渠道可用模型
+// @Description 渠道可用模型
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Success 200 {object} response.Response{data=[]string,msg=string}
+// @Router /channel/models [get]
 func (a ChannelApi) Models(c *gin.Context) {
 	models, err := services.ChannelServiceApp.ListEnabledModels()
 	if err != nil {
@@ -248,6 +395,16 @@ func (a ChannelApi) Models(c *gin.Context) {
 	response.Ok(models, c)
 }
 
+// FetchModels 拉取渠道模型
+// @Summary 拉取渠道模型
+// @Description 拉取渠道模型
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body channelFetchModelsRequest true "拉取模型请求"
+// @Success 200 {object} response.Response{data=object,msg=string}
+// @Router /channel/fetch_models [post]
 func (a ChannelApi) FetchModels(c *gin.Context) {
 	var req channelFetchModelsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -262,6 +419,16 @@ func (a ChannelApi) FetchModels(c *gin.Context) {
 	response.Ok(models, c)
 }
 
+// Batch 批量更新渠道状态
+// @Summary 批量更新渠道状态
+// @Description 批量更新渠道状态
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body channelBatchRequest true "批量渠道状态对象"
+// @Success 200 {object} response.Response{data=bool,msg=string}
+// @Router /channel/batch [post]
 func (a ChannelApi) Batch(c *gin.Context) {
 	var req channelBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -275,10 +442,30 @@ func (a ChannelApi) Batch(c *gin.Context) {
 	response.Ok(true, c)
 }
 
+// EnableByTag 按标签启用渠道
+// @Summary 按标签启用渠道
+// @Description 按标签启用渠道
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body channelTagRequest true "渠道标签对象"
+// @Success 200 {object} response.Response{data=bool,msg=string}
+// @Router /channel/tag/enabled [post]
 func (a ChannelApi) EnableByTag(c *gin.Context) {
 	a.setTagStatus(c, constants.StatusEnabled)
 }
 
+// DisableByTag 按标签禁用渠道
+// @Summary 按标签禁用渠道
+// @Description 按标签禁用渠道
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body channelTagRequest true "渠道标签对象"
+// @Success 200 {object} response.Response{data=bool,msg=string}
+// @Router /channel/tag/disabled [post]
 func (a ChannelApi) DisableByTag(c *gin.Context) {
 	a.setTagStatus(c, constants.StatusDisabled)
 }

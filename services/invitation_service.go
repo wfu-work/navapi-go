@@ -10,14 +10,24 @@ import (
 	"navapi-go/domains"
 	"navapi-go/dto"
 
-	"github.com/wfu-work/nav-common-go-lib/global"
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-type InvitationService struct{}
+type InvitationService struct {
+	CodeCrud     commonServices.CrudService[domains.InvitationCode]
+	RelationCrud commonServices.CrudService[domains.InvitationRelation]
+}
 
-var InvitationServiceApp = InvitationService{}
+var InvitationServiceApp = new(InvitationService)
+
+func (s *InvitationService) WithDB(db *gorm.DB) *InvitationService {
+	cloned := *s
+	cloned.CodeCrud = *s.CodeCrud.WithDB(db)
+	cloned.RelationCrud = *s.RelationCrud.WithDB(db)
+	return &cloned
+}
 
 type InviteSettings struct {
 	Enabled            bool  `json:"enabled"`
@@ -73,7 +83,7 @@ func (s InvitationService) ListCodes(ownerUserGuid string, query dto.PageQuery) 
 	query.Normalize()
 	var codes []domains.InvitationCode
 	var total int64
-	db := global.NAV_DB.Model(&domains.InvitationCode{})
+	db := s.CodeCrud.DB().Model(&domains.InvitationCode{})
 	if ownerUserGuid != "" {
 		db = db.Where("owner_user_guid = ?", ownerUserGuid)
 	}
@@ -93,7 +103,7 @@ func (s InvitationService) ListRelations(userGuid string, query dto.PageQuery) (
 	query.Normalize()
 	var relations []domains.InvitationRelation
 	var total int64
-	db := global.NAV_DB.Model(&domains.InvitationRelation{})
+	db := s.RelationCrud.DB().Model(&domains.InvitationRelation{})
 	if userGuid != "" {
 		db = db.Where("inviter_user_guid = ? OR invitee_user_guid = ?", userGuid, userGuid)
 	}
@@ -136,7 +146,37 @@ func (s InvitationService) SaveCode(code *domains.InvitationCode) error {
 	if code.ExpiredAt == 0 && settings.DefaultExpireDays > 0 {
 		code.ExpiredAt = time.Now().AddDate(0, 0, settings.DefaultExpireDays).Unix()
 	}
-	return global.NAV_DB.Save(code).Error
+	if code.Id == 0 {
+		return createWithCrud(&s.CodeCrud, code)
+	}
+	existing, err := s.GetCode(code.Id)
+	if err != nil {
+		return err
+	}
+	code.Guid = existing.Guid
+	code.CreateTime = existing.CreateTime
+	code.Creater = existing.Creater
+	updating := *code
+	updating.Id = 0
+	if err := createWithCrud(&s.CodeCrud, &updating); err != nil {
+		return err
+	}
+	*code = updating
+	return nil
+}
+
+func (s InvitationService) GetCode(id uint) (*domains.InvitationCode, error) {
+	if id == 0 {
+		return nil, errors.New("id is required")
+	}
+	code, err := s.CodeCrud.GetById(id)
+	if err != nil {
+		return nil, err
+	}
+	if code == nil {
+		return nil, errors.New("invitation code not found")
+	}
+	return code, nil
 }
 
 func (s InvitationService) EnsureSelfCode(userGuid string) (*domains.InvitationCode, error) {
@@ -144,7 +184,7 @@ func (s InvitationService) EnsureSelfCode(userGuid string) (*domains.InvitationC
 		return nil, errors.New("user is required")
 	}
 	var code domains.InvitationCode
-	err := global.NAV_DB.Where("owner_user_guid = ? AND status = ?", userGuid, constants.StatusEnabled).
+	err := s.CodeCrud.DB().Where("owner_user_guid = ? AND status = ?", userGuid, constants.StatusEnabled).
 		Order("id asc").
 		First(&code).Error
 	if err == nil {
@@ -161,7 +201,7 @@ func (s InvitationService) EnsureSelfCode(userGuid string) (*domains.InvitationC
 }
 
 func (s InvitationService) DeleteCode(id uint) error {
-	return global.NAV_DB.Delete(&domains.InvitationCode{}, id).Error
+	return deleteByIDWithCrud(&s.CodeCrud, id, "invitation code not found")
 }
 
 // AcceptInvite binds the current user to an inviter exactly once and grants both
@@ -179,7 +219,7 @@ func (s InvitationService) AcceptInvite(userGuid string, req AcceptInviteRequest
 		return nil, errors.New("invite code is required")
 	}
 	var relation domains.InvitationRelation
-	err := global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+	err := s.CodeCrud.DB().Transaction(func(tx *gorm.DB) error {
 		var existing domains.InvitationRelation
 		err := tx.Where("invitee_user_guid = ?", userGuid).First(&existing).Error
 		if err == nil {
@@ -213,7 +253,11 @@ func (s InvitationService) AcceptInvite(userGuid string, req AcceptInviteRequest
 			Rewarded:           true,
 			RewardedAt:         time.Now().Unix(),
 		}
-		if err := tx.Create(&relation).Error; err != nil {
+		if err := relation.BeforeCreate(nil); err != nil {
+			return err
+		}
+		relationCrud := s.RelationCrud.WithDB(tx)
+		if err := relationCrud.Create(relation); err != nil {
 			return err
 		}
 		if code.OwnerUserGuid != "" && code.RewardQuota > 0 {
@@ -237,8 +281,8 @@ func (s InvitationService) AcceptInvite(userGuid string, req AcceptInviteRequest
 
 func (s InvitationService) Stats(userGuid string) (map[string]any, error) {
 	result := map[string]any{}
-	codeDB := global.NAV_DB.Model(&domains.InvitationCode{})
-	relDB := global.NAV_DB.Model(&domains.InvitationRelation{})
+	codeDB := s.CodeCrud.DB().Model(&domains.InvitationCode{})
+	relDB := s.RelationCrud.DB().Model(&domains.InvitationRelation{})
 	if userGuid != "" {
 		codeDB = codeDB.Where("owner_user_guid = ?", userGuid)
 		relDB = relDB.Where("inviter_user_guid = ?", userGuid)

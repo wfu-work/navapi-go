@@ -6,17 +6,24 @@ import (
 	"strings"
 	"time"
 
-	"navapi-go/domains"
-	"navapi-go/dto"
-
-	"github.com/wfu-work/nav-common-go-lib/global"
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"navapi-go/domains"
+	"navapi-go/dto"
 )
 
-type PaymentService struct{}
+type PaymentService struct {
+	commonServices.CrudService[domains.PaymentOrder]
+}
 
-var PaymentServiceApp = PaymentService{}
+var PaymentServiceApp = new(PaymentService)
+
+func (s *PaymentService) WithDB(db *gorm.DB) *PaymentService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	return &cloned
+}
 
 type CreatePaymentRequest struct {
 	Type        string `json:"type"`
@@ -39,7 +46,7 @@ func (s PaymentService) List(userGuid string, query dto.PageQuery) (dto.PageResu
 	query.Normalize()
 	var orders []domains.PaymentOrder
 	var total int64
-	db := global.NAV_DB.Model(&domains.PaymentOrder{})
+	db := s.DB().Model(&domains.PaymentOrder{})
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -94,7 +101,7 @@ func (s PaymentService) Create(userGuid string, req CreatePaymentRequest) (*doma
 		}
 		order.TokenGuid = token.Guid
 	}
-	if err := global.NAV_DB.Create(&order).Error; err != nil {
+	if err := createWithCrud(&s.CrudService, &order); err != nil {
 		return nil, err
 	}
 	return &order, nil
@@ -107,7 +114,7 @@ func (s PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrde
 		return nil, errors.New("orderNo is required")
 	}
 	var paid domains.PaymentOrder
-	err := global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+	err := s.DB().Transaction(func(tx *gorm.DB) error {
 		var order domains.PaymentOrder
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_no = ?", req.OrderNo).First(&order).Error; err != nil {
 			return err
@@ -124,7 +131,10 @@ func (s PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrde
 		order.PaidAt = now
 		order.TransactionID = req.TransactionID
 		order.NotifyData = req.NotifyData
-		if err := tx.Save(&order).Error; err != nil {
+		updating := order
+		updating.Id = 0
+		orderCrud := s.CrudService.WithDB(tx)
+		if err := orderCrud.Create(updating); err != nil {
 			return err
 		}
 		if order.Type == "subscription" {
@@ -152,7 +162,7 @@ func (s PaymentService) Close(orderNo string, userGuid string) error {
 	if strings.TrimSpace(orderNo) == "" {
 		return errors.New("orderNo is required")
 	}
-	return global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+	return s.DB().Transaction(func(tx *gorm.DB) error {
 		db := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_no = ?", orderNo)
 		if userGuid != "" {
 			db = db.Where("user_guid = ?", userGuid)

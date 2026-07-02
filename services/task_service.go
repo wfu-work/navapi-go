@@ -3,15 +3,23 @@ package services
 import (
 	"errors"
 
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
+	"gorm.io/gorm"
 	"navapi-go/domains"
 	"navapi-go/dto"
-
-	"github.com/wfu-work/nav-common-go-lib/global"
 )
 
-type TaskService struct{}
+type TaskService struct {
+	commonServices.CrudService[domains.Task]
+}
 
-var TaskServiceApp = TaskService{}
+var TaskServiceApp = new(TaskService)
+
+func (s *TaskService) WithDB(db *gorm.DB) *TaskService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	return &cloned
+}
 
 func (s TaskService) Create(task *domains.Task) error {
 	if task.TaskID == "" {
@@ -27,14 +35,14 @@ func (s TaskService) Create(task *domains.Task) error {
 	if task.Group == "" {
 		task.Group = "default"
 	}
-	return global.NAV_DB.Create(task).Error
+	return createWithCrud(&s.CrudService, task)
 }
 
 func (s TaskService) Update(task *domains.Task, userGuid string) error {
 	if task.TaskID == "" {
 		return errors.New("task id is required")
 	}
-	db := global.NAV_DB.Model(&domains.Task{}).Where("task_id = ?", task.TaskID)
+	db := s.DB().Model(&domains.Task{}).Where("task_id = ?", task.TaskID)
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -58,7 +66,7 @@ func (s TaskService) Delete(taskID string, userGuid string) error {
 	if taskID == "" {
 		return errors.New("task id is required")
 	}
-	db := global.NAV_DB.Where("task_id = ?", taskID)
+	db := s.DB().Where("task_id = ?", taskID)
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -69,7 +77,7 @@ func (s TaskService) List(userGuid string, query dto.PageQuery) (dto.PageResult,
 	query.Normalize()
 	var tasks []domains.Task
 	var total int64
-	db := global.NAV_DB.Model(&domains.Task{})
+	db := s.DB().Model(&domains.Task{})
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -87,7 +95,7 @@ func (s TaskService) List(userGuid string, query dto.PageQuery) (dto.PageResult,
 
 func (s TaskService) Get(taskID string, userGuid string) (*domains.Task, error) {
 	var task domains.Task
-	db := global.NAV_DB.Where("task_id = ?", taskID)
+	db := s.DB().Where("task_id = ?", taskID)
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}

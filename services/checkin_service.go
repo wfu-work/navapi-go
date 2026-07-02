@@ -4,16 +4,23 @@ import (
 	"errors"
 	"time"
 
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
+	"gorm.io/gorm"
 	"navapi-go/domains"
 	"navapi-go/dto"
-
-	"github.com/wfu-work/nav-common-go-lib/global"
-	"gorm.io/gorm"
 )
 
-type CheckinService struct{}
+type CheckinService struct {
+	commonServices.CrudService[domains.CheckinRecord]
+}
 
-var CheckinServiceApp = CheckinService{}
+var CheckinServiceApp = new(CheckinService)
+
+func (s *CheckinService) WithDB(db *gorm.DB) *CheckinService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	return &cloned
+}
 
 type CheckinSettings struct {
 	Enabled          bool  `json:"enabled"`
@@ -66,7 +73,7 @@ func (s CheckinService) List(userGuid string, query dto.PageQuery) (dto.PageResu
 	query.Normalize()
 	var records []domains.CheckinRecord
 	var total int64
-	db := global.NAV_DB.Model(&domains.CheckinRecord{})
+	db := s.DB().Model(&domains.CheckinRecord{})
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -89,7 +96,7 @@ func (s CheckinService) Status(userGuid string) (CheckinStatus, error) {
 	today := todayString()
 	status := CheckinStatus{Today: today}
 	var record domains.CheckinRecord
-	err := global.NAV_DB.Where("user_guid = ? AND date = ?", userGuid, today).First(&record).Error
+	err := s.DB().Where("user_guid = ? AND date = ?", userGuid, today).First(&record).Error
 	if err == nil {
 		status.TodayChecked = true
 		status.Streak = record.Streak
@@ -121,7 +128,7 @@ func (s CheckinService) Checkin(userGuid string, req CheckinRequest) (*domains.C
 	}
 	today := todayString()
 	var created domains.CheckinRecord
-	err := global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+	err := s.DB().Transaction(func(tx *gorm.DB) error {
 		var existing domains.CheckinRecord
 		err := tx.Where("user_guid = ? AND date = ?", userGuid, today).First(&existing).Error
 		if err == nil {
@@ -144,7 +151,11 @@ func (s CheckinService) Checkin(userGuid string, req CheckinRequest) (*domains.C
 			TokenID:     req.TokenID,
 			Status:      "success",
 		}
-		if err := tx.Create(&record).Error; err != nil {
+		if err := record.BeforeCreate(nil); err != nil {
+			return err
+		}
+		recordCrud := s.CrudService.WithDB(tx)
+		if err := recordCrud.Create(record); err != nil {
 			return err
 		}
 		if reward > 0 {
@@ -167,7 +178,7 @@ func (s CheckinService) previousStreak(userGuid string, today string) (int, erro
 		return 0, err
 	}
 	var record domains.CheckinRecord
-	err = global.NAV_DB.Where("user_guid = ? AND date = ?", userGuid, yesterday).First(&record).Error
+	err = s.DB().Where("user_guid = ? AND date = ?", userGuid, yesterday).First(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return 0, nil
 	}

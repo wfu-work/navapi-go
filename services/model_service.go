@@ -1,18 +1,30 @@
 package services
 
 import (
+	"errors"
 	"sort"
 	"time"
 
 	"navapi-go/domains"
 	"navapi-go/dto"
 
-	"github.com/wfu-work/nav-common-go-lib/global"
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
+	"gorm.io/gorm"
 )
 
-type ModelService struct{}
+type ModelService struct {
+	commonServices.CrudService[domains.ModelMeta]
+	VendorCrud commonServices.CrudService[domains.VendorMeta]
+}
 
-var ModelServiceApp = ModelService{}
+var ModelServiceApp = new(ModelService)
+
+func (s *ModelService) WithDB(db *gorm.DB) *ModelService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	cloned.VendorCrud = *s.VendorCrud.WithDB(db)
+	return &cloned
+}
 
 func (s ModelService) ListOpenAIModels() (dto.ModelListResponse, error) {
 	models, err := ChannelServiceApp.ListEnabledModels()
@@ -51,26 +63,64 @@ func (s ModelService) ListOpenAIModels() (dto.ModelListResponse, error) {
 }
 
 func (s ModelService) UpsertMeta(meta *domains.ModelMeta) error {
-	return global.NAV_DB.Save(meta).Error
+	if meta.Id == 0 {
+		return createWithCrud(&s.CrudService, meta)
+	}
+	existing, err := s.GetById(meta.Id)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return errors.New("model not found")
+	}
+	meta.Guid = existing.Guid
+	meta.CreateTime = existing.CreateTime
+	meta.Creater = existing.Creater
+	updating := *meta
+	updating.Id = 0
+	if err := createWithCrud(&s.CrudService, &updating); err != nil {
+		return err
+	}
+	*meta = updating
+	return nil
 }
 
 func (s ModelService) ListMeta() ([]domains.ModelMeta, error) {
 	var metas []domains.ModelMeta
-	err := global.NAV_DB.Order("sort desc, id desc").Find(&metas).Error
+	err := s.DB().Order("sort desc, id desc").Find(&metas).Error
 	return metas, err
 }
 
 func (s ModelService) DeleteMeta(id uint) error {
-	return global.NAV_DB.Delete(&domains.ModelMeta{}, id).Error
+	return deleteByIDWithCrud(&s.CrudService, id, "model not found")
 }
 
 func (s ModelService) UpsertVendor(meta *domains.VendorMeta) error {
-	return global.NAV_DB.Save(meta).Error
+	if meta.Id == 0 {
+		return createWithCrud(&s.VendorCrud, meta)
+	}
+	existing, err := s.VendorCrud.GetById(meta.Id)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return errors.New("vendor not found")
+	}
+	meta.Guid = existing.Guid
+	meta.CreateTime = existing.CreateTime
+	meta.Creater = existing.Creater
+	updating := *meta
+	updating.Id = 0
+	if err := createWithCrud(&s.VendorCrud, &updating); err != nil {
+		return err
+	}
+	*meta = updating
+	return nil
 }
 
 func (s ModelService) ListVendors(includeDisabled bool) ([]domains.VendorMeta, error) {
 	var vendors []domains.VendorMeta
-	db := global.NAV_DB.Order("sort desc, id desc")
+	db := s.VendorCrud.DB().Order("sort desc, id desc")
 	if !includeDisabled {
 		db = db.Where("enabled = ?", true)
 	}
@@ -79,5 +129,5 @@ func (s ModelService) ListVendors(includeDisabled bool) ([]domains.VendorMeta, e
 }
 
 func (s ModelService) DeleteVendor(id uint) error {
-	return global.NAV_DB.Delete(&domains.VendorMeta{}, id).Error
+	return deleteByIDWithCrud(&s.VendorCrud, id, "vendor not found")
 }

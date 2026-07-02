@@ -13,17 +13,26 @@ import (
 	"sync"
 	"time"
 
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
+	"gorm.io/gorm"
 	"navapi-go/constants"
 	"navapi-go/domains"
 	"navapi-go/dto"
-
-	"github.com/wfu-work/nav-common-go-lib/global"
-	"gorm.io/gorm"
 )
 
-type ChannelService struct{}
+type ChannelService struct {
+	commonServices.CrudService[domains.Channel]
+	HealthLogCrud commonServices.CrudService[domains.ChannelHealthLog]
+}
 
-var ChannelServiceApp = ChannelService{}
+var ChannelServiceApp = new(ChannelService)
+
+func (s *ChannelService) WithDB(db *gorm.DB) *ChannelService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	cloned.HealthLogCrud = *s.HealthLogCrud.WithDB(db)
+	return &cloned
+}
 
 var channelKeyRotation = struct {
 	sync.Mutex
@@ -62,28 +71,50 @@ func (s ChannelService) Create(channel *domains.Channel) error {
 	if channel.Weight <= 0 {
 		channel.Weight = 1
 	}
-	return global.NAV_DB.Create(channel).Error
+	return createWithCrud(&s.CrudService, channel)
 }
 
 func (s ChannelService) Update(channel *domains.Channel) error {
-	return global.NAV_DB.Save(channel).Error
+	if channel.Id == 0 {
+		return errors.New("id is required")
+	}
+	existing, err := s.GetByID(channel.Id)
+	if err != nil {
+		return err
+	}
+	channel.Guid = existing.Guid
+	channel.CreateTime = existing.CreateTime
+	channel.Creater = existing.Creater
+	updating := *channel
+	updating.Id = 0
+	if err := createWithCrud(&s.CrudService, &updating); err != nil {
+		return err
+	}
+	*channel = updating
+	return nil
 }
 
 func (s ChannelService) Delete(id uint) error {
-	return global.NAV_DB.Delete(&domains.Channel{}, id).Error
+	return deleteByIDWithCrud(&s.CrudService, id, "channel not found")
 }
 
 func (s ChannelService) GetByID(id uint) (*domains.Channel, error) {
-	var channel domains.Channel
-	if err := global.NAV_DB.First(&channel, id).Error; err != nil {
+	if id == 0 {
+		return nil, errors.New("id is required")
+	}
+	channel, err := s.GetById(id)
+	if err != nil {
 		return nil, err
 	}
-	return &channel, nil
+	if channel == nil {
+		return nil, errors.New("channel not found")
+	}
+	return channel, nil
 }
 
 func (s ChannelService) List() ([]domains.Channel, error) {
 	var channels []domains.Channel
-	err := global.NAV_DB.Order("priority desc, id desc").Find(&channels).Error
+	err := s.DB().Order("priority desc, id desc").Find(&channels).Error
 	return channels, err
 }
 
@@ -123,7 +154,7 @@ func (s ChannelService) FindForModelAndType(modelName, group string, channelType
 func (s ChannelService) FindCandidatesForModelAndType(modelName, group string, channelType string) ([]domains.Channel, error) {
 	group = normalizeGroup(group)
 	var channels []domains.Channel
-	db := global.NAV_DB.Where("status = ? AND (group_name = ? OR group_name = ?)", constants.StatusEnabled, group, "default")
+	db := s.DB().Where("status = ? AND (group_name = ? OR group_name = ?)", constants.StatusEnabled, group, "default")
 	if channelType != "" {
 		db = db.Where("type = ?", channelType)
 	}
@@ -243,12 +274,12 @@ func (s ChannelService) MatchModel(channel *domains.Channel, modelName string) b
 }
 
 func (s ChannelService) IncreaseUsage(id uint, quota int64) error {
-	return global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).
+	return s.DB().Model(&domains.Channel{}).Where("id = ?", id).
 		UpdateColumn("used_quota", gorm.Expr("used_quota + ?", quota)).Error
 }
 
 func (s ChannelService) SetTestResult(id uint, responseTime int64) error {
-	return global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).
+	return s.DB().Model(&domains.Channel{}).Where("id = ?", id).
 		Updates(map[string]any{
 			"test_time":     time.Now().Unix(),
 			"response_time": responseTime,
@@ -256,7 +287,7 @@ func (s ChannelService) SetTestResult(id uint, responseTime int64) error {
 }
 
 func (s ChannelService) SetStatus(id uint, status int) error {
-	return global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).
+	return s.DB().Model(&domains.Channel{}).Where("id = ?", id).
 		Updates(map[string]any{"status": status, "disabled_reason": ""}).Error
 }
 
@@ -264,7 +295,7 @@ func (s ChannelService) AutoDisable(id uint, reason string) error {
 	if len(reason) > 255 {
 		reason = reason[:255]
 	}
-	err := global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).
+	err := s.DB().Model(&domains.Channel{}).Where("id = ?", id).
 		Updates(map[string]any{
 			"status":          constants.StatusDisabled,
 			"disabled_reason": reason,
@@ -284,7 +315,7 @@ func (s ChannelService) BatchStatus(ids []uint, status int) error {
 	if status != constants.StatusEnabled && status != constants.StatusDisabled {
 		return errors.New("invalid status")
 	}
-	return global.NAV_DB.Model(&domains.Channel{}).Where("id IN ?", ids).
+	return s.DB().Model(&domains.Channel{}).Where("id IN ?", ids).
 		Update("status", status).Error
 }
 
@@ -297,7 +328,7 @@ func (s ChannelService) SetStatusByTag(tag string, status int) error {
 		return errors.New("invalid status")
 	}
 	var channels []domains.Channel
-	if err := global.NAV_DB.Select("id", "tags").Find(&channels).Error; err != nil {
+	if err := s.DB().Select("id", "tags").Find(&channels).Error; err != nil {
 		return err
 	}
 	ids := make([]uint, 0)
@@ -309,7 +340,7 @@ func (s ChannelService) SetStatusByTag(tag string, status int) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	return global.NAV_DB.Model(&domains.Channel{}).Where("id IN ?", ids).
+	return s.DB().Model(&domains.Channel{}).Where("id IN ?", ids).
 		Update("status", status).Error
 }
 
@@ -344,7 +375,7 @@ func (s ChannelService) FetchModels(id uint, update bool) ([]string, error) {
 	}
 	models = uniqueSorted(models)
 	if update {
-		if err := global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).
+		if err := s.DB().Model(&domains.Channel{}).Where("id = ?", id).
 			Update("models", strings.Join(models, ",")).Error; err != nil {
 			return nil, err
 		}
@@ -412,7 +443,7 @@ func (s ChannelService) UpdateChannelKey(id uint, key string) error {
 	if strings.TrimSpace(key) == "" {
 		return errors.New("channel key is required")
 	}
-	return global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).Update("key", key).Error
+	return s.DB().Model(&domains.Channel{}).Where("id = ?", id).Update("key", key).Error
 }
 
 // UpdateUpstreamConfig isolates provider endpoint changes from the general
@@ -427,7 +458,7 @@ func (s ChannelService) UpdateUpstreamConfig(id uint, config ChannelUpstreamConf
 	if strings.TrimSpace(config.Type) != "" {
 		updates["type"] = strings.TrimSpace(config.Type)
 	}
-	return global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).Updates(updates).Error
+	return s.DB().Model(&domains.Channel{}).Where("id = ?", id).Updates(updates).Error
 }
 
 func (s ChannelService) GetModelMapping(id uint) (map[string]string, error) {
@@ -460,7 +491,7 @@ func (s ChannelService) UpdateModelMapping(id uint, mapping map[string]string) e
 	if err != nil {
 		return err
 	}
-	return global.NAV_DB.Model(&domains.Channel{}).Where("id = ?", id).Update("model_mapping", string(raw)).Error
+	return s.DB().Model(&domains.Channel{}).Where("id = ?", id).Update("model_mapping", string(raw)).Error
 }
 
 func (s ChannelService) CreateHealthLog(channel *domains.Channel, ok bool, responseTime int64, statusCode int, models []string, errorMessage string, trigger string) error {
@@ -487,14 +518,14 @@ func (s ChannelService) CreateHealthLog(channel *domains.Channel, ok bool, respo
 		Trigger:      trigger,
 		CheckedAt:    time.Now().Unix(),
 	}
-	return global.NAV_DB.Create(&log).Error
+	return createWithCrud(&s.HealthLogCrud, &log)
 }
 
 func (s ChannelService) ListHealthLogs(channelID uint, query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var logs []domains.ChannelHealthLog
 	var total int64
-	db := global.NAV_DB.Model(&domains.ChannelHealthLog{})
+	db := s.HealthLogCrud.DB().Model(&domains.ChannelHealthLog{})
 	if channelID > 0 {
 		db = db.Where("channel_id = ?", channelID)
 	}

@@ -14,6 +14,7 @@ func (r AnnouncementRouter) InitAnnouncementRouter(privateGroup *gin.RouterGroup
 		group.GET("/:id", announcementApi.Get)
 		group.POST("/", announcementApi.Save)
 		group.PUT("/", announcementApi.Save)
+		group.PUT("/:id", announcementApi.Save)
 		group.DELETE("/:id", announcementApi.Delete)
 	}
 }

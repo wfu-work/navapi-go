@@ -21,7 +21,6 @@ import (
 	"navapi-go/dto"
 
 	"github.com/gin-gonic/gin"
-	"github.com/wfu-work/nav-common-go-lib/global"
 	"gorm.io/gorm"
 )
 
@@ -465,7 +464,7 @@ func (s RelayService) reserveQuota(token *domains.ApiToken, quota int64) error {
 	if quota <= 0 {
 		return nil
 	}
-	return global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+	return TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
 		if err := TokenServiceApp.Consume(tx, token.Id, quota); err != nil {
 			return err
 		}
@@ -477,7 +476,7 @@ func (s RelayService) refundReservedQuota(token *domains.ApiToken, quota int64) 
 	if quota <= 0 {
 		return nil
 	}
-	return global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+	return TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
 		if err := TokenServiceApp.Refund(tx, token.Id, quota); err != nil {
 			return err
 		}
@@ -488,7 +487,7 @@ func (s RelayService) refundReservedQuota(token *domains.ApiToken, quota int64) 
 // settleReservedQuota converts the reservation into the final charge. Only the
 // delta touches token/user counters because reserveQuota already moved them.
 func (s RelayService) settleReservedQuota(token *domains.ApiToken, channel *domains.Channel, reservedQuota int64, finalQuota int64) error {
-	return global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+	return TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
 		delta := finalQuota - reservedQuota
 		switch {
 		case delta > 0:

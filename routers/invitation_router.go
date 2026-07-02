@@ -12,6 +12,7 @@ func (r InvitationRouter) InitInvitationRouter(router *gin.RouterGroup) {
 		group.GET("/codes", invitationApi.Codes)
 		group.POST("/code", invitationApi.SaveCode)
 		group.PUT("/code", invitationApi.SaveCode)
+		group.GET("/code/:id", invitationApi.GetCode)
 		group.DELETE("/code/:id", invitationApi.DeleteCode)
 		group.GET("/relations", invitationApi.Relations)
 		group.GET("/stats", invitationApi.Stats)

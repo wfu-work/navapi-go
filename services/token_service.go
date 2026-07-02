@@ -5,17 +5,24 @@ import (
 	"strings"
 	"time"
 
-	"navapi-go/constants"
-	"navapi-go/domains"
-
-	"github.com/wfu-work/nav-common-go-lib/global"
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"navapi-go/constants"
+	"navapi-go/domains"
 )
 
-type TokenService struct{}
+type TokenService struct {
+	commonServices.CrudService[domains.ApiToken]
+}
 
-var TokenServiceApp = TokenService{}
+var TokenServiceApp = new(TokenService)
+
+func (s *TokenService) WithDB(db *gorm.DB) *TokenService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	return &cloned
+}
 
 type TokenUsage struct {
 	ID               uint   `json:"id"`
@@ -46,14 +53,18 @@ func (s TokenService) Create(token *domains.ApiToken) error {
 	if token.ExpiredTime == 0 {
 		token.ExpiredTime = -1
 	}
-	return global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+	return s.DB().Transaction(func(tx *gorm.DB) error {
 		if err := UserQuotaServiceApp.Ensure(tx, token.UserGuid); err != nil {
 			return err
 		}
 		if err := UserQuotaServiceApp.CheckGroup(token.UserGuid, token.Group); err != nil {
 			return err
 		}
-		return tx.Create(token).Error
+		if err := token.BeforeCreate(nil); err != nil {
+			return err
+		}
+		tokenCrud := s.CrudService.WithDB(tx)
+		return tokenCrud.Create(*token)
 	})
 }
 
@@ -64,32 +75,50 @@ func (s TokenService) Update(token *domains.ApiToken) error {
 	if err := UserQuotaServiceApp.CheckGroup(token.UserGuid, token.Group); err != nil {
 		return err
 	}
-	return global.NAV_DB.Save(token).Error
+	existing, err := s.GetByID(token.Id, token.UserGuid)
+	if err != nil {
+		return err
+	}
+	token.Guid = existing.Guid
+	token.CreateTime = existing.CreateTime
+	token.Creater = existing.Creater
+	updating := *token
+	updating.Id = 0
+	if err := createWithCrud(&s.CrudService, &updating); err != nil {
+		return err
+	}
+	*token = updating
+	return nil
 }
 
 func (s TokenService) Delete(id uint, userGuid string) error {
-	db := global.NAV_DB.Where("id = ?", id)
-	if userGuid != "" {
-		db = db.Where("user_guid = ?", userGuid)
+	token, err := s.GetByID(id, userGuid)
+	if err != nil {
+		return err
 	}
-	return db.Delete(&domains.ApiToken{}).Error
+	return s.DeleteByGuid(token.Guid)
 }
 
 func (s TokenService) GetByID(id uint, userGuid string) (*domains.ApiToken, error) {
-	var token domains.ApiToken
-	db := global.NAV_DB.Where("id = ?", id)
-	if userGuid != "" {
-		db = db.Where("user_guid = ?", userGuid)
+	if id == 0 {
+		return nil, errors.New("id is required")
 	}
-	if err := db.First(&token).Error; err != nil {
+	token, err := s.GetById(id)
+	if err != nil {
 		return nil, err
 	}
-	return &token, nil
+	if token == nil {
+		return nil, errors.New("token not found")
+	}
+	if userGuid != "" && token.UserGuid != userGuid {
+		return nil, errors.New("token not found")
+	}
+	return token, nil
 }
 
 func (s TokenService) List(userGuid string) ([]domains.ApiToken, error) {
 	var tokens []domains.ApiToken
-	db := global.NAV_DB.Order("id desc")
+	db := s.DB().Order("id desc")
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -103,7 +132,7 @@ func (s TokenService) Validate(key string, clientIP string) (*domains.ApiToken, 
 		return nil, errors.New("token is required")
 	}
 	var token domains.ApiToken
-	if err := global.NAV_DB.Where("key = ?", key).First(&token).Error; err != nil {
+	if err := s.DB().Where("key = ?", key).First(&token).Error; err != nil {
 		return nil, err
 	}
 	if token.Status != constants.StatusEnabled {
@@ -120,7 +149,7 @@ func (s TokenService) Validate(key string, clientIP string) (*domains.ApiToken, 
 		return nil, errors.New("client ip is not allowed")
 	}
 	token.AccessedTime = now
-	_ = global.NAV_DB.Model(&domains.ApiToken{}).Where("id = ?", token.Id).Update("accessed_time", now).Error
+	_ = s.DB().Model(&domains.ApiToken{}).Where("id = ?", token.Id).Update("accessed_time", now).Error
 	return &token, nil
 }
 
@@ -215,7 +244,7 @@ func (s TokenService) Usage(userGuid string) ([]TokenUsage, error) {
 			PromptTokens     int64
 			CompletionTokens int64
 		}
-		if err := global.NAV_DB.Model(&domains.UsageLog{}).
+		if err := s.DB().Model(&domains.UsageLog{}).
 			Select("token_guid, COUNT(*) AS total_requests, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END),0) AS success_requests, COALESCE(SUM(quota),0) AS quota, COALESCE(SUM(prompt_tokens),0) AS prompt_tokens, COALESCE(SUM(completion_tokens),0) AS completion_tokens").
 			Where("token_guid IN ?", tokenGuids).
 			Group("token_guid").

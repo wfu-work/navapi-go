@@ -1,23 +1,37 @@
 package services
 
 import (
+	"errors"
 	"math"
 
 	"navapi-go/domains"
 	"navapi-go/dto"
 
-	"github.com/wfu-work/nav-common-go-lib/global"
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
+	"gorm.io/gorm"
 )
 
-type PricingService struct{}
+type PricingService struct {
+	commonServices.CrudService[domains.Pricing]
+}
 
-var PricingServiceApp = PricingService{}
+var PricingServiceApp = new(PricingService)
+
+func (s *PricingService) WithDB(db *gorm.DB) *PricingService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	return &cloned
+}
 
 func (s PricingService) List(query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var pricing []domains.Pricing
 	var total int64
-	db := global.NAV_DB.Model(&domains.Pricing{})
+	db := s.DB()
+	if db == nil {
+		return dto.PageResult{}, errors.New("database is not initialized")
+	}
+	db = db.Model(&domains.Pricing{})
 	if query.Q != "" {
 		db = db.Where("model_name LIKE ? OR group_name LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
@@ -32,17 +46,36 @@ func (s PricingService) List(query dto.PageQuery) (dto.PageResult, error) {
 
 func (s PricingService) PublicList() ([]domains.Pricing, error) {
 	var pricing []domains.Pricing
-	err := global.NAV_DB.Where("enabled = ?", true).Order("model_name asc, group_name asc").Find(&pricing).Error
+	err := s.DB().Where("enabled = ?", true).Order("model_name asc, group_name asc").Find(&pricing).Error
 	return pricing, err
 }
 
 func (s PricingService) Upsert(pricing *domains.Pricing) error {
 	normalizePricing(pricing)
-	return global.NAV_DB.Save(pricing).Error
+	if pricing.Id == 0 {
+		return createWithCrud(&s.CrudService, pricing)
+	}
+	existing, err := s.GetById(pricing.Id)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return errors.New("pricing not found")
+	}
+	pricing.Guid = existing.Guid
+	pricing.CreateTime = existing.CreateTime
+	pricing.Creater = existing.Creater
+	updating := *pricing
+	updating.Id = 0
+	if err := createWithCrud(&s.CrudService, &updating); err != nil {
+		return err
+	}
+	*pricing = updating
+	return nil
 }
 
 func (s PricingService) Delete(id uint) error {
-	return global.NAV_DB.Delete(&domains.Pricing{}, id).Error
+	return deleteByIDWithCrud(&s.CrudService, id, "pricing not found")
 }
 
 func (s PricingService) CalculateQuota(modelName string, group string, usage dto.Usage, fallback int64) int64 {
@@ -83,7 +116,7 @@ func (s PricingService) CalculateQuota(modelName string, group string, usage dto
 func (s PricingService) match(modelName string, group string) *domains.Pricing {
 	group = normalizeGroup(group)
 	candidates := []domains.Pricing{}
-	err := global.NAV_DB.Where("enabled = ? AND model_name IN ? AND group_name IN ?", true, []string{modelName, "*"}, []string{group, "*", "default"}).
+	err := s.DB().Where("enabled = ? AND model_name IN ? AND group_name IN ?", true, []string{modelName, "*"}, []string{group, "*", "default"}).
 		Find(&candidates).Error
 	if err != nil || len(candidates) == 0 {
 		return nil

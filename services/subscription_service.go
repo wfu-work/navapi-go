@@ -5,17 +5,26 @@ import (
 	"strings"
 	"time"
 
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
+	"gorm.io/gorm"
 	"navapi-go/constants"
 	"navapi-go/domains"
 	"navapi-go/dto"
-
-	"github.com/wfu-work/nav-common-go-lib/global"
-	"gorm.io/gorm"
 )
 
-type SubscriptionService struct{}
+type SubscriptionService struct {
+	commonServices.CrudService[domains.SubscriptionPlan]
+	UserSubscriptionCrud commonServices.CrudService[domains.UserSubscription]
+}
 
-var SubscriptionServiceApp = SubscriptionService{}
+var SubscriptionServiceApp = new(SubscriptionService)
+
+func (s *SubscriptionService) WithDB(db *gorm.DB) *SubscriptionService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	cloned.UserSubscriptionCrud = *s.UserSubscriptionCrud.WithDB(db)
+	return &cloned
+}
 
 type SubscribeRequest struct {
 	PlanID  uint   `json:"planId"`
@@ -27,7 +36,7 @@ func (s SubscriptionService) ListPlans(query dto.PageQuery, enabledOnly bool) (d
 	query.Normalize()
 	var plans []domains.SubscriptionPlan
 	var total int64
-	db := global.NAV_DB.Model(&domains.SubscriptionPlan{})
+	db := s.DB().Model(&domains.SubscriptionPlan{})
 	if enabledOnly {
 		db = db.Where("status = ?", constants.StatusEnabled)
 	}
@@ -62,26 +71,51 @@ func (s SubscriptionService) SavePlan(plan *domains.SubscriptionPlan) error {
 	if plan.Group == "" {
 		plan.Group = constants.DefaultGroup
 	}
-	return global.NAV_DB.Save(plan).Error
+	if plan.Id == 0 {
+		return createWithCrud(&s.CrudService, plan)
+	}
+	existing, err := s.GetById(plan.Id)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return errors.New("subscription plan not found")
+	}
+	plan.Guid = existing.Guid
+	plan.CreateTime = existing.CreateTime
+	plan.Creater = existing.Creater
+	updating := *plan
+	updating.Id = 0
+	if err := createWithCrud(&s.CrudService, &updating); err != nil {
+		return err
+	}
+	*plan = updating
+	return nil
 }
 
 func (s SubscriptionService) DeletePlan(id uint) error {
-	return global.NAV_DB.Delete(&domains.SubscriptionPlan{}, id).Error
+	return deleteByIDWithCrud(&s.CrudService, id, "subscription plan not found")
 }
 
 func (s SubscriptionService) GetPlan(id uint) (*domains.SubscriptionPlan, error) {
-	var plan domains.SubscriptionPlan
-	if err := global.NAV_DB.First(&plan, id).Error; err != nil {
+	if id == 0 {
+		return nil, errors.New("id is required")
+	}
+	plan, err := s.GetById(id)
+	if err != nil {
 		return nil, err
 	}
-	return &plan, nil
+	if plan == nil {
+		return nil, errors.New("subscription plan not found")
+	}
+	return plan, nil
 }
 
 func (s SubscriptionService) ListUserSubscriptions(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var subscriptions []domains.UserSubscription
 	var total int64
-	db := global.NAV_DB.Model(&domains.UserSubscription{})
+	db := s.UserSubscriptionCrud.DB().Model(&domains.UserSubscription{})
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -112,7 +146,7 @@ func (s SubscriptionService) Subscribe(userGuid string, req SubscribeRequest, pa
 		return nil, errors.New("paid subscription must be activated by payment")
 	}
 	var subscription domains.UserSubscription
-	err = global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+	err = s.DB().Transaction(func(tx *gorm.DB) error {
 		created, err := s.createSubscriptionWithTx(tx, userGuid, plan, paymentGuid, req.Remark)
 		if err != nil {
 			return err
@@ -143,7 +177,11 @@ func (s SubscriptionService) createSubscriptionWithTx(tx *gorm.DB, userGuid stri
 		PaymentGuid: paymentGuid,
 		Remark:      remark,
 	}
-	if err := tx.Create(&subscription).Error; err != nil {
+	if err := subscription.BeforeCreate(nil); err != nil {
+		return nil, err
+	}
+	userSubscriptionCrud := s.UserSubscriptionCrud.WithDB(tx)
+	if err := userSubscriptionCrud.Create(subscription); err != nil {
 		return nil, err
 	}
 	return &subscription, nil

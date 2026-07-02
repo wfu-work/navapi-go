@@ -5,18 +5,25 @@ import (
 	"fmt"
 	"time"
 
+	commonServices "github.com/wfu-work/nav-common-go-lib/services"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"navapi-go/constants"
 	"navapi-go/domains"
 	"navapi-go/dto"
-
-	"github.com/wfu-work/nav-common-go-lib/global"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
-type RedemptionService struct{}
+type RedemptionService struct {
+	commonServices.CrudService[domains.Redemption]
+}
 
-var RedemptionServiceApp = RedemptionService{}
+var RedemptionServiceApp = new(RedemptionService)
+
+func (s *RedemptionService) WithDB(db *gorm.DB) *RedemptionService {
+	cloned := *s
+	cloned.CrudService = *s.CrudService.WithDB(db)
+	return &cloned
+}
 
 type RedemptionBatchRequest struct {
 	Count     int    `json:"count"`
@@ -46,22 +53,41 @@ func (s RedemptionService) Create(redemption *domains.Redemption) error {
 		}
 		redemption.Code = code
 	}
-	return global.NAV_DB.Create(redemption).Error
+	return createWithCrud(&s.CrudService, redemption)
 }
 
 func (s RedemptionService) Update(redemption *domains.Redemption) error {
-	return global.NAV_DB.Save(redemption).Error
+	if redemption.Id == 0 {
+		return errors.New("id is required")
+	}
+	existing, err := s.GetById(redemption.Id)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return errors.New("redemption not found")
+	}
+	redemption.Guid = existing.Guid
+	redemption.CreateTime = existing.CreateTime
+	redemption.Creater = existing.Creater
+	updating := *redemption
+	updating.Id = 0
+	if err := createWithCrud(&s.CrudService, &updating); err != nil {
+		return err
+	}
+	*redemption = updating
+	return nil
 }
 
 func (s RedemptionService) Delete(id uint) error {
-	return global.NAV_DB.Delete(&domains.Redemption{}, id).Error
+	return deleteByIDWithCrud(&s.CrudService, id, "redemption not found")
 }
 
 func (s RedemptionService) List(query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var redemptions []domains.Redemption
 	var total int64
-	db := global.NAV_DB.Model(&domains.Redemption{})
+	db := s.DB().Model(&domains.Redemption{})
 	if query.Q != "" {
 		db = db.Where("code LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
@@ -98,7 +124,7 @@ func (s RedemptionService) BatchCreate(req RedemptionBatchRequest) ([]domains.Re
 			Remark:    req.Remark,
 		})
 	}
-	if err := global.NAV_DB.Create(&cards).Error; err != nil {
+	if err := s.DB().Create(&cards).Error; err != nil {
 		return nil, err
 	}
 	return cards, nil
@@ -107,23 +133,23 @@ func (s RedemptionService) BatchCreate(req RedemptionBatchRequest) ([]domains.Re
 func (s RedemptionService) Stats() (RedemptionStats, error) {
 	var stats RedemptionStats
 	now := time.Now().Unix()
-	if err := global.NAV_DB.Model(&domains.Redemption{}).Count(&stats.Total).Error; err != nil {
+	if err := s.DB().Model(&domains.Redemption{}).Count(&stats.Total).Error; err != nil {
 		return stats, err
 	}
-	if err := global.NAV_DB.Model(&domains.Redemption{}).Where("status = ?", constants.StatusEnabled).Count(&stats.Enabled).Error; err != nil {
+	if err := s.DB().Model(&domains.Redemption{}).Where("status = ?", constants.StatusEnabled).Count(&stats.Enabled).Error; err != nil {
 		return stats, err
 	}
-	if err := global.NAV_DB.Model(&domains.Redemption{}).Where("used_at > 0 OR used_by <> ''").Count(&stats.Used).Error; err != nil {
+	if err := s.DB().Model(&domains.Redemption{}).Where("used_at > 0 OR used_by <> ''").Count(&stats.Used).Error; err != nil {
 		return stats, err
 	}
-	if err := global.NAV_DB.Model(&domains.Redemption{}).Where("expired_at > 0 AND expired_at < ?", now).Count(&stats.Expired).Error; err != nil {
+	if err := s.DB().Model(&domains.Redemption{}).Where("expired_at > 0 AND expired_at < ?", now).Count(&stats.Expired).Error; err != nil {
 		return stats, err
 	}
 	var sums struct {
 		TotalQuota int64
 		UsedQuota  int64
 	}
-	if err := global.NAV_DB.Model(&domains.Redemption{}).
+	if err := s.DB().Model(&domains.Redemption{}).
 		Select("COALESCE(SUM(quota),0) AS total_quota, COALESCE(SUM(CASE WHEN used_at > 0 OR used_by <> '' THEN quota ELSE 0 END),0) AS used_quota").
 		Scan(&sums).Error; err != nil {
 		return stats, err
@@ -141,7 +167,7 @@ func (s RedemptionService) Redeem(code string, userGuid string, tokenID uint) (*
 		return nil, errors.New("token id is required")
 	}
 	var redeemed domains.Redemption
-	err := global.NAV_DB.Transaction(func(tx *gorm.DB) error {
+	err := s.DB().Transaction(func(tx *gorm.DB) error {
 		var redemption domains.Redemption
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("code = ?", code).First(&redemption).Error; err != nil {
 			return err
@@ -162,7 +188,10 @@ func (s RedemptionService) Redeem(code string, userGuid string, tokenID uint) (*
 		redemption.Status = constants.StatusDisabled
 		redemption.UsedBy = userGuid
 		redemption.UsedAt = now
-		if err := tx.Save(&redemption).Error; err != nil {
+		updating := redemption
+		updating.Id = 0
+		redemptionCrud := s.CrudService.WithDB(tx)
+		if err := redemptionCrud.Create(updating); err != nil {
 			return err
 		}
 		redeemed = redemption
