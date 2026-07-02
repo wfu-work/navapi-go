@@ -27,5 +27,5 @@ func TestBusinessRoutesDoNotConflictWithSystemRoutes(t *testing.T) {
 	systemRouter.InitSecretRouter(publicGroup)
 	systemRouter.InitRegisterRouter(publicGroup)
 
-	RouterGroupApp.InitRouters(publicGroup, privateGroup, nil)
+	RouterGroupApp.InitRouters(publicGroup, privateGroup)
 }

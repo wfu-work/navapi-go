@@ -3,7 +3,6 @@ package apis
 var ApiGroupApp = new(ApiGroup)
 
 type ApiGroup struct {
-	ChannelApi
 	TokenApi
 	UsageLogApi
 	ModelApi

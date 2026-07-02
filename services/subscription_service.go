@@ -32,7 +32,7 @@ type SubscribeRequest struct {
 	Remark  string `json:"remark"`
 }
 
-func (s SubscriptionService) ListPlans(query dto.PageQuery, enabledOnly bool) (dto.PageResult, error) {
+func (s *SubscriptionService) ListPlans(query dto.PageQuery, enabledOnly bool) (dto.PageResult, error) {
 	query.Normalize()
 	var plans []domains.SubscriptionPlan
 	var total int64
@@ -52,7 +52,7 @@ func (s SubscriptionService) ListPlans(query dto.PageQuery, enabledOnly bool) (d
 	return dto.PageResult{List: plans, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s SubscriptionService) SavePlan(plan *domains.SubscriptionPlan) error {
+func (s *SubscriptionService) SavePlan(plan *domains.SubscriptionPlan) error {
 	if strings.TrimSpace(plan.Name) == "" {
 		return errors.New("plan name is required")
 	}
@@ -93,11 +93,11 @@ func (s SubscriptionService) SavePlan(plan *domains.SubscriptionPlan) error {
 	return nil
 }
 
-func (s SubscriptionService) DeletePlan(id uint) error {
+func (s *SubscriptionService) DeletePlan(id uint) error {
 	return deleteByIDWithCrud(&s.CrudService, id, "subscription plan not found")
 }
 
-func (s SubscriptionService) GetPlan(id uint) (*domains.SubscriptionPlan, error) {
+func (s *SubscriptionService) GetPlan(id uint) (*domains.SubscriptionPlan, error) {
 	if id == 0 {
 		return nil, errors.New("id is required")
 	}
@@ -111,7 +111,7 @@ func (s SubscriptionService) GetPlan(id uint) (*domains.SubscriptionPlan, error)
 	return plan, nil
 }
 
-func (s SubscriptionService) ListUserSubscriptions(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *SubscriptionService) ListUserSubscriptions(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var subscriptions []domains.UserSubscription
 	var total int64
@@ -131,7 +131,7 @@ func (s SubscriptionService) ListUserSubscriptions(userGuid string, query dto.Pa
 	return dto.PageResult{List: subscriptions, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s SubscriptionService) Subscribe(userGuid string, req SubscribeRequest, paymentGuid string) (*domains.UserSubscription, error) {
+func (s *SubscriptionService) Subscribe(userGuid string, req SubscribeRequest, paymentGuid string) (*domains.UserSubscription, error) {
 	if userGuid == "" {
 		return nil, errors.New("user is required")
 	}
@@ -163,7 +163,7 @@ func (s SubscriptionService) Subscribe(userGuid string, req SubscribeRequest, pa
 	return &subscription, nil
 }
 
-func (s SubscriptionService) createSubscriptionWithTx(tx *gorm.DB, userGuid string, plan *domains.SubscriptionPlan, paymentGuid string, remark string) (*domains.UserSubscription, error) {
+func (s *SubscriptionService) createSubscriptionWithTx(tx *gorm.DB, userGuid string, plan *domains.SubscriptionPlan, paymentGuid string, remark string) (*domains.UserSubscription, error) {
 	now := time.Now().Unix()
 	subscription := domains.UserSubscription{
 		UserGuid:    userGuid,

@@ -6,7 +6,7 @@ type RiskControlSettings struct {
 	MaxBodyBytes                int64  `json:"maxBodyBytes"`
 	ModelRateLimitCount         int64  `json:"modelRateLimitCount"`
 	ModelRateLimitWindowSeconds int64  `json:"modelRateLimitWindowSeconds"`
-	ChannelAffinitySeconds      int64  `json:"channelAffinitySeconds"`
+	ProviderAffinitySeconds     int64  `json:"providerAffinitySeconds"`
 	SSRFCheckEnabled            bool   `json:"ssrfCheckEnabled"`
 	SensitiveWords              string `json:"sensitiveWords"`
 }
@@ -22,7 +22,7 @@ func (s RiskControlService) Get() RiskControlSettings {
 		MaxBodyBytes:                OptionServiceApp.Int64("relay.max_body_bytes", defaultRiskMaxBodyBytes),
 		ModelRateLimitCount:         OptionServiceApp.Int64("relay.model_rate_limit_count", 0),
 		ModelRateLimitWindowSeconds: OptionServiceApp.Int64("relay.model_rate_limit_window_seconds", 60),
-		ChannelAffinitySeconds:      OptionServiceApp.Int64("relay.channel_affinity_seconds", 0),
+		ProviderAffinitySeconds:     OptionServiceApp.Int64("relay.provider_affinity_seconds", 0),
 		SSRFCheckEnabled:            OptionServiceApp.Int64("relay.ssrf_check_enabled", 1) > 0,
 		SensitiveWords:              OptionServiceApp.Get("relay.sensitive_words", ""),
 	}
@@ -35,7 +35,7 @@ func (s RiskControlService) Set(settings RiskControlSettings) error {
 		"relay.max_body_bytes":                  strconv.FormatInt(settings.MaxBodyBytes, 10),
 		"relay.model_rate_limit_count":          strconv.FormatInt(settings.ModelRateLimitCount, 10),
 		"relay.model_rate_limit_window_seconds": strconv.FormatInt(settings.ModelRateLimitWindowSeconds, 10),
-		"relay.channel_affinity_seconds":        strconv.FormatInt(settings.ChannelAffinitySeconds, 10),
+		"relay.provider_affinity_seconds":       strconv.FormatInt(settings.ProviderAffinitySeconds, 10),
 		"relay.sensitive_words":                 settings.SensitiveWords,
 	}
 	if settings.SSRFCheckEnabled {

@@ -21,7 +21,7 @@ func (s *TaskService) WithDB(db *gorm.DB) *TaskService {
 	return &cloned
 }
 
-func (s TaskService) Create(task *domains.Task) error {
+func (s *TaskService) Create(task *domains.Task) error {
 	if task.TaskID == "" {
 		id, err := randomHex(12)
 		if err != nil {
@@ -38,7 +38,7 @@ func (s TaskService) Create(task *domains.Task) error {
 	return createWithCrud(&s.CrudService, task)
 }
 
-func (s TaskService) Update(task *domains.Task, userGuid string) error {
+func (s *TaskService) Update(task *domains.Task, userGuid string) error {
 	if task.TaskID == "" {
 		return errors.New("task id is required")
 	}
@@ -49,7 +49,7 @@ func (s TaskService) Update(task *domains.Task, userGuid string) error {
 	updates := map[string]any{
 		"platform":     task.Platform,
 		"group_name":   task.Group,
-		"channel_guid": task.ChannelGuid,
+		"channel_guid": task.ProviderGuid,
 		"model_name":   task.ModelName,
 		"quota":        task.Quota,
 		"action":       task.Action,
@@ -62,7 +62,7 @@ func (s TaskService) Update(task *domains.Task, userGuid string) error {
 	return db.Updates(updates).Error
 }
 
-func (s TaskService) Delete(taskID string, userGuid string) error {
+func (s *TaskService) Delete(taskID string, userGuid string) error {
 	if taskID == "" {
 		return errors.New("task id is required")
 	}
@@ -73,7 +73,7 @@ func (s TaskService) Delete(taskID string, userGuid string) error {
 	return db.Delete(&domains.Task{}).Error
 }
 
-func (s TaskService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *TaskService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var tasks []domains.Task
 	var total int64
@@ -93,7 +93,7 @@ func (s TaskService) List(userGuid string, query dto.PageQuery) (dto.PageResult,
 	return dto.PageResult{List: tasks, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s TaskService) Get(taskID string, userGuid string) (*domains.Task, error) {
+func (s *TaskService) Get(taskID string, userGuid string) (*domains.Task, error) {
 	var task domains.Task
 	db := s.DB().Where("task_id = ?", taskID)
 	if userGuid != "" {

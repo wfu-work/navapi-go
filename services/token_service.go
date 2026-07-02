@@ -42,7 +42,7 @@ type TokenUsage struct {
 	CompletionTokens int64  `json:"completionTokens"`
 }
 
-func (s TokenService) Create(token *domains.ApiToken) error {
+func (s *TokenService) Create(token *domains.ApiToken) error {
 	key, err := randomHex(24)
 	if err != nil {
 		return err
@@ -68,7 +68,7 @@ func (s TokenService) Create(token *domains.ApiToken) error {
 	})
 }
 
-func (s TokenService) Update(token *domains.ApiToken) error {
+func (s *TokenService) Update(token *domains.ApiToken) error {
 	if token.Group == "" {
 		token.Group = constants.DefaultGroup
 	}
@@ -91,7 +91,7 @@ func (s TokenService) Update(token *domains.ApiToken) error {
 	return nil
 }
 
-func (s TokenService) Delete(id uint, userGuid string) error {
+func (s *TokenService) Delete(id uint, userGuid string) error {
 	token, err := s.GetByID(id, userGuid)
 	if err != nil {
 		return err
@@ -99,7 +99,7 @@ func (s TokenService) Delete(id uint, userGuid string) error {
 	return s.DeleteByGuid(token.Guid)
 }
 
-func (s TokenService) GetByID(id uint, userGuid string) (*domains.ApiToken, error) {
+func (s *TokenService) GetByID(id uint, userGuid string) (*domains.ApiToken, error) {
 	if id == 0 {
 		return nil, errors.New("id is required")
 	}
@@ -116,7 +116,7 @@ func (s TokenService) GetByID(id uint, userGuid string) (*domains.ApiToken, erro
 	return token, nil
 }
 
-func (s TokenService) List(userGuid string) ([]domains.ApiToken, error) {
+func (s *TokenService) List(userGuid string) ([]domains.ApiToken, error) {
 	var tokens []domains.ApiToken
 	db := s.DB().Order("id desc")
 	if userGuid != "" {
@@ -126,7 +126,7 @@ func (s TokenService) List(userGuid string) ([]domains.ApiToken, error) {
 	return tokens, err
 }
 
-func (s TokenService) Validate(key string, clientIP string) (*domains.ApiToken, error) {
+func (s *TokenService) Validate(key string, clientIP string) (*domains.ApiToken, error) {
 	key = strings.TrimSpace(strings.TrimPrefix(key, "Bearer "))
 	if key == "" {
 		return nil, errors.New("token is required")
@@ -153,7 +153,7 @@ func (s TokenService) Validate(key string, clientIP string) (*domains.ApiToken, 
 	return &token, nil
 }
 
-func (s TokenService) CheckModel(token *domains.ApiToken, modelName string) error {
+func (s *TokenService) CheckModel(token *domains.ApiToken, modelName string) error {
 	if token == nil {
 		return errors.New("token is required")
 	}
@@ -166,7 +166,7 @@ func (s TokenService) CheckModel(token *domains.ApiToken, modelName string) erro
 	return errors.New("model is not allowed by token")
 }
 
-func (s TokenService) Consume(tx *gorm.DB, id uint, quota int64) error {
+func (s *TokenService) Consume(tx *gorm.DB, id uint, quota int64) error {
 	if quota <= 0 {
 		return nil
 	}
@@ -189,7 +189,7 @@ func (s TokenService) Consume(tx *gorm.DB, id uint, quota int64) error {
 // Refund reverses a previous quota reservation/charge. It is intentionally
 // bounded at zero for used_quota so repeated cleanup cannot drive counters
 // negative after retries or client disconnects.
-func (s TokenService) Refund(tx *gorm.DB, id uint, quota int64) error {
+func (s *TokenService) Refund(tx *gorm.DB, id uint, quota int64) error {
 	if quota <= 0 {
 		return nil
 	}
@@ -206,7 +206,7 @@ func (s TokenService) Refund(tx *gorm.DB, id uint, quota int64) error {
 	return tx.Model(&domains.ApiToken{}).Where("id = ?", id).Updates(updates).Error
 }
 
-func (s TokenService) AddQuota(tx *gorm.DB, id uint, userGuid string, quota int64) error {
+func (s *TokenService) AddQuota(tx *gorm.DB, id uint, userGuid string, quota int64) error {
 	if quota <= 0 {
 		return errors.New("quota must be greater than zero")
 	}
@@ -225,7 +225,7 @@ func (s TokenService) AddQuota(tx *gorm.DB, id uint, userGuid string, quota int6
 		UpdateColumn("remain_quota", gorm.Expr("remain_quota + ?", quota)).Error
 }
 
-func (s TokenService) Usage(userGuid string) ([]TokenUsage, error) {
+func (s *TokenService) Usage(userGuid string) ([]TokenUsage, error) {
 	tokens, err := s.List(userGuid)
 	if err != nil {
 		return nil, err
@@ -279,7 +279,7 @@ func (s TokenService) Usage(userGuid string) ([]TokenUsage, error) {
 	return out, nil
 }
 
-func (s TokenService) Mask(key string) string {
+func (s *TokenService) Mask(key string) string {
 	if key == "" {
 		return ""
 	}

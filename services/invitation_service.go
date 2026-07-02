@@ -43,7 +43,7 @@ type AcceptInviteRequest struct {
 	TokenID uint   `json:"tokenId"`
 }
 
-func (s InvitationService) Settings() InviteSettings {
+func (s *InvitationService) Settings() InviteSettings {
 	return InviteSettings{
 		Enabled:            OptionServiceApp.Int64("invite.enabled", 1) > 0,
 		RequireInvite:      OptionServiceApp.Int64("register.require_invite", 0) > 0,
@@ -54,7 +54,7 @@ func (s InvitationService) Settings() InviteSettings {
 	}
 }
 
-func (s InvitationService) SetSettings(settings InviteSettings) error {
+func (s *InvitationService) SetSettings(settings InviteSettings) error {
 	values := map[string]string{
 		"invite.reward_quota":         fmt.Sprint(settings.RewardQuota),
 		"invite.invitee_reward_quota": fmt.Sprint(settings.InviteeRewardQuota),
@@ -79,7 +79,7 @@ func (s InvitationService) SetSettings(settings InviteSettings) error {
 	return nil
 }
 
-func (s InvitationService) ListCodes(ownerUserGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *InvitationService) ListCodes(ownerUserGuid string, query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var codes []domains.InvitationCode
 	var total int64
@@ -99,7 +99,7 @@ func (s InvitationService) ListCodes(ownerUserGuid string, query dto.PageQuery) 
 	return dto.PageResult{List: codes, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s InvitationService) ListRelations(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *InvitationService) ListRelations(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var relations []domains.InvitationRelation
 	var total int64
@@ -119,7 +119,7 @@ func (s InvitationService) ListRelations(userGuid string, query dto.PageQuery) (
 	return dto.PageResult{List: relations, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s InvitationService) SaveCode(code *domains.InvitationCode) error {
+func (s *InvitationService) SaveCode(code *domains.InvitationCode) error {
 	if strings.TrimSpace(code.OwnerUserGuid) == "" {
 		return errors.New("owner user guid is required")
 	}
@@ -165,7 +165,7 @@ func (s InvitationService) SaveCode(code *domains.InvitationCode) error {
 	return nil
 }
 
-func (s InvitationService) GetCode(id uint) (*domains.InvitationCode, error) {
+func (s *InvitationService) GetCode(id uint) (*domains.InvitationCode, error) {
 	if id == 0 {
 		return nil, errors.New("id is required")
 	}
@@ -179,7 +179,7 @@ func (s InvitationService) GetCode(id uint) (*domains.InvitationCode, error) {
 	return code, nil
 }
 
-func (s InvitationService) EnsureSelfCode(userGuid string) (*domains.InvitationCode, error) {
+func (s *InvitationService) EnsureSelfCode(userGuid string) (*domains.InvitationCode, error) {
 	if userGuid == "" {
 		return nil, errors.New("user is required")
 	}
@@ -200,13 +200,13 @@ func (s InvitationService) EnsureSelfCode(userGuid string) (*domains.InvitationC
 	return &code, nil
 }
 
-func (s InvitationService) DeleteCode(id uint) error {
+func (s *InvitationService) DeleteCode(id uint) error {
 	return deleteByIDWithCrud(&s.CodeCrud, id, "invitation code not found")
 }
 
 // AcceptInvite binds the current user to an inviter exactly once and grants both
 // sides their configured quota rewards in the same transaction.
-func (s InvitationService) AcceptInvite(userGuid string, req AcceptInviteRequest) (*domains.InvitationRelation, error) {
+func (s *InvitationService) AcceptInvite(userGuid string, req AcceptInviteRequest) (*domains.InvitationRelation, error) {
 	if userGuid == "" {
 		return nil, errors.New("user is required")
 	}
@@ -279,7 +279,7 @@ func (s InvitationService) AcceptInvite(userGuid string, req AcceptInviteRequest
 	return &relation, nil
 }
 
-func (s InvitationService) Stats(userGuid string) (map[string]any, error) {
+func (s *InvitationService) Stats(userGuid string) (map[string]any, error) {
 	result := map[string]any{}
 	codeDB := s.CodeCrud.DB().Model(&domains.InvitationCode{})
 	relDB := s.RelationCrud.DB().Model(&domains.InvitationRelation{})
@@ -308,7 +308,7 @@ func (s InvitationService) Stats(userGuid string) (map[string]any, error) {
 	return result, nil
 }
 
-func (s InvitationService) newCode() (string, error) {
+func (s *InvitationService) newCode() (string, error) {
 	raw, err := randomHex(6)
 	if err != nil {
 		return "", err

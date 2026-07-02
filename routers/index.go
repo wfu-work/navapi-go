@@ -9,7 +9,6 @@ import (
 var RouterGroupApp = new(RouterGroup)
 
 type RouterGroup struct {
-	ChannelRouter
 	TokenRouter
 	LogRouter
 	ModelRouter
@@ -28,7 +27,6 @@ type RouterGroup struct {
 }
 
 var (
-	channelApi      = apis.ApiGroupApp.ChannelApi
 	tokenApi        = apis.ApiGroupApp.TokenApi
 	logApi          = apis.ApiGroupApp.UsageLogApi
 	modelApi        = apis.ApiGroupApp.ModelApi
@@ -46,8 +44,7 @@ var (
 	checkinApi      = apis.ApiGroupApp.CheckinApi
 )
 
-func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gin.RouterGroup, engine *gin.Engine) {
-	r.InitChannelRouter(privateGroup)
+func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gin.RouterGroup) {
 	r.InitTokenRouter(privateGroup)
 	r.InitLogRouter(privateGroup)
 	r.InitModelRouter(privateGroup, publicGroup)

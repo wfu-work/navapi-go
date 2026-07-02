@@ -32,7 +32,7 @@ type AnnouncementQuery struct {
 	Popup  *bool  `form:"popup" json:"popup"`
 }
 
-func (s AnnouncementService) List(query AnnouncementQuery, activeOnly bool) (dto.PageResult, error) {
+func (s *AnnouncementService) List(query AnnouncementQuery, activeOnly bool) (dto.PageResult, error) {
 	query.PageQuery.Normalize()
 	var announcements []domains.Announcement
 	var total int64
@@ -66,7 +66,7 @@ func (s AnnouncementService) List(query AnnouncementQuery, activeOnly bool) (dto
 	return dto.PageResult{List: announcements, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s AnnouncementService) Latest(limit int) ([]domains.Announcement, error) {
+func (s *AnnouncementService) Latest(limit int) ([]domains.Announcement, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -86,7 +86,7 @@ func (s AnnouncementService) Latest(limit int) ([]domains.Announcement, error) {
 	return announcements, err
 }
 
-func (s AnnouncementService) GetByID(id uint) (*domains.Announcement, error) {
+func (s *AnnouncementService) GetByID(id uint) (*domains.Announcement, error) {
 	if id == 0 {
 		return nil, errors.New("id is required")
 	}
@@ -102,7 +102,7 @@ func (s AnnouncementService) GetByID(id uint) (*domains.Announcement, error) {
 
 // Save normalizes defaults so callers can create simple notices with only a
 // title/content while still supporting timed popup announcements.
-func (s AnnouncementService) Save(announcement *domains.Announcement) error {
+func (s *AnnouncementService) Save(announcement *domains.Announcement) error {
 	if err := s.normalize(announcement); err != nil {
 		return err
 	}
@@ -128,11 +128,11 @@ func (s AnnouncementService) Save(announcement *domains.Announcement) error {
 	return nil
 }
 
-func (s AnnouncementService) Delete(id uint) error {
+func (s *AnnouncementService) Delete(id uint) error {
 	return deleteByIDWithCrud(&s.CrudService, id, "announcement not found")
 }
 
-func (s AnnouncementService) normalize(announcement *domains.Announcement) error {
+func (s *AnnouncementService) normalize(announcement *domains.Announcement) error {
 	announcement.Title = strings.TrimSpace(announcement.Title)
 	announcement.Content = strings.TrimSpace(announcement.Content)
 	announcement.Level = strings.TrimSpace(announcement.Level)

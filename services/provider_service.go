@@ -1,8 +1,15 @@
 package services
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"navapi-go/constants"
 	"navapi-go/domains"
@@ -18,22 +25,61 @@ type ProviderService struct {
 
 var ProviderServiceApp = new(ProviderService)
 
+const (
+	balanceTemplateGeneric = "generic"
+	balanceTemplateNewAPI  = "newapi"
+	balanceTemplateCustom  = "custom"
+
+	balanceAuthProviderBearer = "provider_bearer"
+)
+
+type ProviderRecord struct {
+	domains.VendorMeta
+	HasKey bool `json:"hasKey"`
+}
+
+type ProviderListQuery struct {
+	dto.PageQuery
+	Type      string `form:"type" json:"type"`
+	Status    string `form:"status" json:"status"`
+	KeyStatus string `form:"keyStatus" json:"keyStatus"`
+}
+
+type providerAffinityEntry struct {
+	ProviderGuid string
+	ExpiresAt    time.Time
+}
+
+type ProviderTestResult struct {
+	OK           bool     `json:"ok"`
+	ResponseTime int64    `json:"responseTime"`
+	Models       []string `json:"models,omitempty"`
+}
+
+var providerKeyRotation = struct {
+	sync.Mutex
+	next map[string]int
+}{next: map[string]int{}}
+
+var providerAffinity = struct {
+	sync.Mutex
+	entries map[string]providerAffinityEntry
+}{entries: map[string]providerAffinityEntry{}}
+
 func (s *ProviderService) WithDB(db *gorm.DB) *ProviderService {
 	cloned := *s
 	cloned.CrudService = *s.CrudService.WithDB(db)
 	return &cloned
 }
 
-type ProviderChannelRequest struct {
-	Name     string `json:"name"`
-	Group    string `json:"group"`
-	Tags     string `json:"tags"`
-	Weight   int    `json:"weight"`
-	Priority int    `json:"priority"`
-	Key      string `json:"key"`
+func ProviderRecordFromDomain(provider domains.VendorMeta) ProviderRecord {
+	return ProviderRecord{
+		VendorMeta: provider,
+		HasKey:     strings.TrimSpace(provider.Key) != "",
+	}
 }
 
-func (s ProviderService) List(query dto.PageQuery) (dto.PageResult, error) {
+func (s *ProviderService) List(query ProviderListQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var providers []domains.VendorMeta
 	var total int64
@@ -45,16 +91,36 @@ func (s ProviderService) List(query dto.PageQuery) (dto.PageResult, error) {
 	if query.Q != "" {
 		db = db.Where("vendor_name LIKE ? OR display_name LIKE ? OR type LIKE ? OR base_url LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
+	providerType := strings.TrimSpace(query.Type)
+	if providerType != "" {
+		db = db.Where("type = ?", providerType)
+	}
+	switch strings.TrimSpace(query.Status) {
+	case "enabled":
+		db = db.Where("enabled = ?", true)
+	case "disabled":
+		db = db.Where("enabled = ?", false)
+	}
+	switch strings.TrimSpace(query.KeyStatus) {
+	case "set":
+		db = db.Where("TRIM(COALESCE(`key`, '')) <> ''")
+	case "missing":
+		db = db.Where("TRIM(COALESCE(`key`, '')) = ''")
+	}
 	if err := db.Count(&total).Error; err != nil {
 		return dto.PageResult{}, err
 	}
 	if err := db.Order("sort desc, id desc").Offset(query.Offset()).Limit(query.Size).Find(&providers).Error; err != nil {
 		return dto.PageResult{}, err
 	}
-	return dto.PageResult{List: providers, Total: total, Page: query.Page, Size: query.Size}, nil
+	records := make([]ProviderRecord, 0, len(providers))
+	for _, provider := range providers {
+		records = append(records, ProviderRecordFromDomain(provider))
+	}
+	return dto.PageResult{List: records, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s ProviderService) GetByID(id uint) (*domains.VendorMeta, error) {
+func (s *ProviderService) GetByID(id uint) (*domains.VendorMeta, error) {
 	if id == 0 {
 		return nil, errors.New("id is required")
 	}
@@ -68,17 +134,48 @@ func (s ProviderService) GetByID(id uint) (*domains.VendorMeta, error) {
 	return provider, nil
 }
 
+func (s *ProviderService) GetByGUID(guid string) (*domains.VendorMeta, error) {
+	guid = strings.TrimSpace(guid)
+	if guid == "" {
+		return nil, errors.New("guid is required")
+	}
+	provider, err := s.GetByGuid(guid)
+	if err != nil {
+		return nil, err
+	}
+	if provider == nil {
+		return nil, errors.New("provider not found")
+	}
+	return provider, nil
+}
+
 // Save normalizes provider defaults and validates JSON override fields before
-// storing the upstream template used to create channels.
-func (s ProviderService) Save(provider *domains.VendorMeta) error {
+// storing the upstream configuration used by relay routing.
+func (s *ProviderService) Save(provider *domains.VendorMeta) error {
+	requestedEnabled := provider.Enabled
+	provider.VendorName = strings.TrimSpace(provider.VendorName)
+	provider.DisplayName = strings.TrimSpace(provider.DisplayName)
+	provider.Type = strings.TrimSpace(provider.Type)
+	provider.LogoURL = strings.TrimSpace(provider.LogoURL)
+	provider.BaseURL = strings.TrimSpace(provider.BaseURL)
+	provider.Models = strings.Join(splitCSV(provider.Models), ",")
+	provider.ModelOverride = strings.TrimSpace(provider.ModelOverride)
+	provider.QuotaModelWhitelist = strings.Join(splitCSV(provider.QuotaModelWhitelist), ",")
+	provider.ModelMapping = strings.TrimSpace(provider.ModelMapping)
+	provider.HeaderOverride = strings.TrimSpace(provider.HeaderOverride)
+	provider.ParamOverride = strings.TrimSpace(provider.ParamOverride)
+	normalizeProviderBalanceConfig(provider)
+	provider.Website = strings.TrimSpace(provider.Website)
+	provider.Remark = strings.TrimSpace(provider.Remark)
+	provider.Key = strings.TrimSpace(provider.Key)
 	if strings.TrimSpace(provider.VendorName) == "" {
 		return errors.New("provider name is required")
 	}
 	if strings.TrimSpace(provider.Type) == "" {
-		provider.Type = constants.ChannelTypeOpenAI
+		provider.Type = constants.ProviderTypeOpenAI
 	}
-	if provider.Id == 0 && !provider.Enabled {
-		provider.Enabled = true
+	if provider.DisplayName == "" {
+		provider.DisplayName = provider.VendorName
 	}
 	if err := validateOptionalJSONObject(provider.ModelMapping, "modelMapping"); err != nil {
 		return err
@@ -89,31 +186,59 @@ func (s ProviderService) Save(provider *domains.VendorMeta) error {
 	if err := validateOptionalJSONObject(provider.ParamOverride, "paramOverride"); err != nil {
 		return err
 	}
-	if provider.Id == 0 {
-		return createWithCrud(&s.CrudService, provider)
+	var existing *domains.VendorMeta
+	var err error
+	if provider.Guid != "" {
+		existing, err = s.GetByGUID(provider.Guid)
+	} else if provider.Id != 0 {
+		existing, err = s.GetByID(provider.Id)
 	}
-	existing, err := s.GetByID(provider.Id)
 	if err != nil {
 		return err
+	}
+	if existing == nil {
+		if err := createWithCrud(&s.CrudService, provider); err != nil {
+			return err
+		}
+		return s.setEnabled(provider, requestedEnabled)
 	}
 	provider.Guid = existing.Guid
 	provider.CreateTime = existing.CreateTime
 	provider.Creater = existing.Creater
+	if provider.Key == "" {
+		provider.Key = existing.Key
+	}
 	updating := *provider
 	updating.Id = 0
 	if err := createWithCrud(&s.CrudService, &updating); err != nil {
 		return err
 	}
 	*provider = updating
+	return s.setEnabled(provider, requestedEnabled)
+}
+
+func (s *ProviderService) setEnabled(provider *domains.VendorMeta, enabled bool) error {
+	db := s.DB()
+	if db == nil {
+		return errors.New("database is not initialized")
+	}
+	if err := db.Model(&domains.VendorMeta{}).Where("guid = ?", provider.Guid).Update("enabled", enabled).Error; err != nil {
+		return err
+	}
+	provider.Enabled = enabled
 	return nil
 }
 
-func (s ProviderService) Delete(id uint) error {
-	return deleteByIDWithCrud(&s.CrudService, id, "provider not found")
+func (s *ProviderService) Delete(guid string) error {
+	provider, err := s.GetByGUID(guid)
+	if err != nil {
+		return err
+	}
+	return s.DeleteByGuid(provider.Guid)
 }
 
-func (s ProviderService) GetKey(id uint) (string, error) {
-	provider, err := s.GetByID(id)
+func (s *ProviderService) GetKey(guid string) (string, error) {
+	provider, err := s.GetByGUID(guid)
 	if err != nil {
 		return "", err
 	}
@@ -123,57 +248,270 @@ func (s ProviderService) GetKey(id uint) (string, error) {
 	return provider.Key, nil
 }
 
-func (s ProviderService) SetKey(id uint, key string) error {
-	if strings.TrimSpace(key) == "" {
+func (s *ProviderService) SetKey(guid string, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
 		return errors.New("provider key is required")
 	}
-	provider, err := s.GetByID(id)
+	provider, err := s.GetByGUID(guid)
 	if err != nil {
 		return err
 	}
 	return s.Update(*provider, "key", key)
 }
 
-// CreateChannel materializes a provider template into a runnable relay channel.
-// The caller can override the runtime key without changing the provider default.
-func (s ProviderService) CreateChannel(id uint, req ProviderChannelRequest) (*domains.Channel, error) {
-	provider, err := s.GetByID(id)
+func normalizeProviderBalanceConfig(provider *domains.VendorMeta) {
+	provider.BalanceTemplate = normalizeBalanceTemplate(provider.BalanceTemplate)
+	provider.BalanceBaseURL = strings.TrimSpace(provider.BalanceBaseURL)
+	provider.BalanceAccessToken = strings.TrimSpace(provider.BalanceAccessToken)
+	provider.BalanceUserID = strings.TrimSpace(provider.BalanceUserID)
+	provider.BalanceCustomPath = defaultString(provider.BalanceCustomPath, "/v1/usage")
+	provider.BalanceAuthType = defaultString(provider.BalanceAuthType, balanceAuthProviderBearer)
+	provider.BalanceRemainingPath = defaultString(provider.BalanceRemainingPath, "remaining")
+	if provider.BalanceMultiplier <= 0 {
+		provider.BalanceMultiplier = 1
+	}
+	provider.BalanceUnit = defaultString(provider.BalanceUnit, "USD")
+	provider.BalanceTotalPath = strings.TrimSpace(provider.BalanceTotalPath)
+	provider.BalanceUsedPath = strings.TrimSpace(provider.BalanceUsedPath)
+	provider.BalancePlanPath = strings.TrimSpace(provider.BalancePlanPath)
+	provider.BalanceValidPath = strings.TrimSpace(provider.BalanceValidPath)
+	provider.BalanceErrorPath = strings.TrimSpace(provider.BalanceErrorPath)
+}
+
+func (s *ProviderService) ListEnabledModels() ([]string, error) {
+	providers, err := s.enabledProviders("")
 	if err != nil {
 		return nil, err
 	}
-	key := provider.Key
-	if strings.TrimSpace(req.Key) != "" {
-		key = req.Key
+	modelSet := map[string]struct{}{}
+	for _, provider := range providers {
+		for _, model := range splitCSV(provider.Models) {
+			modelSet[model] = struct{}{}
+		}
 	}
-	if strings.TrimSpace(key) == "" {
-		return nil, errors.New("channel key is required")
+	out := make([]string, 0, len(modelSet))
+	for model := range modelSet {
+		out = append(out, model)
 	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		name = provider.DisplayName
-	}
-	if name == "" {
-		name = provider.VendorName
-	}
-	channel := &domains.Channel{
-		Name:           name,
-		Type:           provider.Type,
-		Status:         constants.StatusEnabled,
-		Key:            key,
-		BaseURL:        provider.BaseURL,
-		Models:         provider.Models,
-		Group:          normalizeGroup(req.Group),
-		Tags:           req.Tags,
-		Weight:         req.Weight,
-		Priority:       req.Priority,
-		ModelMapping:   provider.ModelMapping,
-		HeaderOverride: provider.HeaderOverride,
-		ParamOverride:  provider.ParamOverride,
-		Remark:         provider.Remark,
-	}
-	if err := ChannelServiceApp.Create(channel); err != nil {
+	sort.Strings(out)
+	return out, nil
+}
+
+func (s *ProviderService) FindCandidatesForModelAndType(modelName, group string, providerType string) ([]domains.VendorMeta, error) {
+	_ = group
+	providers, err := s.enabledProviders(providerType)
+	if err != nil {
 		return nil, err
 	}
-	channel.Key = ""
-	return channel, nil
+	candidates := make([]domains.VendorMeta, 0, len(providers))
+	for _, provider := range providers {
+		if len(splitCSV(provider.Models)) > 0 && !containsString(splitCSV(provider.Models), modelName) {
+			continue
+		}
+		candidates = append(candidates, provider)
+	}
+	if len(candidates) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return candidates, nil
+}
+
+func (s *ProviderService) ApplyAffinity(tokenGuid string, modelName string, candidates []domains.VendorMeta) []domains.VendorMeta {
+	ttl := OptionServiceApp.Int64("relay.provider_affinity_seconds", 0)
+	if ttl <= 0 || tokenGuid == "" || modelName == "" || len(candidates) <= 1 {
+		return candidates
+	}
+	key := tokenGuid + ":" + modelName
+	providerAffinity.Lock()
+	entry, ok := providerAffinity.entries[key]
+	if !ok || time.Now().After(entry.ExpiresAt) {
+		delete(providerAffinity.entries, key)
+		providerAffinity.Unlock()
+		return candidates
+	}
+	providerAffinity.Unlock()
+	for i, candidate := range candidates {
+		if candidate.Guid != entry.ProviderGuid {
+			continue
+		}
+		out := make([]domains.VendorMeta, 0, len(candidates))
+		out = append(out, candidate)
+		out = append(out, candidates[:i]...)
+		out = append(out, candidates[i+1:]...)
+		return out
+	}
+	return candidates
+}
+
+func (s *ProviderService) RememberAffinity(tokenGuid string, modelName string, providerGuid string) {
+	ttl := OptionServiceApp.Int64("relay.provider_affinity_seconds", 0)
+	if ttl <= 0 || tokenGuid == "" || modelName == "" || providerGuid == "" {
+		return
+	}
+	key := tokenGuid + ":" + modelName
+	providerAffinity.Lock()
+	providerAffinity.entries[key] = providerAffinityEntry{
+		ProviderGuid: providerGuid,
+		ExpiresAt:    time.Now().Add(time.Duration(ttl) * time.Second),
+	}
+	providerAffinity.Unlock()
+}
+
+func (s *ProviderService) MapModel(provider *domains.VendorMeta, modelName string) string {
+	if provider != nil {
+		if override := strings.TrimSpace(provider.ModelOverride); override != "" {
+			return override
+		}
+	}
+	if provider == nil || strings.TrimSpace(provider.ModelMapping) == "" || strings.TrimSpace(modelName) == "" {
+		return modelName
+	}
+	mapping := map[string]string{}
+	if err := json.Unmarshal([]byte(provider.ModelMapping), &mapping); err != nil {
+		return modelName
+	}
+	if mapped := strings.TrimSpace(mapping[modelName]); mapped != "" {
+		return mapped
+	}
+	return modelName
+}
+
+func (s *ProviderService) AutoDisable(guid string, reason string) error {
+	guid = strings.TrimSpace(guid)
+	if guid == "" {
+		return nil
+	}
+	if len(reason) > 255 {
+		reason = reason[:255]
+	}
+	return s.DB().Model(&domains.VendorMeta{}).Where("guid = ?", guid).
+		Updates(map[string]any{"enabled": false, "remark": reason}).Error
+}
+
+func (s *ProviderService) Test(guid string) (*ProviderTestResult, error) {
+	provider, err := s.GetByGUID(guid)
+	if err != nil {
+		return nil, err
+	}
+	start := time.Now()
+	models, err := s.fetchModels(provider)
+	responseTime := time.Since(start).Milliseconds()
+	if err != nil {
+		return nil, err
+	}
+	return &ProviderTestResult{OK: true, ResponseTime: responseTime, Models: models}, nil
+}
+
+func (s *ProviderService) FetchModels(guid string, update bool) ([]string, error) {
+	provider, err := s.GetByGUID(guid)
+	if err != nil {
+		return nil, err
+	}
+	models, err := s.fetchModels(provider)
+	if err != nil {
+		return nil, err
+	}
+	models = uniqueSorted(models)
+	if update {
+		if err := s.DB().Model(&domains.VendorMeta{}).Where("guid = ?", provider.Guid).
+			Update("models", strings.Join(models, ",")).Error; err != nil {
+			return nil, err
+		}
+	}
+	return models, nil
+}
+
+func (s *ProviderService) NextKey(provider *domains.VendorMeta) string {
+	if provider == nil {
+		return ""
+	}
+	keys := splitCSV(provider.Key)
+	if len(keys) == 0 {
+		return ""
+	}
+	if len(keys) == 1 {
+		return keys[0]
+	}
+	rotationKey := provider.Guid
+	if rotationKey == "" {
+		rotationKey = provider.VendorName
+	}
+	providerKeyRotation.Lock()
+	defer providerKeyRotation.Unlock()
+	idx := providerKeyRotation.next[rotationKey] % len(keys)
+	providerKeyRotation.next[rotationKey] = idx + 1
+	return keys[idx]
+}
+
+func (s *ProviderService) enabledProviders(providerType string) ([]domains.VendorMeta, error) {
+	var providers []domains.VendorMeta
+	db := s.DB().Where("enabled = ? AND TRIM(COALESCE(`key`, '')) <> ''", true)
+	if strings.TrimSpace(providerType) != "" {
+		db = db.Where("type = ?", strings.TrimSpace(providerType))
+	}
+	err := db.Order("sort desc, id desc").Find(&providers).Error
+	return providers, err
+}
+
+func (s *ProviderService) fetchModels(provider *domains.VendorMeta) ([]string, error) {
+	if provider == nil {
+		return nil, errors.New("provider is required")
+	}
+	path := "/v1/models"
+	switch provider.Type {
+	case constants.ProviderTypeAnthropic:
+		path = "/v1/models"
+	case constants.ProviderTypeGemini:
+		path = "/v1beta/models"
+	}
+	targetURL := strings.TrimRight(provider.BaseURL, "/")
+	if targetURL == "" {
+		targetURL = defaultBaseURL(provider.Type)
+	}
+	targetURL += path
+	if provider.Type == constants.ProviderTypeGemini {
+		targetURL = attachGeminiKey(targetURL, provider.Key, "")
+	}
+	req, err := http.NewRequest(http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	setupAuthHeaders(req.Header, provider)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		if len(body) > 500 {
+			body = body[:500]
+		}
+		return nil, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(body))
+	}
+	return parseModelIDs(provider.Type, body), nil
+}
+
+func normalizeBalanceTemplate(template string) string {
+	switch strings.ToLower(strings.TrimSpace(template)) {
+	case balanceTemplateNewAPI:
+		return balanceTemplateNewAPI
+	case balanceTemplateCustom:
+		return balanceTemplateCustom
+	default:
+		return balanceTemplateGeneric
+	}
+}
+
+func defaultString(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
 }

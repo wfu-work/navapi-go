@@ -23,7 +23,7 @@ func (s *UserQuotaService) WithDB(db *gorm.DB) *UserQuotaService {
 	return &cloned
 }
 
-func (s UserQuotaService) Ensure(tx *gorm.DB, userGuid string) error {
+func (s *UserQuotaService) Ensure(tx *gorm.DB, userGuid string) error {
 	if userGuid == "" {
 		return nil
 	}
@@ -42,7 +42,7 @@ func (s UserQuotaService) Ensure(tx *gorm.DB, userGuid string) error {
 	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error
 }
 
-func (s UserQuotaService) Get(userGuid string) (*domains.UserQuota, error) {
+func (s *UserQuotaService) Get(userGuid string) (*domains.UserQuota, error) {
 	if userGuid == "" {
 		return nil, errors.New("user guid is required")
 	}
@@ -67,7 +67,7 @@ func (s UserQuotaService) Get(userGuid string) (*domains.UserQuota, error) {
 	return &accounts[0], nil
 }
 
-func (s UserQuotaService) List(query dto.PageQuery) (dto.PageResult, error) {
+func (s *UserQuotaService) List(query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var accounts []domains.UserQuota
 	var total int64
@@ -84,7 +84,7 @@ func (s UserQuotaService) List(query dto.PageQuery) (dto.PageResult, error) {
 	return dto.PageResult{List: accounts, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s UserQuotaService) Update(account *domains.UserQuota) error {
+func (s *UserQuotaService) Update(account *domains.UserQuota) error {
 	if account.UserGuid == "" {
 		return errors.New("user guid is required")
 	}
@@ -103,7 +103,7 @@ func (s UserQuotaService) Update(account *domains.UserQuota) error {
 	}).Create(account).Error
 }
 
-func (s UserQuotaService) AddQuota(tx *gorm.DB, userGuid string, quota int64) error {
+func (s *UserQuotaService) AddQuota(tx *gorm.DB, userGuid string, quota int64) error {
 	if userGuid == "" || quota <= 0 {
 		return nil
 	}
@@ -120,7 +120,7 @@ func (s UserQuotaService) AddQuota(tx *gorm.DB, userGuid string, quota int64) er
 // Recharge adds quota to the user account and optionally to one API token.
 // Payments and subscriptions both use this path so recharge accounting stays
 // consistent regardless of the source.
-func (s UserQuotaService) Recharge(tx *gorm.DB, userGuid string, tokenID uint, quota int64) error {
+func (s *UserQuotaService) Recharge(tx *gorm.DB, userGuid string, tokenID uint, quota int64) error {
 	if quota <= 0 {
 		return errors.New("quota must be greater than zero")
 	}
@@ -130,7 +130,7 @@ func (s UserQuotaService) Recharge(tx *gorm.DB, userGuid string, tokenID uint, q
 	return s.AddQuota(tx, userGuid, quota)
 }
 
-func (s UserQuotaService) Consume(tx *gorm.DB, userGuid string, quota int64) error {
+func (s *UserQuotaService) Consume(tx *gorm.DB, userGuid string, quota int64) error {
 	if userGuid == "" || quota <= 0 {
 		return nil
 	}
@@ -145,7 +145,7 @@ func (s UserQuotaService) Consume(tx *gorm.DB, userGuid string, quota int64) err
 
 // Refund only rolls back used_quota because user quota currently acts as an
 // aggregate account; token quota is the balance that is actually decremented.
-func (s UserQuotaService) Refund(tx *gorm.DB, userGuid string, quota int64) error {
+func (s *UserQuotaService) Refund(tx *gorm.DB, userGuid string, quota int64) error {
 	if userGuid == "" || quota <= 0 {
 		return nil
 	}
@@ -156,7 +156,7 @@ func (s UserQuotaService) Refund(tx *gorm.DB, userGuid string, quota int64) erro
 		Update("used_quota", gorm.Expr("CASE WHEN used_quota >= ? THEN used_quota - ? ELSE 0 END", quota, quota)).Error
 }
 
-func (s UserQuotaService) CheckGroup(userGuid string, group string) error {
+func (s *UserQuotaService) CheckGroup(userGuid string, group string) error {
 	if userGuid == "" {
 		return nil
 	}

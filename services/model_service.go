@@ -26,8 +26,8 @@ func (s *ModelService) WithDB(db *gorm.DB) *ModelService {
 	return &cloned
 }
 
-func (s ModelService) ListOpenAIModels() (dto.ModelListResponse, error) {
-	models, err := ChannelServiceApp.ListEnabledModels()
+func (s *ModelService) ListOpenAIModels() (dto.ModelListResponse, error) {
+	models, err := ProviderServiceApp.ListEnabledModels()
 	if err != nil {
 		return dto.ModelListResponse{}, err
 	}
@@ -62,7 +62,7 @@ func (s ModelService) ListOpenAIModels() (dto.ModelListResponse, error) {
 	return dto.ModelListResponse{Object: "list", Data: data}, nil
 }
 
-func (s ModelService) UpsertMeta(meta *domains.ModelMeta) error {
+func (s *ModelService) UpsertMeta(meta *domains.ModelMeta) error {
 	if meta.Id == 0 {
 		return createWithCrud(&s.CrudService, meta)
 	}
@@ -85,17 +85,17 @@ func (s ModelService) UpsertMeta(meta *domains.ModelMeta) error {
 	return nil
 }
 
-func (s ModelService) ListMeta() ([]domains.ModelMeta, error) {
+func (s *ModelService) ListMeta() ([]domains.ModelMeta, error) {
 	var metas []domains.ModelMeta
 	err := s.DB().Order("sort desc, id desc").Find(&metas).Error
 	return metas, err
 }
 
-func (s ModelService) DeleteMeta(id uint) error {
+func (s *ModelService) DeleteMeta(id uint) error {
 	return deleteByIDWithCrud(&s.CrudService, id, "model not found")
 }
 
-func (s ModelService) UpsertVendor(meta *domains.VendorMeta) error {
+func (s *ModelService) UpsertVendor(meta *domains.VendorMeta) error {
 	if meta.Id == 0 {
 		return createWithCrud(&s.VendorCrud, meta)
 	}
@@ -118,7 +118,7 @@ func (s ModelService) UpsertVendor(meta *domains.VendorMeta) error {
 	return nil
 }
 
-func (s ModelService) ListVendors(includeDisabled bool) ([]domains.VendorMeta, error) {
+func (s *ModelService) ListVendors(includeDisabled bool) ([]domains.VendorMeta, error) {
 	var vendors []domains.VendorMeta
 	db := s.VendorCrud.DB().Order("sort desc, id desc")
 	if !includeDisabled {
@@ -128,6 +128,6 @@ func (s ModelService) ListVendors(includeDisabled bool) ([]domains.VendorMeta, e
 	return vendors, err
 }
 
-func (s ModelService) DeleteVendor(id uint) error {
+func (s *ModelService) DeleteVendor(id uint) error {
 	return deleteByIDWithCrud(&s.VendorCrud, id, "vendor not found")
 }

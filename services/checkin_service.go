@@ -41,7 +41,7 @@ type CheckinStatus struct {
 	NextReward   int64  `json:"nextReward"`
 }
 
-func (s CheckinService) Settings() CheckinSettings {
+func (s *CheckinService) Settings() CheckinSettings {
 	return CheckinSettings{
 		Enabled:          OptionServiceApp.Int64("checkin.enabled", 1) > 0,
 		DailyQuota:       OptionServiceApp.Int64("checkin.daily_quota", 0),
@@ -50,7 +50,7 @@ func (s CheckinService) Settings() CheckinSettings {
 	}
 }
 
-func (s CheckinService) SetSettings(settings CheckinSettings) error {
+func (s *CheckinService) SetSettings(settings CheckinSettings) error {
 	values := map[string]string{
 		"checkin.daily_quota":        int64ToString(settings.DailyQuota),
 		"checkin.streak_bonus_quota": int64ToString(settings.StreakBonusQuota),
@@ -69,7 +69,7 @@ func (s CheckinService) SetSettings(settings CheckinSettings) error {
 	return nil
 }
 
-func (s CheckinService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *CheckinService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var records []domains.CheckinRecord
 	var total int64
@@ -89,7 +89,7 @@ func (s CheckinService) List(userGuid string, query dto.PageQuery) (dto.PageResu
 	return dto.PageResult{List: records, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s CheckinService) Status(userGuid string) (CheckinStatus, error) {
+func (s *CheckinService) Status(userGuid string) (CheckinStatus, error) {
 	if userGuid == "" {
 		return CheckinStatus{}, errors.New("user is required")
 	}
@@ -118,7 +118,7 @@ func (s CheckinService) Status(userGuid string) (CheckinStatus, error) {
 
 // Checkin creates exactly one record per user/day and grants the configured
 // reward in the same transaction.
-func (s CheckinService) Checkin(userGuid string, req CheckinRequest) (*domains.CheckinRecord, error) {
+func (s *CheckinService) Checkin(userGuid string, req CheckinRequest) (*domains.CheckinRecord, error) {
 	if userGuid == "" {
 		return nil, errors.New("user is required")
 	}
@@ -172,7 +172,7 @@ func (s CheckinService) Checkin(userGuid string, req CheckinRequest) (*domains.C
 	return &created, nil
 }
 
-func (s CheckinService) previousStreak(userGuid string, today string) (int, error) {
+func (s *CheckinService) previousStreak(userGuid string, today string) (int, error) {
 	yesterday, err := dateBefore(today)
 	if err != nil {
 		return 0, err
@@ -188,7 +188,7 @@ func (s CheckinService) previousStreak(userGuid string, today string) (int, erro
 	return record.Streak, nil
 }
 
-func (s CheckinService) calculateReward(streak int) int64 {
+func (s *CheckinService) calculateReward(streak int) int64 {
 	settings := s.Settings()
 	if streak <= 0 {
 		streak = 1

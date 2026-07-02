@@ -8,8 +8,8 @@ type UsageLog struct {
 	Username          string `json:"username" gorm:"column:username;size:100;index;comment:用户名"`
 	TokenGuid         string `json:"tokenGuid" gorm:"column:token_guid;size:100;index;comment:令牌 GUID"`
 	TokenName         string `json:"tokenName" gorm:"column:token_name;size:100;comment:令牌名称"`
-	ChannelGuid       string `json:"channelGuid" gorm:"column:channel_guid;size:100;index;comment:渠道 GUID"`
-	ChannelName       string `json:"channelName" gorm:"column:channel_name;size:100;comment:渠道名称"`
+	ProviderGuid      string `json:"providerGuid" gorm:"column:channel_guid;size:100;index;comment:上游服务商 GUID"`
+	ProviderName      string `json:"providerName" gorm:"column:channel_name;size:100;comment:上游服务商名称"`
 	ModelName         string `json:"modelName" gorm:"column:model_name;size:100;index;comment:模型名称"`
 	Quota             int64  `json:"quota" gorm:"column:quota;default:0;comment:消耗额度"`
 	PromptTokens      int64  `json:"promptTokens" gorm:"column:prompt_tokens;default:0;comment:输入 tokens"`

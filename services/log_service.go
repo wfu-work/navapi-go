@@ -58,16 +58,16 @@ type UsageSummary struct {
 	StreamRequests   int64                `json:"streamRequests"`
 	Series           []DailyUsageData     `json:"series"`
 	ByModel          []UsageDimensionStat `json:"byModel"`
-	ByChannel        []UsageDimensionStat `json:"byChannel"`
+	ByProvider       []UsageDimensionStat `json:"byProvider"`
 	ByToken          []UsageDimensionStat `json:"byToken"`
 	ByUser           []UsageDimensionStat `json:"byUser,omitempty"`
 }
 
-func (s LogService) Create(log *domains.UsageLog) error {
+func (s *LogService) Create(log *domains.UsageLog) error {
 	return createWithCrud(&s.CrudService, log)
 }
 
-func (s LogService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *LogService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var logs []domains.UsageLog
 	var total int64
@@ -87,7 +87,7 @@ func (s LogService) List(userGuid string, query dto.PageQuery) (dto.PageResult, 
 	return dto.PageResult{List: logs, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s LogService) Stats(userGuid string) (map[string]any, error) {
+func (s *LogService) Stats(userGuid string) (map[string]any, error) {
 	db := s.DB().Model(&domains.UsageLog{})
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
@@ -118,7 +118,7 @@ func (s LogService) Stats(userGuid string) (map[string]any, error) {
 	}, nil
 }
 
-func (s LogService) DailyData(userGuid string, days int) ([]DailyUsageData, error) {
+func (s *LogService) DailyData(userGuid string, days int) ([]DailyUsageData, error) {
 	if days <= 0 {
 		days = 7
 	}
@@ -166,7 +166,7 @@ func (s LogService) DailyData(userGuid string, days int) ([]DailyUsageData, erro
 
 // UsageSummary builds dashboard-ready aggregates without relying on
 // database-specific date functions, keeping the statistics portable.
-func (s LogService) UsageSummary(userGuid string, days int, topN int) (UsageSummary, error) {
+func (s *LogService) UsageSummary(userGuid string, days int, topN int) (UsageSummary, error) {
 	if days <= 0 {
 		days = 7
 	}
@@ -195,13 +195,13 @@ func (s LogService) UsageSummary(userGuid string, days int, topN int) (UsageSumm
 	}
 	summary := UsageSummary{Days: days, Series: series}
 	byModel := map[string]*UsageDimensionStat{}
-	byChannel := map[string]*UsageDimensionStat{}
+	byProvider := map[string]*UsageDimensionStat{}
 	byToken := map[string]*UsageDimensionStat{}
 	byUser := map[string]*UsageDimensionStat{}
 	for _, log := range logs {
 		applyUsageStat(&summary, log)
 		applyDimensionStat(byModel, fallbackName(log.ModelName, "unknown"), log)
-		applyDimensionStat(byChannel, fallbackName(log.ChannelName, log.ChannelGuid), log)
+		applyDimensionStat(byProvider, fallbackName(log.ProviderName, log.ProviderGuid), log)
 		applyDimensionStat(byToken, fallbackName(log.TokenName, log.TokenGuid), log)
 		if userGuid == "" {
 			applyDimensionStat(byUser, fallbackName(log.Username, log.UserGuid), log)
@@ -211,7 +211,7 @@ func (s LogService) UsageSummary(userGuid string, days int, topN int) (UsageSumm
 		summary.AvgUseTimeMs = summary.AvgUseTimeMs / summary.TotalRequests
 	}
 	summary.ByModel = topUsageStats(byModel, topN)
-	summary.ByChannel = topUsageStats(byChannel, topN)
+	summary.ByProvider = topUsageStats(byProvider, topN)
 	summary.ByToken = topUsageStats(byToken, topN)
 	if userGuid == "" {
 		summary.ByUser = topUsageStats(byUser, topN)

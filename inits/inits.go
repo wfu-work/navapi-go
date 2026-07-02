@@ -1,6 +1,9 @@
 package inits
 
 import (
+	_ "embed"
+	"fmt"
+	"navapi-go/utils"
 	"os"
 
 	"navapi-go/domains"
@@ -15,11 +18,18 @@ import (
 	"go.uber.org/zap"
 )
 
+//go:embed config.yaml
+var defaultConfig []byte
+
 func Init() {
+	if err := utils.NewDefaultConfigManager(defaultConfig).Ensure(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "prepare config failed: %v\n", err)
+		os.Exit(1)
+	}
 	sysInit := inits.SysInit{}
 	sysInit.OnTableInit(registerTables)
 	sysInit.OnRouterInit(func(publicGroup *gin.RouterGroup, privateGroup *gin.RouterGroup) {
-		routers.RouterGroupApp.InitRouters(publicGroup, privateGroup, nil)
+		routers.RouterGroupApp.InitRouters(publicGroup, privateGroup)
 	})
 	sysInit.OnWebInit(func(engine *gin.Engine) {
 		routers.RouterGroupApp.InitRelayRouter(engine)
@@ -44,11 +54,9 @@ func registerTables() {
 		return
 	}
 	if err := db.AutoMigrate(
-		domains.Channel{},
 		domains.ApiToken{},
 		domains.UserQuota{},
 		domains.UsageLog{},
-		domains.ChannelHealthLog{},
 		domains.Announcement{},
 		domains.ModelMeta{},
 		domains.VendorMeta{},

@@ -23,7 +23,7 @@ func (s *PricingService) WithDB(db *gorm.DB) *PricingService {
 	return &cloned
 }
 
-func (s PricingService) List(query dto.PageQuery) (dto.PageResult, error) {
+func (s *PricingService) List(query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var pricing []domains.Pricing
 	var total int64
@@ -44,13 +44,13 @@ func (s PricingService) List(query dto.PageQuery) (dto.PageResult, error) {
 	return dto.PageResult{List: pricing, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s PricingService) PublicList() ([]domains.Pricing, error) {
+func (s *PricingService) PublicList() ([]domains.Pricing, error) {
 	var pricing []domains.Pricing
 	err := s.DB().Where("enabled = ?", true).Order("model_name asc, group_name asc").Find(&pricing).Error
 	return pricing, err
 }
 
-func (s PricingService) Upsert(pricing *domains.Pricing) error {
+func (s *PricingService) Upsert(pricing *domains.Pricing) error {
 	normalizePricing(pricing)
 	if pricing.Id == 0 {
 		return createWithCrud(&s.CrudService, pricing)
@@ -74,11 +74,11 @@ func (s PricingService) Upsert(pricing *domains.Pricing) error {
 	return nil
 }
 
-func (s PricingService) Delete(id uint) error {
+func (s *PricingService) Delete(id uint) error {
 	return deleteByIDWithCrud(&s.CrudService, id, "pricing not found")
 }
 
-func (s PricingService) CalculateQuota(modelName string, group string, usage dto.Usage, fallback int64) int64 {
+func (s *PricingService) CalculateQuota(modelName string, group string, usage dto.Usage, fallback int64) int64 {
 	pricing := s.match(modelName, group)
 	if pricing == nil {
 		return fallback
@@ -113,7 +113,7 @@ func (s PricingService) CalculateQuota(modelName string, group string, usage dto
 	return int64(math.Ceil(quota))
 }
 
-func (s PricingService) match(modelName string, group string) *domains.Pricing {
+func (s *PricingService) match(modelName string, group string) *domains.Pricing {
 	group = normalizeGroup(group)
 	candidates := []domains.Pricing{}
 	err := s.DB().Where("enabled = ? AND model_name IN ? AND group_name IN ?", true, []string{modelName, "*"}, []string{group, "*", "default"}).

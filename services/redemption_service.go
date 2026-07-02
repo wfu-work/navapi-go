@@ -42,7 +42,7 @@ type RedemptionStats struct {
 	UsedQuota  int64 `json:"usedQuota"`
 }
 
-func (s RedemptionService) Create(redemption *domains.Redemption) error {
+func (s *RedemptionService) Create(redemption *domains.Redemption) error {
 	if redemption.Status == 0 {
 		redemption.Status = constants.StatusEnabled
 	}
@@ -56,7 +56,7 @@ func (s RedemptionService) Create(redemption *domains.Redemption) error {
 	return createWithCrud(&s.CrudService, redemption)
 }
 
-func (s RedemptionService) Update(redemption *domains.Redemption) error {
+func (s *RedemptionService) Update(redemption *domains.Redemption) error {
 	if redemption.Id == 0 {
 		return errors.New("id is required")
 	}
@@ -79,11 +79,11 @@ func (s RedemptionService) Update(redemption *domains.Redemption) error {
 	return nil
 }
 
-func (s RedemptionService) Delete(id uint) error {
+func (s *RedemptionService) Delete(id uint) error {
 	return deleteByIDWithCrud(&s.CrudService, id, "redemption not found")
 }
 
-func (s RedemptionService) List(query dto.PageQuery) (dto.PageResult, error) {
+func (s *RedemptionService) List(query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var redemptions []domains.Redemption
 	var total int64
@@ -100,7 +100,7 @@ func (s RedemptionService) List(query dto.PageQuery) (dto.PageResult, error) {
 	return dto.PageResult{List: redemptions, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s RedemptionService) BatchCreate(req RedemptionBatchRequest) ([]domains.Redemption, error) {
+func (s *RedemptionService) BatchCreate(req RedemptionBatchRequest) ([]domains.Redemption, error) {
 	if req.Count <= 0 {
 		return nil, errors.New("count must be greater than zero")
 	}
@@ -130,7 +130,7 @@ func (s RedemptionService) BatchCreate(req RedemptionBatchRequest) ([]domains.Re
 	return cards, nil
 }
 
-func (s RedemptionService) Stats() (RedemptionStats, error) {
+func (s *RedemptionService) Stats() (RedemptionStats, error) {
 	var stats RedemptionStats
 	now := time.Now().Unix()
 	if err := s.DB().Model(&domains.Redemption{}).Count(&stats.Total).Error; err != nil {
@@ -159,7 +159,7 @@ func (s RedemptionService) Stats() (RedemptionStats, error) {
 	return stats, nil
 }
 
-func (s RedemptionService) Redeem(code string, userGuid string, tokenID uint) (*domains.Redemption, error) {
+func (s *RedemptionService) Redeem(code string, userGuid string, tokenID uint) (*domains.Redemption, error) {
 	if userGuid == "" {
 		return nil, errors.New("user is required")
 	}
@@ -203,7 +203,7 @@ func (s RedemptionService) Redeem(code string, userGuid string, tokenID uint) (*
 	return &redeemed, nil
 }
 
-func (s RedemptionService) newCode(prefix string) (string, error) {
+func (s *RedemptionService) newCode(prefix string) (string, error) {
 	raw, err := randomHex(10)
 	if err != nil {
 		return "", err

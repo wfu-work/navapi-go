@@ -42,7 +42,7 @@ type ConfirmPaymentRequest struct {
 	NotifyData    string `json:"notifyData"`
 }
 
-func (s PaymentService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *PaymentService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var orders []domains.PaymentOrder
 	var total int64
@@ -62,7 +62,7 @@ func (s PaymentService) List(userGuid string, query dto.PageQuery) (dto.PageResu
 	return dto.PageResult{List: orders, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s PaymentService) Create(userGuid string, req CreatePaymentRequest) (*domains.PaymentOrder, error) {
+func (s *PaymentService) Create(userGuid string, req CreatePaymentRequest) (*domains.PaymentOrder, error) {
 	if userGuid == "" {
 		return nil, errors.New("user is required")
 	}
@@ -109,7 +109,7 @@ func (s PaymentService) Create(userGuid string, req CreatePaymentRequest) (*doma
 
 // Confirm marks an order paid and applies the purchased quota/subscription.
 // External payment callbacks should verify signatures before calling this.
-func (s PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrder, error) {
+func (s *PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrder, error) {
 	if strings.TrimSpace(req.OrderNo) == "" {
 		return nil, errors.New("orderNo is required")
 	}
@@ -158,7 +158,7 @@ func (s PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrde
 	return &paid, nil
 }
 
-func (s PaymentService) Close(orderNo string, userGuid string) error {
+func (s *PaymentService) Close(orderNo string, userGuid string) error {
 	if strings.TrimSpace(orderNo) == "" {
 		return errors.New("orderNo is required")
 	}

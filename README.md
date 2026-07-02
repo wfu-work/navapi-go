@@ -4,14 +4,14 @@
 
 ## 目标
 
-- 对齐 `new-api` 的核心后端功能：模型网关、渠道管理、令牌鉴权、额度计费、日志统计、任务转发、系统配置。
+- 对齐 `new-api` 的核心后端功能：模型网关、上游服务商管理、令牌鉴权、额度计费、日志统计、任务转发、系统配置。
 - 保持 OpenAI 兼容接口优先可用，逐步扩展 Claude、Gemini、图像、音频、Rerank、异步任务等协议。
 - 复用 `nav-common-go-lib` 的工程底座，避免重复实现通用后台能力。
 - 后端接口保持清晰边界，便于未来接入独立 Web 前端、移动端或第三方管理台。
 
 ## 参考项目
 
-- `new-api`：功能参考，重点参考路由分组、渠道模型、令牌模型、转发链路、计费与日志设计。
+- `new-api`：功能参考，重点参考路由分组、上游服务商模型、令牌模型、转发链路、计费与日志设计。
 - `vpn-server`：基础框架接入参考，重点参考 `SysInit` 生命周期、业务表注册、路由注册、定时任务注册方式。
 - `nav-common-go-lib`：项目基础框架，提供 Gin、Gorm、Viper、Zap、JWT、Casbin、默认系统模块、公共响应、定时任务等能力。
 
@@ -20,12 +20,12 @@
 ### 本项目负责
 
 - 业务数据表与迁移注册。
-- 业务 API：渠道、令牌、模型、日志、额度、任务、系统选项。
+- 业务 API：上游服务商、令牌、模型、日志、额度、任务、系统选项。
 - Relay API：OpenAI 兼容转发与后续多协议适配。
-- 渠道选择、模型匹配、失败重试、自动禁用/恢复。
+- 上游服务商选择、模型匹配、失败重试、自动禁用/恢复。
 - 额度预扣、结算、退款、消费日志。
 - 管理端所需的纯后端接口。
-- 定时任务：渠道检测、余额刷新、任务轮询、日志清理、配置刷新。
+- 定时任务：上游服务商检测、余额刷新、任务轮询、日志清理、配置刷新。
 
 ### 本项目不负责
 
@@ -56,7 +56,7 @@ main.go
 .
 ├── apis/             HTTP handler
 ├── configs/          navapi 业务配置
-├── constants/        渠道类型、状态、上下文 key、relay mode
+├── constants/        上游服务商类型、状态、上下文 key、relay mode
 ├── domains/          Gorm 数据模型
 ├── dto/              上下游请求响应结构
 ├── inits/            业务初始化入口
@@ -100,32 +100,29 @@ main.go
 - 管理员、普通用户、根用户的业务权限映射。
 - Token 访问时从业务 token 解析到基础用户。
 
-### 3. 渠道管理
+### 3. 上游服务商管理
 
-核心对象：`Channel`。
+核心对象：`VendorMeta`。
 
 字段规划：
 
-- 基础信息：名称、类型、状态、权重、优先级、标签、备注。
+- 基础信息：服务商标识、展示名称、类型、启用状态、排序、备注。
 - 上游信息：Base URL、API Key、多 Key、组织 ID、自定义 Header。
-- 模型能力：支持模型列表、模型映射、分组、测试模型。
-- 计费信息：余额、已用额度、更新时间。
-- 运行状态：测试时间、响应耗时、自动禁用原因。
-- 扩展配置：JSON settings、参数覆盖、状态码映射。
+- 模型能力：支持模型列表、模型映射、模型覆盖和模型白名单。
+- 余额信息：余额接口模板、授权方式、响应路径和单位换算。
+- 扩展配置：Header 覆盖、Query 参数覆盖、备注说明。
 
 接口规划：
 
-- `GET /api/channel/`
-- `GET /api/channel/:id`
-- `POST /api/channel/`
-- `PUT /api/channel/`
-- `DELETE /api/channel/:id`
-- `GET /api/channel/test/:id`
-- `GET /api/channel/models`
-- `POST /api/channel/fetch_models`
-- `POST /api/channel/batch`
-- `POST /api/channel/tag/enabled`
-- `POST /api/channel/tag/disabled`
+- `GET /api/provider/list`
+- `GET /api/provider/:guid`
+- `POST /api/provider/`
+- `PUT /api/provider/`
+- `DELETE /api/provider/:guid`
+- `GET /api/provider/:guid/key`
+- `PUT /api/provider/:guid/key`
+- `POST /api/provider/test`
+- `POST /api/provider/fetch_models`
 
 ### 4. Token 管理
 
@@ -179,7 +176,7 @@ request
   -> CORS / recover / request id / stats
   -> TokenAuth
   -> ModelRequestRateLimit
-  -> Distribute select channel
+  -> Select upstream provider
   -> Relay format parser
   -> Adapter convert request
   -> upstream request
@@ -188,17 +185,17 @@ request
   -> usage log
 ```
 
-### 6. 渠道选择
+### 6. 上游服务商选择
 
 选择策略：
 
-- 按 token 分组过滤渠道。
-- 按请求模型匹配渠道模型列表。
+- 按 token 分组过滤上游服务商。
+- 按请求模型匹配服务商模型列表。
 - 支持模型映射。
 - 支持权重随机、优先级排序、响应时间参考。
 - 支持 auto 分组。
 - 支持失败重试与跨分组重试。
-- 支持渠道亲和缓存，连续请求优先命中稳定渠道。
+- 支持上游亲和缓存，连续请求优先命中稳定服务商。
 
 第一阶段实现：
 
@@ -208,7 +205,7 @@ request
 
 第二阶段增强：
 
-- 渠道亲和。
+- 上游亲和。
 - 自动禁用。
 - 多 Key 轮询与单 Key 禁用。
 - 状态码映射。
@@ -223,7 +220,7 @@ request
 
 能力：
 
-- 从渠道同步模型。
+- 从上游服务商同步模型。
 - 手动维护模型元数据。
 - 不同分组独立倍率。
 - 公开价格查询接口。
@@ -243,7 +240,7 @@ after relay:
   calculate final quota
   refund or supplement delta
   write consume log
-  update user / token / channel used quota
+  update user / token usage quota
 ```
 
 第一阶段：
@@ -264,7 +261,7 @@ after relay:
 
 字段：
 
-- 用户、token、渠道、模型。
+- 用户、token、上游服务商、模型。
 - prompt tokens、completion tokens、quota。
 - stream 标记、耗时、IP、request id、upstream request id。
 - 错误内容、扩展 JSON。
@@ -293,7 +290,7 @@ after relay:
 - 是否开启注册、日志、任务、绘图。
 - 默认额度、新用户额度、提醒阈值。
 - 模型倍率、分组倍率。
-- 渠道自动禁用策略。
+- 上游服务商自动禁用策略。
 - 敏感词和请求限制。
 
 ### 11. 异步任务
@@ -326,7 +323,6 @@ after relay:
 
 业务表建议：
 
-- `nav_api_channels`
 - `nav_api_tokens`
 - `nav_api_model_meta`
 - `nav_api_vendor_meta`
@@ -356,10 +352,11 @@ POST   /api/user/login
 GET    /api/user/self
 GET    /api/user/models
 
-GET    /api/channel/
-POST   /api/channel/
-PUT    /api/channel/
-DELETE /api/channel/:id
+GET    /api/provider/list
+GET    /api/provider/:guid
+POST   /api/provider/
+PUT    /api/provider/
+DELETE /api/provider/:guid
 
 GET    /api/token/
 POST   /api/token/
@@ -413,19 +410,19 @@ POST   /v1beta/models/*path
 
 ### Phase 1：最小可用网关
 
-- `Channel`、`ApiToken`、`UsageLog` 表。
+- `Provider`、`ApiToken`、`UsageLog` 表。
 - TokenAuth 中间件。
 - OpenAI `/v1/models` 和 `/v1/chat/completions`。
 - OpenAI adapter。
-- 渠道选择：状态 + 分组 + 模型 + 权重。
+- 上游服务商选择：状态 + 分组 + 模型 + 权重。
 - 基础额度扣减和消费日志。
-- 管理接口：渠道 CRUD、token CRUD、日志列表。
+- 管理接口：上游服务商 CRUD、token CRUD、日志列表。
 
 验收：
 
 - 使用 `Authorization: Bearer sk-xxx` 可以调用 `/v1/chat/completions`。
-- 能配置至少一个 OpenAI 兼容渠道。
-- 请求成功后 token、用户、渠道用量增加。
+- 能配置至少一个 OpenAI 兼容上游服务商。
+- 请求成功后 token、用户、上游服务商用量增加。
 - 上游失败时返回 OpenAI 风格错误。
 
 ### Phase 2：协议与计费补齐
@@ -436,20 +433,20 @@ POST   /v1beta/models/*path
 - Gemini native。
 - streaming 使用量结算。
 - 模型倍率、分组倍率、缓存倍率。
-- 渠道测试、余额刷新、自动禁用。
+- 上游服务商测试、余额刷新、自动禁用。
 - 定时任务和配置缓存刷新。
 
 验收：
 
 - 主流 OpenAI SDK 可直接使用。
-- 管理接口可维护倍率和渠道。
+- 管理接口可维护倍率和上游服务商。
 - streaming 与非 streaming 计费一致。
 
 ### Phase 3：高级能力
 
 - Midjourney、Suno、视频等异步任务。
 - 多 Key 管理。
-- 渠道亲和。
+- 上游亲和。
 - 敏感词、SSRF、模型限流。
 - 兑换码、订阅、支付接口。
 - OAuth/第三方登录按实际前端需求接入。
@@ -457,7 +454,7 @@ POST   /v1beta/models/*path
 验收：
 
 - 异步任务可提交、轮询、计费、退款。
-- 高并发下渠道选择和额度扣减无明显竞态。
+- 高并发下上游服务商选择和额度扣减无明显竞态。
 - 管理端可覆盖 `new-api` 的主要运营能力。
 
 ## 优先级
@@ -465,14 +462,14 @@ POST   /v1beta/models/*path
 P0：
 
 - 工程骨架。
-- 渠道、token、日志、OpenAI chat relay。
+- 上游服务商、token、日志、OpenAI chat relay。
 - 基础额度结算。
 
 P1：
 
 - 模型管理、价格倍率、streaming 计费。
 - embeddings、images、audio、responses。
-- 渠道测试与自动禁用。
+- 上游服务商测试与自动禁用。
 
 P2：
 
@@ -510,7 +507,7 @@ P3：
 1. 初始化工程骨架并接入 `nav-common-go-lib`。
 2. 增加 `config.yaml` 示例和本地 SQLite 默认配置。
 3. 定义 P0 数据模型并注册 AutoMigrate。
-4. 实现 TokenAuth、ChannelService、TokenService。
+4. 实现 TokenAuth、ProviderService、TokenService。
 5. 实现 OpenAI chat relay 最小闭环。
 6. 增加单元测试和一个 curl 调用示例。
 
@@ -519,17 +516,17 @@ P3：
 已完成 P0 最小闭环：
 
 - 接入 `nav-common-go-lib` 启动、配置、数据库、日志、JWT 后台鉴权。
-- 新增业务表：渠道、API Token、用户额度账户、模型元数据、供应商元数据、价格倍率、使用日志、动态选项、任务、兑换码、额度日期。
-- 新增后台接口：`/api/channel/*`、`/api/token/*`、`/api/quota/*`、`/api/usage/*`、`/api/models/*`、`/api/vendors/*`、`/api/pricing/*`、`/api/option/*`、`/api/task/*`、`/api/redemption/*`。
-- 一般列表接口统一使用 `/list` 前缀，例如 `/api/channel/list`、`/api/token/list`、`/api/usage/self/list`。
-- 渠道管理支持上游模型拉取、连通性测试、批量状态更新、按标签启停。
+- 新增业务表：上游服务商、API Token、用户额度账户、模型元数据、价格倍率、使用日志、动态选项、任务、兑换码、额度日期。
+- 新增后台接口：`/api/provider/*`、`/api/token/*`、`/api/quota/*`、`/api/usage/*`、`/api/models/*`、`/api/pricing/*`、`/api/option/*`、`/api/task/*`、`/api/redemption/*`。
+- 一般列表接口统一使用 `/list` 前缀，例如 `/api/provider/list`、`/api/token/list`、`/api/usage/self/list`。
+- 上游服务商管理支持上游模型拉取、连通性测试、模型映射和请求覆盖配置。
 - 价格模块支持公开 `/api/pricing` 查询和后台倍率维护，Relay 额度结算会应用模型/分组倍率、缓存命中倍率。
 - Token 管理支持 `/api/usage/token/` 使用统计，日志模块支持 `/api/data/list` 和 `/api/data/self/list` 近 N 天用量聚合。
 - 用户额度账户支持 `/api/quota/self` 查询和后台维护，token 创建/更新会校验用户可用分组。
 - 新增 OpenAI 兼容接口：`GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/completions`、`POST /v1/embeddings`、`POST /v1/moderations`、`POST /v1/rerank`、`POST /v1/images/generations`、`POST /v1/audio/*`、`POST /v1/responses`。
 - 新增 Claude Messages、Gemini native、异步任务基础入口：`POST /v1/messages`、`POST /v1beta/models/*path`、`POST /mj/*path`、`POST /suno/*path`。
-- Relay 链路已包含：`sk-` token 鉴权、模型限制、渠道选择、失败重试、渠道亲和缓存、多 Key 轮询、模型映射、Header/Query 覆盖、上游转发、非流式/流式 usage 解析、Responses usage 兼容、倍率计费、额度扣减、消费日志。
-- 渠道自动禁用已支持基础场景：上游返回 401/403 时记录禁用原因并停用该渠道。
+- Relay 链路已包含：`sk-` token 鉴权、模型限制、服务商选择、失败重试、上游亲和缓存、多 Key 轮询、模型映射、Header/Query 覆盖、上游转发、非流式/流式 usage 解析、Responses usage 兼容、倍率计费、额度扣减、消费日志。
+- 上游自动禁用已支持基础场景：上游返回 401/403 时记录禁用原因并停用该服务商。
 - 安全与风控已支持：Token IP 白名单、请求体大小限制、token+model 级限流、敏感词拦截、图片/音频/文件 URL 的私网地址拦截。
 - 动态配置支持启动加载和每分钟定时刷新；风控配置可通过 Option 表调整。
 - 兑换码支持在事务中核销并给当前用户指定 API Token 增加剩余额度。
@@ -546,6 +543,6 @@ go run .
 最小调用流程：
 
 1. 通过 `nav-common-go-lib` 内置注册/登录接口创建后台用户并取得 JWT。
-2. 使用 JWT 调用 `POST /api/channel/` 创建 OpenAI 兼容渠道。
+2. 使用 JWT 调用 `POST /api/provider/` 创建 OpenAI 兼容上游服务商。
 3. 使用 JWT 调用 `POST /api/token/` 创建 API Token，返回 `sk-...`。
 4. 使用 `Authorization: Bearer sk-...` 调用 `POST /v1/chat/completions`。

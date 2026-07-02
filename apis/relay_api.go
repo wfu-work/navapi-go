@@ -28,7 +28,7 @@ func (a RelayApi) ChatCompletions(c *gin.Context) {
 	a.Relay(c, services.RelayEndpoint{
 		UpstreamPath: "/v1/chat/completions",
 		Method:       http.MethodPost,
-		Format:       constants.ChannelTypeOpenAI,
+		Format:       constants.ProviderTypeOpenAI,
 	})
 }
 
@@ -70,39 +70,39 @@ func (a RelayApi) Relay(c *gin.Context, endpoint services.RelayEndpoint) {
 }
 
 func (a RelayApi) OpenAICompletions(c *gin.Context) {
-	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/completions", Method: http.MethodPost, Format: constants.ChannelTypeOpenAI})
+	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/completions", Method: http.MethodPost, Format: constants.ProviderTypeOpenAI})
 }
 
 func (a RelayApi) OpenAIEmbeddings(c *gin.Context) {
-	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/embeddings", Method: http.MethodPost, Format: constants.ChannelTypeOpenAI})
+	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/embeddings", Method: http.MethodPost, Format: constants.ProviderTypeOpenAI})
 }
 
 func (a RelayApi) OpenAIResponses(c *gin.Context) {
-	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/responses", Method: http.MethodPost, Format: constants.ChannelTypeOpenAI})
+	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/responses", Method: http.MethodPost, Format: constants.ProviderTypeOpenAI})
 }
 
 func (a RelayApi) OpenAIModerations(c *gin.Context) {
-	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/moderations", Method: http.MethodPost, Format: constants.ChannelTypeOpenAI, DefaultModel: "omni-moderation-latest"})
+	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/moderations", Method: http.MethodPost, Format: constants.ProviderTypeOpenAI, DefaultModel: "omni-moderation-latest"})
 }
 
 func (a RelayApi) OpenAIRerank(c *gin.Context) {
-	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/rerank", Method: http.MethodPost, Format: constants.ChannelTypeOpenAI, DefaultModel: "rerank"})
+	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/rerank", Method: http.MethodPost, Format: constants.ProviderTypeOpenAI, DefaultModel: "rerank"})
 }
 
 func (a RelayApi) OpenAIImageGenerations(c *gin.Context) {
-	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/images/generations", Method: http.MethodPost, Format: constants.ChannelTypeOpenAI})
+	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/images/generations", Method: http.MethodPost, Format: constants.ProviderTypeOpenAI})
 }
 
 func (a RelayApi) OpenAIAudioTranscriptions(c *gin.Context) {
-	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/audio/transcriptions", Method: http.MethodPost, Format: constants.ChannelTypeOpenAI})
+	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/audio/transcriptions", Method: http.MethodPost, Format: constants.ProviderTypeOpenAI})
 }
 
 func (a RelayApi) OpenAIAudioTranslations(c *gin.Context) {
-	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/audio/translations", Method: http.MethodPost, Format: constants.ChannelTypeOpenAI})
+	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/audio/translations", Method: http.MethodPost, Format: constants.ProviderTypeOpenAI})
 }
 
 func (a RelayApi) ClaudeMessages(c *gin.Context) {
-	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/messages", Method: http.MethodPost, Format: constants.ChannelTypeAnthropic})
+	a.Relay(c, services.RelayEndpoint{UpstreamPath: "/v1/messages", Method: http.MethodPost, Format: constants.ProviderTypeAnthropic})
 }
 
 func (a RelayApi) GeminiModels(c *gin.Context) {
@@ -110,7 +110,7 @@ func (a RelayApi) GeminiModels(c *gin.Context) {
 	a.Relay(c, services.RelayEndpoint{
 		UpstreamPath:  upstreamPath,
 		Method:        http.MethodPost,
-		Format:        constants.ChannelTypeGemini,
+		Format:        constants.ProviderTypeGemini,
 		ModelFromPath: true,
 	})
 }

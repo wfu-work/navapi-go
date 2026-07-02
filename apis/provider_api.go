@@ -1,8 +1,9 @@
 package apis
 
 import (
+	"strings"
+
 	"navapi-go/domains"
-	"navapi-go/dto"
 	"navapi-go/services"
 
 	"github.com/gin-gonic/gin"
@@ -25,10 +26,13 @@ type providerKeyRequest struct {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
+// @Param type query string false "类型"
+// @Param status query string false "状态 enabled/disabled"
+// @Param keyStatus query string false "密钥状态 set/missing"
 // @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
 // @Router /provider/list [get]
 func (a ProviderApi) List(c *gin.Context) {
-	var query dto.PageQuery
+	var query services.ProviderListQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.ProviderServiceApp.List(query)
 	if err != nil {
@@ -45,21 +49,17 @@ func (a ProviderApi) List(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Accept json
 // @Produce json
-// @Param id path int true "ID"
+// @Param guid path string true "GUID"
 // @Success 200 {object} response.Response{data=domains.VendorMeta,msg=string}
-// @Router /provider/{id} [get]
+// @Router /provider/{guid} [get]
 func (a ProviderApi) Get(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
+	guid := providerGuidParam(c)
+	provider, err := services.ProviderServiceApp.GetByGUID(guid)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	provider, err := services.ProviderServiceApp.GetByID(id)
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
-		return
-	}
-	response.Ok(provider, c)
+	response.Ok(services.ProviderRecordFromDomain(*provider), c)
 }
 
 // Save 上游提供商
@@ -83,7 +83,7 @@ func (a ProviderApi) Save(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	response.Ok(provider, c)
+	response.Ok(services.ProviderRecordFromDomain(provider), c)
 }
 
 // Delete 删除上游提供商
@@ -93,16 +93,11 @@ func (a ProviderApi) Save(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Accept json
 // @Produce json
-// @Param id path int true "ID"
+// @Param guid path string true "GUID"
 // @Success 200 {object} response.Response{data=bool,msg=string}
-// @Router /provider/{id} [delete]
+// @Router /provider/{guid} [delete]
 func (a ProviderApi) Delete(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
-		return
-	}
-	if err := services.ProviderServiceApp.Delete(id); err != nil {
+	if err := services.ProviderServiceApp.Delete(providerGuidParam(c)); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -116,16 +111,11 @@ func (a ProviderApi) Delete(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Accept json
 // @Produce json
-// @Param id path int true "ID"
+// @Param guid path string true "GUID"
 // @Success 200 {object} response.Response{data=object,msg=string}
-// @Router /provider/{id}/key [get]
+// @Router /provider/{guid}/key [get]
 func (a ProviderApi) Key(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
-		return
-	}
-	key, err := services.ProviderServiceApp.GetKey(id)
+	key, err := services.ProviderServiceApp.GetKey(providerGuidParam(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -140,51 +130,23 @@ func (a ProviderApi) Key(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Accept json
 // @Produce json
-// @Param id path int true "ID"
+// @Param guid path string true "GUID"
 // @Param data body providerKeyRequest true "上游提供商密钥对象"
 // @Success 200 {object} response.Response{data=bool,msg=string}
-// @Router /provider/{id}/key [put]
+// @Router /provider/{guid}/key [put]
 func (a ProviderApi) SetKey(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
-		return
-	}
 	var req providerKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.ProviderServiceApp.SetKey(id, req.Key); err != nil {
+	if err := services.ProviderServiceApp.SetKey(providerGuidParam(c), req.Key); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
 	response.Ok(true, c)
 }
 
-// CreateChannel 通过上游提供商创建渠道
-// @Summary 通过上游提供商创建渠道
-// @Description 通过上游提供商创建渠道
-// @Tags Navapi模块
-// @Security ApiKeyAuth
-// @Accept json
-// @Produce json
-// @Param id path int true "ID"
-// @Param data body services.ProviderChannelRequest true "创建渠道请求"
-// @Success 200 {object} response.Response{data=domains.Channel,msg=string}
-// @Router /provider/{id}/channel [post]
-func (a ProviderApi) CreateChannel(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
-		return
-	}
-	var req services.ProviderChannelRequest
-	_ = c.ShouldBindJSON(&req)
-	channel, err := services.ProviderServiceApp.CreateChannel(id, req)
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
-		return
-	}
-	response.Ok(channel, c)
+func providerGuidParam(c *gin.Context) string {
+	return strings.TrimSpace(c.Param("guid"))
 }
