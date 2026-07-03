@@ -6,6 +6,7 @@ type ModelMeta struct {
 	commonDomains.BaseDataEntity
 	ModelName   string `json:"modelName" gorm:"column:model_name;size:120;uniqueIndex;comment:模型名称"`
 	DisplayName string `json:"displayName" gorm:"column:display_name;size:120;comment:展示名称"`
+	Group       string `json:"group" gorm:"column:group_name;size:100;default:default;index;comment:模型分组"`
 	OwnedBy     string `json:"ownedBy" gorm:"column:owned_by;size:80;index;comment:供应商"`
 	Enabled     bool   `json:"enabled" gorm:"column:enabled;default:true;index;comment:启用"`
 	Sort        int    `json:"sort" gorm:"column:sort;default:0;comment:排序"`

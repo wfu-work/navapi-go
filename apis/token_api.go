@@ -1,6 +1,9 @@
 package apis
 
 import (
+	"strconv"
+	"strings"
+
 	"navapi-go/domains"
 	"navapi-go/services"
 
@@ -27,7 +30,7 @@ func (a TokenApi) List(c *gin.Context) {
 		return
 	}
 	for i := range tokens {
-		tokens[i].Key = services.TokenServiceApp.Mask(tokens[i].Key)
+		tokens[i].MaskedKey = services.TokenServiceApp.Mask(tokens[i].Key)
 	}
 	response.Ok(tokens, c)
 }
@@ -43,17 +46,12 @@ func (a TokenApi) List(c *gin.Context) {
 // @Success 200 {object} response.Response{data=domains.ApiToken,msg=string}
 // @Router /token/{id} [get]
 func (a TokenApi) Get(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
+	token, err := tokenByParam(c, utils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	token, err := services.TokenServiceApp.GetByID(id, utils.GetUserGuid(c))
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
-		return
-	}
-	token.Key = services.TokenServiceApp.Mask(token.Key)
+	token.MaskedKey = services.TokenServiceApp.Mask(token.Key)
 	response.Ok(token, c)
 }
 
@@ -97,11 +95,11 @@ func (a TokenApi) Update(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if token.Id == 0 {
-		response.FailWithMessage("id is required", c)
+	if token.Id == 0 && strings.TrimSpace(token.Guid) == "" {
+		response.FailWithMessage("guid is required", c)
 		return
 	}
-	old, err := services.TokenServiceApp.GetByID(token.Id, utils.GetUserGuid(c))
+	old, err := existingTokenForUpdate(token, utils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -113,7 +111,7 @@ func (a TokenApi) Update(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	token.Key = services.TokenServiceApp.Mask(token.Key)
+	token.MaskedKey = services.TokenServiceApp.Mask(token.Key)
 	response.Ok(token, c)
 }
 
@@ -128,12 +126,7 @@ func (a TokenApi) Update(c *gin.Context) {
 // @Success 200 {object} response.Response{data=bool,msg=string}
 // @Router /token/{id} [delete]
 func (a TokenApi) Delete(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
-		return
-	}
-	if err := services.TokenServiceApp.Delete(id, utils.GetUserGuid(c)); err != nil {
+	if err := deleteTokenByParam(c, utils.GetUserGuid(c)); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -151,17 +144,41 @@ func (a TokenApi) Delete(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /token/{id}/key [post]
 func (a TokenApi) Key(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
-		return
-	}
-	token, err := services.TokenServiceApp.GetByID(id, utils.GetUserGuid(c))
+	token, err := tokenByParam(c, utils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
 	response.Ok(gin.H{"key": token.Key}, c)
+}
+
+func tokenByParam(c *gin.Context, userGuid string) (*domains.ApiToken, error) {
+	raw := strings.TrimSpace(c.Param("id"))
+	if raw == "" {
+		return nil, strconv.ErrSyntax
+	}
+	if id, err := strconv.ParseUint(raw, 10, 64); err == nil && id > 0 {
+		return services.TokenServiceApp.GetByID(uint(id), userGuid)
+	}
+	return services.TokenServiceApp.GetByGUID(raw, userGuid)
+}
+
+func deleteTokenByParam(c *gin.Context, userGuid string) error {
+	raw := strings.TrimSpace(c.Param("id"))
+	if raw == "" {
+		return strconv.ErrSyntax
+	}
+	if id, err := strconv.ParseUint(raw, 10, 64); err == nil && id > 0 {
+		return services.TokenServiceApp.Delete(uint(id), userGuid)
+	}
+	return services.TokenServiceApp.DeleteByGUID(raw, userGuid)
+}
+
+func existingTokenForUpdate(token domains.ApiToken, userGuid string) (*domains.ApiToken, error) {
+	if strings.TrimSpace(token.Guid) != "" {
+		return services.TokenServiceApp.GetByGUID(token.Guid, userGuid)
+	}
+	return services.TokenServiceApp.GetByID(token.Id, userGuid)
 }
 
 // Usage 当前用户令牌用量

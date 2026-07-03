@@ -9,6 +9,7 @@ func (r RedemptionRouter) InitRedemptionRouter(router *gin.RouterGroup) {
 	{
 		group.GET("/list", redemptionApi.List)
 		group.GET("/stats", redemptionApi.Stats)
+		group.GET("/:id", redemptionApi.Get)
 		group.POST("/", redemptionApi.Create)
 		group.POST("/batch", redemptionApi.BatchCreate)
 		group.PUT("/", redemptionApi.Update)
@@ -20,6 +21,7 @@ func (r RedemptionRouter) InitRedemptionRouter(router *gin.RouterGroup) {
 	{
 		card.GET("/list", redemptionApi.List)
 		card.GET("/stats", redemptionApi.Stats)
+		card.GET("/:id", redemptionApi.Get)
 		card.POST("/", redemptionApi.Create)
 		card.POST("/batch", redemptionApi.BatchCreate)
 		card.PUT("/", redemptionApi.Update)

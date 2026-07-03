@@ -24,6 +24,7 @@ type RouterGroup struct {
 	PaymentRouter
 	InvitationRouter
 	CheckinRouter
+	ClientsRouter
 }
 
 var (
@@ -59,4 +60,5 @@ func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gi
 	r.InitPaymentRouter(privateGroup)
 	r.InitInvitationRouter(privateGroup)
 	r.InitCheckinRouter(privateGroup)
+	r.InitClientsRouter(privateGroup)
 }

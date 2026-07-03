@@ -9,7 +9,12 @@ import (
 type RelayRouter struct{}
 
 func (r RelayRouter) InitRelayRouter(engine *gin.Engine) {
-	v1 := engine.Group("/v1")
+	r.initRelayRoutes(engine, "")
+	r.initRelayRoutes(engine, "/api")
+}
+
+func (r RelayRouter) initRelayRoutes(engine *gin.Engine, prefix string) {
+	v1 := engine.Group(prefix + "/v1")
 	v1.Use(middlewares.RequestBodyLimit())
 	v1.Use(middlewares.TokenAuth())
 	{
@@ -27,21 +32,21 @@ func (r RelayRouter) InitRelayRouter(engine *gin.Engine) {
 		v1.POST("/messages", relayApi.ClaudeMessages)
 	}
 
-	v1beta := engine.Group("/v1beta")
+	v1beta := engine.Group(prefix + "/v1beta")
 	v1beta.Use(middlewares.RequestBodyLimit())
 	v1beta.Use(middlewares.TokenAuth())
 	{
 		v1beta.POST("/models/*path", relayApi.GeminiModels)
 	}
 
-	mj := engine.Group("/mj")
+	mj := engine.Group(prefix + "/mj")
 	mj.Use(middlewares.RequestBodyLimit())
 	mj.Use(middlewares.TokenAuth())
 	{
 		mj.POST("/*path", relayApi.MidjourneyTask)
 	}
 
-	suno := engine.Group("/suno")
+	suno := engine.Group(prefix + "/suno")
 	suno.Use(middlewares.RequestBodyLimit())
 	suno.Use(middlewares.TokenAuth())
 	{

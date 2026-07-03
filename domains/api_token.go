@@ -7,6 +7,7 @@ type ApiToken struct {
 	UserGuid           string `json:"userGuid" gorm:"column:user_guid;size:100;index;comment:用户 GUID"`
 	Name               string `json:"name" gorm:"column:name;size:100;index;comment:令牌名称"`
 	Key                string `json:"-" gorm:"column:key;size:128;uniqueIndex;comment:令牌 key"`
+	MaskedKey          string `json:"key" gorm:"-"`
 	Status             int    `json:"status" gorm:"column:status;default:1;index;comment:状态"`
 	Group              string `json:"group" gorm:"column:group_name;size:100;default:default;index;comment:分组"`
 	RemainQuota        int64  `json:"remainQuota" gorm:"column:remain_quota;default:0;comment:剩余额度"`

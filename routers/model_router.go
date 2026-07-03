@@ -11,9 +11,13 @@ func (r ModelRouter) InitModelRouter(privateGroup *gin.RouterGroup, publicGroup 
 	group := privateGroup.Group("models")
 	{
 		group.GET("/list", modelApi.List)
+		group.GET("/groups", modelApi.Groups)
+		group.POST("/groups", modelApi.UpsertGroup)
+		group.PUT("/groups", modelApi.UpsertGroup)
+		group.DELETE("/groups/:guid", modelApi.DeleteGroup)
 		group.POST("/", modelApi.Upsert)
 		group.PUT("/", modelApi.Upsert)
-		group.DELETE("/:id", modelApi.Delete)
+		group.DELETE("/:guid", modelApi.Delete)
 	}
 
 	vendors := privateGroup.Group("vendors")

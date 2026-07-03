@@ -50,14 +50,18 @@ func (s *TokenService) Create(token *domains.ApiToken) error {
 	token.Key = "sk-" + key
 	token.Status = constants.StatusEnabled
 	token.Group = normalizeGroup(token.Group)
+	if err := ModelServiceApp.ValidateGroup(token.Group); err != nil {
+		return err
+	}
 	if token.ExpiredTime == 0 {
 		token.ExpiredTime = -1
 	}
 	return s.DB().Transaction(func(tx *gorm.DB) error {
-		if err := UserQuotaServiceApp.Ensure(tx, token.UserGuid); err != nil {
+		quotaService := UserQuotaServiceApp.WithDB(tx)
+		if err := quotaService.Ensure(tx, token.UserGuid); err != nil {
 			return err
 		}
-		if err := UserQuotaServiceApp.CheckGroup(token.UserGuid, token.Group); err != nil {
+		if err := quotaService.CheckGroup(token.UserGuid, token.Group); err != nil {
 			return err
 		}
 		if err := token.BeforeCreate(nil); err != nil {
@@ -69,30 +73,39 @@ func (s *TokenService) Create(token *domains.ApiToken) error {
 }
 
 func (s *TokenService) Update(token *domains.ApiToken) error {
-	if token.Group == "" {
-		token.Group = constants.DefaultGroup
+	token.Group = normalizeGroup(token.Group)
+	if err := ModelServiceApp.ValidateGroup(token.Group); err != nil {
+		return err
 	}
 	if err := UserQuotaServiceApp.CheckGroup(token.UserGuid, token.Group); err != nil {
 		return err
 	}
-	existing, err := s.GetByID(token.Id, token.UserGuid)
+	existing, err := s.getExisting(token.Id, token.Guid, token.UserGuid)
 	if err != nil {
 		return err
 	}
+	token.Id = existing.Id
 	token.Guid = existing.Guid
 	token.CreateTime = existing.CreateTime
 	token.Creater = existing.Creater
-	updating := *token
-	updating.Id = 0
-	if err := createWithCrud(&s.CrudService, &updating); err != nil {
+	token.Updater = existing.Updater
+	token.UpdateTime = time.Now().UnixMilli()
+	if err := s.DB().Save(token).Error; err != nil {
 		return err
 	}
-	*token = updating
-	return nil
+	return reloadByGuidWithCrud(&s.CrudService, token)
 }
 
 func (s *TokenService) Delete(id uint, userGuid string) error {
 	token, err := s.GetByID(id, userGuid)
+	if err != nil {
+		return err
+	}
+	return s.DeleteByGuid(token.Guid)
+}
+
+func (s *TokenService) DeleteByGUID(guid string, userGuid string) error {
+	token, err := s.GetByGUID(guid, userGuid)
 	if err != nil {
 		return err
 	}
@@ -114,6 +127,31 @@ func (s *TokenService) GetByID(id uint, userGuid string) (*domains.ApiToken, err
 		return nil, errors.New("token not found")
 	}
 	return token, nil
+}
+
+func (s *TokenService) GetByGUID(guid string, userGuid string) (*domains.ApiToken, error) {
+	guid = strings.TrimSpace(guid)
+	if guid == "" {
+		return nil, errors.New("guid is required")
+	}
+	token, err := s.GetByGuid(guid)
+	if err != nil {
+		return nil, err
+	}
+	if token == nil {
+		return nil, errors.New("token not found")
+	}
+	if userGuid != "" && token.UserGuid != userGuid {
+		return nil, errors.New("token not found")
+	}
+	return token, nil
+}
+
+func (s *TokenService) getExisting(id uint, guid string, userGuid string) (*domains.ApiToken, error) {
+	if strings.TrimSpace(guid) != "" {
+		return s.GetByGUID(guid, userGuid)
+	}
+	return s.GetByID(id, userGuid)
 }
 
 func (s *TokenService) List(userGuid string) ([]domains.ApiToken, error) {
@@ -156,6 +194,9 @@ func (s *TokenService) Validate(key string, clientIP string) (*domains.ApiToken,
 func (s *TokenService) CheckModel(token *domains.ApiToken, modelName string) error {
 	if token == nil {
 		return errors.New("token is required")
+	}
+	if err := ModelServiceApp.ModelAllowedForGroup(modelName, token.Group); err != nil {
+		return err
 	}
 	if !token.ModelLimitsEnabled {
 		return nil

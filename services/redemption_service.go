@@ -83,6 +83,20 @@ func (s *RedemptionService) Delete(id uint) error {
 	return deleteByIDWithCrud(&s.CrudService, id, "redemption not found")
 }
 
+func (s *RedemptionService) Get(id uint) (*domains.Redemption, error) {
+	if id == 0 {
+		return nil, errors.New("id is required")
+	}
+	redemption, err := s.GetById(id)
+	if err != nil {
+		return nil, err
+	}
+	if redemption == nil {
+		return nil, errors.New("redemption not found")
+	}
+	return redemption, nil
+}
+
 func (s *RedemptionService) List(query dto.PageQuery) (dto.PageResult, error) {
 	query.Normalize()
 	var redemptions []domains.Redemption

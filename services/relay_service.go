@@ -155,7 +155,7 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 		status = "error"
 		content = err.Error()
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, status, content))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, status, content, ""))
 		return nil, err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
@@ -163,7 +163,7 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 		content = string(result.Body)
 		maybeAutoDisableProvider(provider, result)
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, status, content))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, status, content, extractUpstreamRequestID(result)))
 		return result, nil
 	}
 	if provider != nil {
@@ -174,13 +174,13 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 		if err := s.settleReservedQuota(token, prepared.ReservedQuota, quota); err != nil {
 			status = "error"
 			content = err.Error()
-			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, status, content))
+			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, status, content, extractUpstreamRequestID(result)))
 			return nil, err
 		}
 	} else {
 		quota = 0
 	}
-	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, prepared.IsStream, status, content))
+	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, prepared.IsStream, status, content, extractUpstreamRequestID(result)))
 	return result, nil
 }
 
@@ -207,19 +207,19 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	useTime := time.Since(start).Milliseconds()
 	if err != nil {
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error()))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error(), ""))
 		return err
 	}
 	if result == nil {
 		err = errors.New("upstream response is empty")
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error()))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error(), ""))
 		return err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
 		maybeAutoDisableProvider(provider, result)
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, "error", string(result.Body)))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, "error", string(result.Body), extractUpstreamRequestID(result)))
 		return nil
 	}
 	if provider != nil {
@@ -231,10 +231,10 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	} else if err := s.settleReservedQuota(token, prepared.ReservedQuota, quota); err != nil {
 		// The stream may already be on the wire, so settlement failures are
 		// recorded in logs instead of trying to replace the response body.
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, "error", err.Error()))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, "error", err.Error(), extractUpstreamRequestID(result)))
 		return nil
 	}
-	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, prepared.IsStream, "success", ""))
+	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, prepared.IsStream, "success", "", extractUpstreamRequestID(result)))
 	return nil
 }
 
@@ -309,7 +309,11 @@ func (s RelayService) forward(ctx context.Context, provider *domains.VendorMeta,
 	copyForwardHeaders(req.Header, incoming)
 	setupAuthHeaders(req.Header, provider)
 	applyHeaderOverride(req.Header, provider.HeaderOverride)
-	resp, err := s.client.Do(req)
+	client, err := s.clientForProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +350,11 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 	copyForwardHeaders(req.Header, incoming)
 	setupAuthHeaders(req.Header, provider)
 	applyHeaderOverride(req.Header, provider.HeaderOverride)
-	resp, err := s.client.Do(req)
+	client, err := s.clientForProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -645,7 +653,7 @@ func rewriteModelInPath(upstreamPath string, model string) string {
 }
 
 func rewriteBodyModel(body []byte, model string, contentType string) []byte {
-	if model == "" || !strings.Contains(contentType, "application/json") {
+	if model == "" || (contentType != "" && !strings.Contains(contentType, "application/json")) {
 		return body
 	}
 	var payload map[string]any
@@ -795,7 +803,19 @@ func isStreamRequest(body []byte) bool {
 	return req.Stream
 }
 
-func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.VendorMeta, modelName string, usage dto.Usage, quota int64, useTimeMs int64, stream bool, status string, content string) *domains.UsageLog {
+func extractUpstreamRequestID(result *RelayResult) string {
+	if result == nil {
+		return ""
+	}
+	for _, header := range []string{"X-Request-Id", "X-Upstream-Request-Id", "Request-Id", "Apim-Request-Id"} {
+		if value := strings.TrimSpace(result.Header.Get(header)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.VendorMeta, modelName string, usage dto.Usage, quota int64, useTimeMs int64, stream bool, status string, content string, upstreamRequestID string) *domains.UsageLog {
 	if len(content) > 2000 {
 		content = content[:2000]
 	}
@@ -823,7 +843,7 @@ func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.Ve
 		Status:            status,
 		Content:           content,
 		RequestID:         c.GetHeader("X-Request-Id"),
-		UpstreamRequestID: c.GetHeader("X-Upstream-Request-Id"),
+		UpstreamRequestID: upstreamRequestID,
 		ClientIP:          c.ClientIP(),
 	}
 }

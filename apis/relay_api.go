@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"navapi-go/constants"
 	"navapi-go/domains"
@@ -19,6 +20,27 @@ func (a RelayApi) Models(c *gin.Context) {
 	models, err := services.ModelServiceApp.ListOpenAIModels()
 	if err != nil {
 		openAIError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if token, ok := c.Get(constants.ContextToken); ok {
+		if apiToken, ok := token.(*domains.ApiToken); ok && apiToken != nil {
+			filtered := models.Data[:0]
+			for _, model := range models.Data {
+				if services.TokenServiceApp.CheckModel(apiToken, model.ID) == nil {
+					filtered = append(filtered, model)
+				}
+			}
+			models.Data = filtered
+		}
+	}
+	if modelID := c.Param("model"); modelID != "" {
+		for _, model := range models.Data {
+			if model.ID == modelID {
+				c.JSON(http.StatusOK, model)
+				return
+			}
+		}
+		openAIError(c, http.StatusNotFound, "model not found")
 		return
 	}
 	c.JSON(http.StatusOK, models)
@@ -106,7 +128,7 @@ func (a RelayApi) ClaudeMessages(c *gin.Context) {
 }
 
 func (a RelayApi) GeminiModels(c *gin.Context) {
-	upstreamPath := "/v1beta/models/" + c.Param("path")
+	upstreamPath := "/v1beta/models/" + strings.TrimPrefix(c.Param("path"), "/")
 	a.Relay(c, services.RelayEndpoint{
 		UpstreamPath:  upstreamPath,
 		Method:        http.MethodPost,

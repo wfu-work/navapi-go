@@ -10,6 +10,7 @@ func (r SubscriptionRouter) InitSubscriptionRouter(privateGroup *gin.RouterGroup
 	group := privateGroup.Group("subscription")
 	{
 		group.GET("/plans", subscriptionApi.Plans)
+		group.GET("/plan/:id", subscriptionApi.GetPlan)
 		group.POST("/plan", subscriptionApi.SavePlan)
 		group.PUT("/plan", subscriptionApi.SavePlan)
 		group.DELETE("/plan/:id", subscriptionApi.DeletePlan)

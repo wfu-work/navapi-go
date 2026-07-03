@@ -60,6 +60,31 @@ func (a RedemptionApi) Stats(c *gin.Context) {
 	response.Ok(stats, c)
 }
 
+// Get 兑换码详情
+// @Summary 兑换码详情
+// @Description 兑换码详情
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Success 200 {object} response.Response{data=domains.Redemption,msg=string}
+// @Router /redemption/{id} [get]
+// @Router /card/{id} [get]
+func (a RedemptionApi) Get(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	redemption, err := services.RedemptionServiceApp.Get(id)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(redemption, c)
+}
+
 // Create 创建兑换码
 // @Summary 创建兑换码
 // @Description 创建兑换码

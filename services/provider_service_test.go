@@ -1,6 +1,8 @@
 package services
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"navapi-go/constants"
@@ -21,6 +23,11 @@ func TestProviderSaveNormalizesAndPreservesKeyOnUpdate(t *testing.T) {
 		Models:              " deepseek-chat\ndeepseek-reasoner, deepseek-chat ",
 		ModelOverride:       " deepseek-fixed ",
 		QuotaModelWhitelist: " deepseek-chat\ndeepseek-reasoner ",
+		ProxyEnabled:        true,
+		ProxyType:           "socks5",
+		ProxyURL:            " 127.0.0.1:7890 ",
+		ProxyUsername:       " proxy-user ",
+		ProxyPassword:       " proxy-pass ",
 		BalanceTemplate:     "unknown",
 		Enabled:             true,
 	}
@@ -51,16 +58,26 @@ func TestProviderSaveNormalizesAndPreservesKeyOnUpdate(t *testing.T) {
 	if provider.BalanceTemplate != "generic" || provider.BalanceCustomPath != "/v1/usage" || provider.BalanceAuthType != "provider_bearer" || provider.BalanceRemainingPath != "remaining" || provider.BalanceMultiplier != 1 || provider.BalanceUnit != "USD" {
 		t.Fatalf("balance defaults were not normalized: %+v", provider)
 	}
+	if !provider.ProxyEnabled || provider.ProxyType != "socks5" || provider.ProxyURL != "127.0.0.1:7890" || provider.ProxyUsername != "proxy-user" || provider.ProxyPassword != "proxy-pass" {
+		t.Fatalf("proxy config was not normalized: %+v", provider)
+	}
 
 	update := domains.VendorMeta{
-		VendorName:  "deepseek",
-		DisplayName: "DeepSeek API",
-		Type:        constants.ProviderTypeOpenAI,
-		Enabled:     true,
+		VendorName:   "deepseek",
+		DisplayName:  "DeepSeek API",
+		Type:         constants.ProviderTypeOpenAI,
+		ModelMapping: `{"gpt-5.5":"gpt-5.5-upstream"}`,
+		ProxyEnabled: true,
+		ProxyType:    "http",
+		ProxyURL:     "http://127.0.0.1:7890",
+		Enabled:      true,
 	}
 	update.Guid = provider.Guid
 	if err := ProviderServiceApp.Save(&update); err != nil {
 		t.Fatal(err)
+	}
+	if update.Id != provider.Id {
+		t.Fatalf("updated id = %d, want %d", update.Id, provider.Id)
 	}
 
 	reloaded, err := ProviderServiceApp.GetByID(provider.Id)
@@ -73,14 +90,36 @@ func TestProviderSaveNormalizesAndPreservesKeyOnUpdate(t *testing.T) {
 	if reloaded.Key != "sk-provider" {
 		t.Fatalf("key = %q, want preserved key", reloaded.Key)
 	}
+	if reloaded.ModelMapping != `{"gpt-5.5":"gpt-5.5-upstream"}` {
+		t.Fatalf("modelMapping = %q, want saved mapping", reloaded.ModelMapping)
+	}
+	if reloaded.ProxyPassword != "proxy-pass" {
+		t.Fatalf("proxyPassword = %q, want preserved proxy password", reloaded.ProxyPassword)
+	}
 
 	result, err := ProviderServiceApp.List(ProviderListQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	records := result.List.([]ProviderRecord)
-	if len(records) != 1 || !records[0].HasKey {
-		t.Fatalf("records = %+v, want one record with hasKey", records)
+	if len(records) != 1 || !records[0].HasKey || !records[0].HasProxyPassword || records[0].ProxyPassword != "" {
+		t.Fatalf("records = %+v, want one record with hidden key/proxy password metadata", records)
+	}
+}
+
+func TestProviderSaveValidatesProxyURL(t *testing.T) {
+	withProviderTestDB(t)
+
+	provider := domains.VendorMeta{
+		VendorName:   "proxy-required",
+		DisplayName:  "Proxy Required",
+		Type:         constants.ProviderTypeOpenAI,
+		Key:          "sk-provider",
+		ProxyEnabled: true,
+		Enabled:      true,
+	}
+	if err := ProviderServiceApp.Save(&provider); err == nil {
+		t.Fatal("expected proxy url validation error")
 	}
 }
 
@@ -185,6 +224,48 @@ func TestProviderRoutingUsesEnabledKeyedProviders(t *testing.T) {
 	candidates[0].ModelOverride = ""
 	if mapped := ProviderServiceApp.MapModel(&candidates[0], "public"); mapped != "upstream" {
 		t.Fatalf("mapped model = %q, want mapped upstream model", mapped)
+	}
+}
+
+func TestProviderFetchModelsUsesConfiguredHTTPProxy(t *testing.T) {
+	proxyRequests := 0
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyRequests++
+		if !r.URL.IsAbs() {
+			t.Fatalf("proxy request URL = %q, want absolute URL", r.URL.String())
+		}
+		if r.URL.Host != "upstream.example" || r.URL.Path != "/v1/models" {
+			t.Fatalf("proxy target = %s, want http://upstream.example/v1/models", r.URL.String())
+		}
+		if r.Header.Get("Authorization") != "Bearer sk-provider" {
+			t.Fatalf("authorization = %q, want provider key", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-proxy"}]}`))
+	}))
+	defer proxyServer.Close()
+
+	provider := &domains.VendorMeta{
+		VendorName:   "proxied",
+		DisplayName:  "Proxied",
+		Type:         constants.ProviderTypeOpenAI,
+		BaseURL:      "http://upstream.example",
+		Key:          "sk-provider",
+		ProxyEnabled: true,
+		ProxyType:    "http",
+		ProxyURL:     proxyServer.URL,
+		Enabled:      true,
+	}
+
+	models, err := ProviderServiceApp.fetchModels(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxyRequests != 1 {
+		t.Fatalf("proxy requests = %d, want 1", proxyRequests)
+	}
+	if len(models) != 1 || models[0] != "gpt-proxy" {
+		t.Fatalf("models = %+v, want gpt-proxy", models)
 	}
 }
 

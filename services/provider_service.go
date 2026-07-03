@@ -35,7 +35,8 @@ const (
 
 type ProviderRecord struct {
 	domains.VendorMeta
-	HasKey bool `json:"hasKey"`
+	HasKey           bool `json:"hasKey"`
+	HasProxyPassword bool `json:"hasProxyPassword"`
 }
 
 type ProviderListQuery struct {
@@ -73,9 +74,12 @@ func (s *ProviderService) WithDB(db *gorm.DB) *ProviderService {
 }
 
 func ProviderRecordFromDomain(provider domains.VendorMeta) ProviderRecord {
+	hasProxyPassword := strings.TrimSpace(provider.ProxyPassword) != ""
+	provider.ProxyPassword = ""
 	return ProviderRecord{
-		VendorMeta: provider,
-		HasKey:     strings.TrimSpace(provider.Key) != "",
+		VendorMeta:       provider,
+		HasKey:           strings.TrimSpace(provider.Key) != "",
+		HasProxyPassword: hasProxyPassword,
 	}
 }
 
@@ -164,6 +168,7 @@ func (s *ProviderService) Save(provider *domains.VendorMeta) error {
 	provider.ModelMapping = strings.TrimSpace(provider.ModelMapping)
 	provider.HeaderOverride = strings.TrimSpace(provider.HeaderOverride)
 	provider.ParamOverride = strings.TrimSpace(provider.ParamOverride)
+	normalizeProviderProxyConfig(provider)
 	normalizeProviderBalanceConfig(provider)
 	provider.Website = strings.TrimSpace(provider.Website)
 	provider.Remark = strings.TrimSpace(provider.Remark)
@@ -186,6 +191,9 @@ func (s *ProviderService) Save(provider *domains.VendorMeta) error {
 	if err := validateOptionalJSONObject(provider.ParamOverride, "paramOverride"); err != nil {
 		return err
 	}
+	if err := validateProviderProxyConfig(provider); err != nil {
+		return err
+	}
 	var existing *domains.VendorMeta
 	var err error
 	if provider.Guid != "" {
@@ -205,15 +213,21 @@ func (s *ProviderService) Save(provider *domains.VendorMeta) error {
 	provider.Guid = existing.Guid
 	provider.CreateTime = existing.CreateTime
 	provider.Creater = existing.Creater
+	provider.Updater = existing.Updater
 	if provider.Key == "" {
 		provider.Key = existing.Key
 	}
-	updating := *provider
-	updating.Id = 0
-	if err := createWithCrud(&s.CrudService, &updating); err != nil {
+	if provider.ProxyPassword == "" {
+		provider.ProxyPassword = existing.ProxyPassword
+	}
+	provider.Id = existing.Id
+	provider.UpdateTime = time.Now().UnixMilli()
+	if err := s.DB().Save(provider).Error; err != nil {
 		return err
 	}
-	*provider = updating
+	if err := reloadByGuidWithCrud(&s.CrudService, provider); err != nil {
+		return err
+	}
 	return s.setEnabled(provider, requestedEnabled)
 }
 
@@ -478,7 +492,10 @@ func (s *ProviderService) fetchModels(provider *domains.VendorMeta) ([]string, e
 		return nil, err
 	}
 	setupAuthHeaders(req.Header, provider)
-	client := &http.Client{Timeout: 30 * time.Second}
+	client, err := providerHTTPClient(provider, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

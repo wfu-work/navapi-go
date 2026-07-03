@@ -59,6 +59,7 @@ func registerTables() {
 		domains.UsageLog{},
 		domains.Announcement{},
 		domains.ModelMeta{},
+		domains.ModelGroup{},
 		domains.VendorMeta{},
 		domains.Pricing{},
 		domains.Option{},
@@ -73,6 +74,10 @@ func registerTables() {
 		domains.QuotaDate{},
 	); err != nil {
 		global.NAV_LOG.Error("register navapi business tables failed", zap.Error(err))
+		os.Exit(1)
+	}
+	if err := services.ModelServiceApp.EnsureDefaultGroup(); err != nil {
+		global.NAV_LOG.Error("ensure default model group failed", zap.Error(err))
 		os.Exit(1)
 	}
 	global.NAV_LOG.Info("register navapi business tables success")

@@ -46,25 +46,20 @@ func (s *UserQuotaService) Get(userGuid string) (*domains.UserQuota, error) {
 	if userGuid == "" {
 		return nil, errors.New("user guid is required")
 	}
-	accounts, err := s.ListByFields(map[string]any{"userGuid": userGuid})
-	if err != nil {
-		return nil, err
-	}
-	if len(accounts) == 0 {
+	var account domains.UserQuota
+	err := s.DB().Where("user_guid = ?", userGuid).First(&account).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		if err := s.DB().Transaction(func(tx *gorm.DB) error {
 			return s.Ensure(tx, userGuid)
 		}); err != nil {
 			return nil, err
 		}
-		accounts, err = s.ListByFields(map[string]any{"userGuid": userGuid})
+		err = s.DB().Where("user_guid = ?", userGuid).First(&account).Error
 	}
 	if err != nil {
 		return nil, err
 	}
-	if len(accounts) == 0 {
-		return nil, errors.New("user quota not found")
-	}
-	return &accounts[0], nil
+	return &account, nil
 }
 
 func (s *UserQuotaService) List(query dto.PageQuery) (dto.PageResult, error) {

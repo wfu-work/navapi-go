@@ -57,6 +57,30 @@ func (a SubscriptionApi) Plans(c *gin.Context) {
 	response.Ok(result, c)
 }
 
+// GetPlan 订阅套餐详情
+// @Summary 订阅套餐详情
+// @Description 订阅套餐详情
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "ID"
+// @Success 200 {object} response.Response{data=domains.SubscriptionPlan,msg=string}
+// @Router /subscription/plan/{id} [get]
+func (a SubscriptionApi) GetPlan(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	plan, err := services.SubscriptionServiceApp.GetPlan(id)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(plan, c)
+}
+
 // SavePlan 保存订阅套餐
 // @Summary 保存订阅套餐
 // @Description 保存订阅套餐

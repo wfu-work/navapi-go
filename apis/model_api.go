@@ -59,16 +59,71 @@ func (a ModelApi) Upsert(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Accept json
 // @Produce json
-// @Param id path int true "ID"
+// @Param guid path string true "GUID"
 // @Success 200 {object} response.Response{data=bool,msg=string}
-// @Router /models/{id} [delete]
+// @Router /models/{guid} [delete]
 func (a ModelApi) Delete(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
+	if err := services.ModelServiceApp.DeleteMeta(c.Param("guid")); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(true, c)
+}
+
+// Groups 模型分组列表
+// @Summary 模型分组列表
+// @Description 模型分组列表
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Success 200 {object} response.Response{data=[]domains.ModelGroup,msg=string}
+// @Router /models/groups [get]
+func (a ModelApi) Groups(c *gin.Context) {
+	groups, err := services.ModelServiceApp.ListGroups(true)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.ModelServiceApp.DeleteMeta(id); err != nil {
+	response.Ok(groups, c)
+}
+
+// UpsertGroup 保存模型分组
+// @Summary 保存模型分组
+// @Description 保存模型分组
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body domains.ModelGroup true "模型分组对象"
+// @Success 200 {object} response.Response{data=domains.ModelGroup,msg=string}
+// @Router /models/groups [post]
+// @Router /models/groups [put]
+func (a ModelApi) UpsertGroup(c *gin.Context) {
+	var group domains.ModelGroup
+	if err := c.ShouldBindJSON(&group); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	if err := services.ModelServiceApp.UpsertGroup(&group); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(group, c)
+}
+
+// DeleteGroup 删除模型分组
+// @Summary 删除模型分组
+// @Description 删除模型分组
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param guid path string true "GUID"
+// @Success 200 {object} response.Response{data=bool,msg=string}
+// @Router /models/groups/{guid} [delete]
+func (a ModelApi) DeleteGroup(c *gin.Context) {
+	if err := services.ModelServiceApp.DeleteGroup(c.Param("guid")); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

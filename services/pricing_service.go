@@ -79,9 +79,13 @@ func (s *PricingService) Delete(id uint) error {
 }
 
 func (s *PricingService) CalculateQuota(modelName string, group string, usage dto.Usage, fallback int64) int64 {
+	groupMultiplier := ModelServiceApp.GroupQuotaMultiplier(group)
 	pricing := s.match(modelName, group)
 	if pricing == nil {
-		return fallback
+		if groupMultiplier <= 0 {
+			groupMultiplier = 1
+		}
+		return int64(math.Ceil(float64(fallback) * groupMultiplier))
 	}
 	if pricing.QuotaMultiplier <= 0 {
 		pricing.QuotaMultiplier = 1
@@ -107,6 +111,7 @@ func (s *PricingService) CalculateQuota(modelName string, group string, usage dt
 		quota = float64(fallback)
 	}
 	quota *= pricing.QuotaMultiplier
+	quota *= groupMultiplier
 	if quota <= 0 {
 		return fallback
 	}

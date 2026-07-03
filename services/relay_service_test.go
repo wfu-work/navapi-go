@@ -2,10 +2,20 @@ package services
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
+	"navapi-go/constants"
+	"navapi-go/domains"
 	"navapi-go/dto"
+
+	"github.com/gin-gonic/gin"
+	"github.com/wfu-work/nav-common-go-lib/global"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestParseUsageNormalizesOpenAIAndResponsesShapes(t *testing.T) {
@@ -57,6 +67,14 @@ func TestRewriteBodyModelOnlyTouchesJSONModel(t *testing.T) {
 	if string(unchanged) != string(body) {
 		t.Fatalf("multipart body changed: %s", unchanged)
 	}
+
+	rewrittenWithoutContentType := rewriteBodyModel(body, "upstream-model", "")
+	if err := json.Unmarshal(rewrittenWithoutContentType, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["model"] != "upstream-model" {
+		t.Fatalf("model without content type = %v, want upstream-model", payload["model"])
+	}
 }
 
 func TestAttachGeminiKeyPreservesIncomingQuery(t *testing.T) {
@@ -81,4 +99,165 @@ func TestCalculateFinalQuotaKeepsReservedQuotaWhenUsageMissing(t *testing.T) {
 	if quota != 42 {
 		t.Fatalf("quota = %d, want reserved quota 42", quota)
 	}
+}
+
+func TestRelayHTTPForwardsOpenAIChatAndSettlesQuota(t *testing.T) {
+	db := withRelayTestDB(t)
+
+	var upstreamBody map[string]any
+	upstreamRequests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests++
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("path = %s, want /v1/chat/completions", r.URL.Path)
+		}
+		if r.URL.Query().Get("timeout") != "30" {
+			t.Errorf("timeout query = %q, want 30", r.URL.Query().Get("timeout"))
+		}
+		if r.Header.Get("Authorization") != "Bearer sk-provider" {
+			t.Errorf("authorization = %q, want provider bearer", r.Header.Get("Authorization"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Errorf("decode upstream body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Request-Id", "upstream-req-1")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","object":"chat.completion","usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12},"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer upstream.Close()
+
+	provider := domains.VendorMeta{
+		VendorName:   "openai-compatible",
+		DisplayName:  "OpenAI Compatible",
+		Type:         constants.ProviderTypeOpenAI,
+		BaseURL:      upstream.URL,
+		Key:          "sk-provider",
+		Models:       "public-model",
+		ModelMapping: `{"public-model":"upstream-model"}`,
+		Enabled:      true,
+	}
+	if err := db.Create(&provider).Error; err != nil {
+		t.Fatal(err)
+	}
+	token := domains.ApiToken{
+		UserGuid:       "user-1",
+		Name:           "Client Token",
+		Key:            "sk-client",
+		Status:         constants.StatusEnabled,
+		Group:          constants.DefaultGroup,
+		RemainQuota:    1000,
+		UnlimitedQuota: false,
+	}
+	if err := db.Create(&token).Error; err != nil {
+		t.Fatal(err)
+	}
+	account := domains.UserQuota{
+		UserGuid:    "user-1",
+		RemainQuota: 1000,
+		TotalQuota:  1000,
+		Group:       constants.DefaultGroup,
+	}
+	if err := db.Create(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?timeout=30", strings.NewReader(`{"model":"public-model","messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Authorization", "Bearer sk-client")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-Id", "client-req-1")
+	c.Request = req
+
+	result, streamed, err := RelayServiceApp.RelayHTTP(c, &token, RelayEndpoint{
+		UpstreamPath: "/v1/chat/completions",
+		Method:       http.MethodPost,
+		Format:       constants.ProviderTypeOpenAI,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streamed {
+		t.Fatal("streamed = true, want buffered result")
+	}
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", result.StatusCode, string(result.Body))
+	}
+	if upstreamRequests != 1 {
+		t.Fatalf("upstream requests = %d, want 1", upstreamRequests)
+	}
+	if upstreamBody["model"] != "upstream-model" {
+		t.Fatalf("upstream model = %v, want upstream-model", upstreamBody["model"])
+	}
+	if result.Usage != (dto.Usage{PromptTokens: 8, CompletionTokens: 4, TotalTokens: 12}) {
+		t.Fatalf("usage = %+v, want 8/4/12", result.Usage)
+	}
+
+	var storedToken domains.ApiToken
+	if err := db.First(&storedToken, token.Id).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedToken.UsedQuota != 12 || storedToken.RemainQuota != 988 {
+		t.Fatalf("token quota used=%d remain=%d, want 12/988", storedToken.UsedQuota, storedToken.RemainQuota)
+	}
+	var storedAccount domains.UserQuota
+	if err := db.Where("user_guid = ?", "user-1").First(&storedAccount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedAccount.UsedQuota != 12 {
+		t.Fatalf("user used quota = %d, want 12", storedAccount.UsedQuota)
+	}
+	var log domains.UsageLog
+	if err := db.First(&log).Error; err != nil {
+		t.Fatal(err)
+	}
+	if log.Status != "success" || log.Quota != 12 || log.PromptTokens != 8 || log.CompletionTokens != 4 {
+		t.Fatalf("usage log = %+v, want successful 12 quota log", log)
+	}
+	if log.ProviderGuid != provider.Guid || log.TokenGuid != token.Guid || log.UpstreamRequestID != "upstream-req-1" || log.RequestID != "client-req-1" {
+		t.Fatalf("usage log ids = provider:%q token:%q upstream:%q request:%q", log.ProviderGuid, log.TokenGuid, log.UpstreamRequestID, log.RequestID)
+	}
+}
+
+func withRelayTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	previousDB := global.NAV_DB
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(
+		&domains.ApiToken{},
+		&domains.UserQuota{},
+		&domains.VendorMeta{},
+		&domains.UsageLog{},
+		&domains.Option{},
+		&domains.ModelMeta{},
+		&domains.ModelGroup{},
+		&domains.Pricing{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	global.NAV_DB = db
+	OptionServiceApp.mu.Lock()
+	OptionServiceApp.cache = map[string]string{}
+	OptionServiceApp.mu.Unlock()
+	if err := db.Create(&domains.ModelGroup{
+		GroupName:       constants.DefaultGroup,
+		DisplayName:     "Default",
+		QuotaMultiplier: 1,
+		Enabled:         true,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		global.NAV_DB = previousDB
+		OptionServiceApp.mu.Lock()
+		OptionServiceApp.cache = map[string]string{}
+		OptionServiceApp.mu.Unlock()
+	})
+	return db
 }

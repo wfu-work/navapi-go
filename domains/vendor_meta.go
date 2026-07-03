@@ -16,6 +16,11 @@ type VendorMeta struct {
 	ModelMapping         string  `json:"modelMapping" gorm:"column:model_mapping;type:text;comment:JSON 模型映射"`
 	HeaderOverride       string  `json:"headerOverride" gorm:"column:header_override;type:text;comment:JSON 请求头覆盖"`
 	ParamOverride        string  `json:"paramOverride" gorm:"column:param_override;type:text;comment:JSON 参数覆盖"`
+	ProxyEnabled         bool    `json:"proxyEnabled" gorm:"column:proxy_enabled;default:false;comment:启用代理"`
+	ProxyType            string  `json:"proxyType" gorm:"column:proxy_type;size:20;default:http;comment:代理类型"`
+	ProxyURL             string  `json:"proxyUrl" gorm:"column:proxy_url;size:500;comment:代理地址"`
+	ProxyUsername        string  `json:"proxyUsername" gorm:"column:proxy_username;size:120;comment:代理用户名"`
+	ProxyPassword        string  `json:"proxyPassword,omitempty" gorm:"column:proxy_password;type:text;comment:代理密码"`
 	BalanceCheckEnabled  bool    `json:"balanceCheckEnabled" gorm:"column:balance_check_enabled;default:false;comment:启用余额检测"`
 	BalanceTemplate      string  `json:"balanceTemplate" gorm:"column:balance_template;size:40;default:generic;comment:余额查询模板"`
 	BalanceBaseURL       string  `json:"balanceBaseUrl" gorm:"column:balance_base_url;size:500;comment:余额接口基础地址"`
