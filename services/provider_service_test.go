@@ -269,6 +269,35 @@ func TestProviderFetchModelsUsesConfiguredHTTPProxy(t *testing.T) {
 	}
 }
 
+func TestProviderTestConnectionMeasuresBaseURL(t *testing.T) {
+	requests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodHead {
+			t.Fatalf("method = %s, want HEAD", r.Method)
+		}
+		if r.URL.Path != "/v1" {
+			t.Fatalf("path = %s, want /v1", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	result, err := ProviderServiceApp.TestConnection(&domains.VendorMeta{
+		Type:    constants.ProviderTypeOpenAI,
+		BaseURL: upstream.URL + "/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	if !result.OK || result.StatusCode != http.StatusNoContent || result.TargetURL != upstream.URL+"/v1" {
+		t.Fatalf("result = %+v, want successful 204 probe", result)
+	}
+}
+
 func withProviderTestDB(t *testing.T) {
 	t.Helper()
 	previous := global.NAV_DB

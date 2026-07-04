@@ -125,7 +125,7 @@ func TestRelayHTTPForwardsOpenAIChatAndSettlesQuota(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Request-Id", "upstream-req-1")
-		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","object":"chat.completion","usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12},"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","object":"chat.completion","usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12,"prompt_tokens_details":{"cached_tokens":2}},"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 	}))
 	defer upstream.Close()
 
@@ -166,7 +166,7 @@ func TestRelayHTTPForwardsOpenAIChatAndSettlesQuota(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?timeout=30", strings.NewReader(`{"model":"public-model","messages":[{"role":"user","content":"hello"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?timeout=30", strings.NewReader(`{"model":"public-model","reasoning_effort":"medium","messages":[{"role":"user","content":"hello"}]}`))
 	req.Header.Set("Authorization", "Bearer sk-client")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Request-Id", "client-req-1")
@@ -192,7 +192,7 @@ func TestRelayHTTPForwardsOpenAIChatAndSettlesQuota(t *testing.T) {
 	if upstreamBody["model"] != "upstream-model" {
 		t.Fatalf("upstream model = %v, want upstream-model", upstreamBody["model"])
 	}
-	if result.Usage != (dto.Usage{PromptTokens: 8, CompletionTokens: 4, TotalTokens: 12}) {
+	if result.Usage != (dto.Usage{PromptTokens: 8, CompletionTokens: 4, TotalTokens: 12, CachedTokens: 2, PromptTokensDetails: dto.TokenUsageDetails{CachedTokens: 2}}) {
 		t.Fatalf("usage = %+v, want 8/4/12", result.Usage)
 	}
 
@@ -219,6 +219,13 @@ func TestRelayHTTPForwardsOpenAIChatAndSettlesQuota(t *testing.T) {
 	}
 	if log.ProviderGuid != provider.Guid || log.TokenGuid != token.Guid || log.UpstreamRequestID != "upstream-req-1" || log.RequestID != "client-req-1" {
 		t.Fatalf("usage log ids = provider:%q token:%q upstream:%q request:%q", log.ProviderGuid, log.TokenGuid, log.UpstreamRequestID, log.RequestID)
+	}
+	var other map[string]any
+	if err := json.Unmarshal([]byte(log.Other), &other); err != nil {
+		t.Fatalf("usage log other json: %v", err)
+	}
+	if other["reasoningEffort"] != "medium" || other["cachedTokens"] != float64(2) || other["group"] != constants.DefaultGroup {
+		t.Fatalf("usage log other = %+v, want reasoning/cached/group metadata", other)
 	}
 }
 

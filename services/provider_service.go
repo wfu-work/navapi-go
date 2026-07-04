@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -54,6 +55,9 @@ type providerAffinityEntry struct {
 type ProviderTestResult struct {
 	OK           bool     `json:"ok"`
 	ResponseTime int64    `json:"responseTime"`
+	StatusCode   int      `json:"statusCode,omitempty"`
+	Message      string   `json:"message,omitempty"`
+	TargetURL    string   `json:"targetUrl,omitempty"`
 	Models       []string `json:"models,omitempty"`
 }
 
@@ -417,6 +421,47 @@ func (s *ProviderService) Test(guid string) (*ProviderTestResult, error) {
 	return &ProviderTestResult{OK: true, ResponseTime: responseTime, Models: models}, nil
 }
 
+func (s *ProviderService) TestConnection(provider *domains.VendorMeta) (*ProviderTestResult, error) {
+	if provider == nil {
+		return nil, errors.New("provider is required")
+	}
+	provider.Type = strings.TrimSpace(provider.Type)
+	if provider.Type == "" {
+		provider.Type = constants.ProviderTypeOpenAI
+	}
+	provider.BaseURL = strings.TrimSpace(provider.BaseURL)
+	if provider.BaseURL == "" {
+		return nil, errors.New("base url is required")
+	}
+	if strings.TrimSpace(provider.Guid) != "" {
+		if existing, err := s.GetByGUID(provider.Guid); err == nil && existing != nil {
+			if strings.TrimSpace(provider.Key) == "" {
+				provider.Key = existing.Key
+			}
+			if strings.TrimSpace(provider.ProxyPassword) == "" {
+				provider.ProxyPassword = existing.ProxyPassword
+			}
+		}
+	}
+	normalizeProviderProxyConfig(provider)
+	if err := validateProviderProxyConfig(provider); err != nil {
+		return nil, err
+	}
+	targetURL, err := normalizeProviderTestURL(provider.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	client, err := providerHTTPClient(provider, 8*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	result := doProviderProbe(client, http.MethodHead, targetURL)
+	if result.StatusCode == http.StatusMethodNotAllowed {
+		result = doProviderProbe(client, http.MethodGet, targetURL)
+	}
+	return result, nil
+}
+
 func (s *ProviderService) FetchModels(guid string, update bool) ([]string, error) {
 	provider, err := s.GetByGUID(guid)
 	if err != nil {
@@ -434,6 +479,65 @@ func (s *ProviderService) FetchModels(guid string, update bool) ([]string, error
 		}
 	}
 	return models, nil
+}
+
+func normalizeProviderTestURL(rawURL string) (string, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", errors.New("base url is required")
+	}
+	if !strings.Contains(rawURL, "://") {
+		rawURL = "https://" + rawURL
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || strings.TrimSpace(parsed.Host) == "" {
+		return "", errors.New("base url is invalid")
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+	default:
+		return "", errors.New("base url only supports http and https")
+	}
+	if parsed.Path == "" {
+		parsed.Path = "/"
+	}
+	return parsed.String(), nil
+}
+
+func doProviderProbe(client *http.Client, method string, targetURL string) *ProviderTestResult {
+	start := time.Now()
+	req, err := http.NewRequest(method, targetURL, nil)
+	if err != nil {
+		return &ProviderTestResult{OK: false, Message: err.Error(), TargetURL: targetURL}
+	}
+	req.Header.Set("User-Agent", "NavAPI Gateway Probe")
+	if method == http.MethodGet {
+		req.Header.Set("Range", "bytes=0-0")
+	}
+	resp, err := client.Do(req)
+	responseTime := time.Since(start).Milliseconds()
+	if err != nil {
+		return &ProviderTestResult{
+			OK:           false,
+			ResponseTime: responseTime,
+			Message:      err.Error(),
+			TargetURL:    targetURL,
+		}
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	ok := resp.StatusCode < http.StatusInternalServerError
+	message := "connected"
+	if !ok {
+		message = fmt.Sprintf("upstream returned %d", resp.StatusCode)
+	}
+	return &ProviderTestResult{
+		OK:           ok,
+		ResponseTime: responseTime,
+		StatusCode:   resp.StatusCode,
+		Message:      message,
+		TargetURL:    targetURL,
+	}
 }
 
 func (s *ProviderService) NextKey(provider *domains.VendorMeta) string {

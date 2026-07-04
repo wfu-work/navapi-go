@@ -2,8 +2,11 @@ package services
 
 import (
 	"errors"
+	"hash/fnv"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
@@ -53,11 +56,10 @@ func (s *SubscriptionService) ListPlans(query dto.PageQuery, enabledOnly bool) (
 }
 
 func (s *SubscriptionService) SavePlan(plan *domains.SubscriptionPlan) error {
-	if strings.TrimSpace(plan.Name) == "" {
+	plan.Name = strings.TrimSpace(plan.Name)
+	plan.Code = normalizeSubscriptionPlanCode(plan.Code)
+	if plan.Name == "" {
 		return errors.New("plan name is required")
-	}
-	if strings.TrimSpace(plan.Code) == "" {
-		return errors.New("plan code is required")
 	}
 	if plan.Status == 0 {
 		plan.Status = constants.StatusEnabled
@@ -65,21 +67,34 @@ func (s *SubscriptionService) SavePlan(plan *domains.SubscriptionPlan) error {
 	if plan.DurationDays <= 0 {
 		plan.DurationDays = 30
 	}
+	if plan.WeeklyQuota < 0 {
+		plan.WeeklyQuota = 0
+	}
 	if plan.Currency == "" {
 		plan.Currency = "CNY"
 	}
 	if plan.Group == "" {
 		plan.Group = constants.DefaultGroup
 	}
+	var existing *domains.SubscriptionPlan
+	if plan.Id != 0 {
+		var err error
+		existing, err = s.GetById(plan.Id)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return errors.New("subscription plan not found")
+		}
+	}
+	if plan.Code == "" && existing != nil {
+		plan.Code = existing.Code
+	}
+	if plan.Code == "" {
+		plan.Code = subscriptionPlanCodeFromName(plan.Name)
+	}
 	if plan.Id == 0 {
 		return createWithCrud(&s.CrudService, plan)
-	}
-	existing, err := s.GetById(plan.Id)
-	if err != nil {
-		return err
-	}
-	if existing == nil {
-		return errors.New("subscription plan not found")
 	}
 	plan.Guid = existing.Guid
 	plan.CreateTime = existing.CreateTime
@@ -91,6 +106,37 @@ func (s *SubscriptionService) SavePlan(plan *domains.SubscriptionPlan) error {
 	}
 	*plan = updating
 	return nil
+}
+
+func normalizeSubscriptionPlanCode(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return subscriptionPlanCodeFromName(value)
+}
+
+func subscriptionPlanCodeFromName(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	var builder strings.Builder
+	pendingDash := false
+	for _, item := range value {
+		if unicode.IsLetter(item) || unicode.IsDigit(item) {
+			if pendingDash && builder.Len() > 0 {
+				builder.WriteByte('-')
+			}
+			builder.WriteRune(item)
+			pendingDash = false
+			continue
+		}
+		pendingDash = builder.Len() > 0
+	}
+	code := strings.Trim(builder.String(), "-")
+	if code != "" {
+		return code
+	}
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(value))
+	return "plan-" + strconv.FormatUint(uint64(hash.Sum32()), 36)
 }
 
 func (s *SubscriptionService) DeletePlan(id uint) error {
@@ -171,6 +217,7 @@ func (s *SubscriptionService) createSubscriptionWithTx(tx *gorm.DB, userGuid str
 		PlanCode:    plan.Code,
 		PlanName:    plan.Name,
 		Status:      "active",
+		WeeklyQuota: plan.WeeklyQuota,
 		Quota:       plan.Quota,
 		StartAt:     now,
 		EndAt:       now + int64(plan.DurationDays)*86400,

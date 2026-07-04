@@ -155,7 +155,7 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 		status = "error"
 		content = err.Error()
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, status, content, ""))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, status, content, prepared.Body, ""))
 		return nil, err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
@@ -163,7 +163,7 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 		content = string(result.Body)
 		maybeAutoDisableProvider(provider, result)
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, status, content, extractUpstreamRequestID(result)))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result)))
 		return result, nil
 	}
 	if provider != nil {
@@ -174,13 +174,13 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 		if err := s.settleReservedQuota(token, prepared.ReservedQuota, quota); err != nil {
 			status = "error"
 			content = err.Error()
-			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, status, content, extractUpstreamRequestID(result)))
+			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result)))
 			return nil, err
 		}
 	} else {
 		quota = 0
 	}
-	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, prepared.IsStream, status, content, extractUpstreamRequestID(result)))
+	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result)))
 	return result, nil
 }
 
@@ -207,19 +207,19 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	useTime := time.Since(start).Milliseconds()
 	if err != nil {
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error(), ""))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error(), prepared.Body, ""))
 		return err
 	}
 	if result == nil {
 		err = errors.New("upstream response is empty")
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error(), ""))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error(), prepared.Body, ""))
 		return err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
 		maybeAutoDisableProvider(provider, result)
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, "error", string(result.Body), extractUpstreamRequestID(result)))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, "error", string(result.Body), prepared.Body, extractUpstreamRequestID(result)))
 		return nil
 	}
 	if provider != nil {
@@ -231,10 +231,10 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	} else if err := s.settleReservedQuota(token, prepared.ReservedQuota, quota); err != nil {
 		// The stream may already be on the wire, so settlement failures are
 		// recorded in logs instead of trying to replace the response body.
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, "error", err.Error(), extractUpstreamRequestID(result)))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, prepared.IsStream, "error", err.Error(), prepared.Body, extractUpstreamRequestID(result)))
 		return nil
 	}
-	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, prepared.IsStream, "success", "", extractUpstreamRequestID(result)))
+	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, prepared.IsStream, "success", "", prepared.Body, extractUpstreamRequestID(result)))
 	return nil
 }
 
@@ -815,7 +815,7 @@ func extractUpstreamRequestID(result *RelayResult) string {
 	return ""
 }
 
-func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.VendorMeta, modelName string, usage dto.Usage, quota int64, useTimeMs int64, stream bool, status string, content string, upstreamRequestID string) *domains.UsageLog {
+func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.VendorMeta, modelName string, usage dto.Usage, quota int64, useTimeMs int64, stream bool, status string, content string, body []byte, upstreamRequestID string) *domains.UsageLog {
 	if len(content) > 2000 {
 		content = content[:2000]
 	}
@@ -828,6 +828,8 @@ func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.Ve
 			providerName = provider.VendorName
 		}
 	}
+	detail := PricingServiceApp.CalculateQuotaDetail(modelName, token.Group, usage, estimateQuotaFromBody(body))
+	detail.Quota = quota
 	return &domains.UsageLog{
 		UserGuid:          token.UserGuid,
 		TokenGuid:         token.Guid,
@@ -845,5 +847,108 @@ func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.Ve
 		RequestID:         c.GetHeader("X-Request-Id"),
 		UpstreamRequestID: upstreamRequestID,
 		ClientIP:          c.ClientIP(),
+		Other:             buildUsageLogOther(token, body, detail),
+	}
+}
+
+func buildUsageLogOther(token *domains.ApiToken, body []byte, detail QuotaCalculationDetail) string {
+	group := normalizeGroup(token.Group)
+	values := map[string]any{
+		"group":               group,
+		"cachedTokens":        detail.CachedTokens,
+		"billingMode":         detail.BillingMode,
+		"pricingMatched":      detail.PricingMatched,
+		"promptMultiplier":    detail.PromptMultiplier,
+		"outputMultiplier":    detail.OutputMultiplier,
+		"cacheMultiplier":     detail.CacheMultiplier,
+		"quotaMultiplier":     detail.QuotaMultiplier,
+		"groupMultiplier":     detail.GroupMultiplier,
+		"officialPricing":     detail.OfficialPricing,
+		"regularPromptTokens": detail.RegularPromptTokens,
+		"completionTokens":    detail.CompletionTokens,
+		"fallbackQuota":       detail.FallbackQuota,
+		"quota":               detail.Quota,
+	}
+	if detail.OfficialPricing {
+		values["officialProvider"] = detail.OfficialProvider
+		values["officialPriceUnit"] = detail.OfficialPriceUnit
+		values["officialInputPrice"] = detail.OfficialInputPrice
+		values["officialOutputPrice"] = detail.OfficialOutputPrice
+		values["officialCachePrice"] = detail.OfficialCachePrice
+		values["priceUnitTokens"] = detail.PriceUnitTokens
+		values["rawCost"] = detail.RawCost
+		values["finalCost"] = detail.FinalCost
+	}
+	if detail.PricingModel != "" {
+		values["pricingModel"] = detail.PricingModel
+	}
+	if detail.PricingGroup != "" {
+		values["pricingGroup"] = detail.PricingGroup
+	}
+	if reasoningEffort := extractReasoningEffort(body); reasoningEffort != "" {
+		values["reasoningEffort"] = reasoningEffort
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func extractReasoningEffort(body []byte) string {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	if value := firstStringValue(payload, "reasoning_effort", "reasoningEffort"); value != "" {
+		return value
+	}
+	for _, key := range []string{"extra_body", "extraBody", "metadata"} {
+		if nested, ok := payload[key].(map[string]any); ok {
+			if value := firstStringValue(nested, "reasoning_effort", "reasoningEffort"); value != "" {
+				return value
+			}
+		}
+	}
+	for _, key := range []string{"reasoning", "thinking"} {
+		nested, ok := payload[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if value := firstStringValue(nested, "effort", "reasoning_effort", "reasoningEffort"); value != "" {
+			return value
+		}
+		if value := firstStringValue(nested, "budget_tokens", "max_tokens"); value != "" {
+			return "预算 " + value + " tokens"
+		}
+	}
+	return ""
+}
+
+func firstStringValue(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := payload[key]; ok {
+			if text := stringifyLogValue(value); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func stringifyLogValue(value any) string {
+	switch item := value.(type) {
+	case string:
+		return strings.TrimSpace(item)
+	case float64:
+		return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", item), "0"), ".")
+	case int:
+		return fmt.Sprintf("%d", item)
+	case int64:
+		return fmt.Sprintf("%d", item)
+	case json.Number:
+		return item.String()
+	default:
+		return ""
 	}
 }

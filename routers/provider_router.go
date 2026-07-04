@@ -8,6 +8,7 @@ func (r ProviderRouter) InitProviderRouter(router *gin.RouterGroup) {
 	group := router.Group("provider")
 	{
 		group.GET("/list", providerApi.List)
+		group.POST("/test", providerApi.Test)
 		group.GET("/:guid/key", providerApi.Key)
 		group.PUT("/:guid/key", providerApi.SetKey)
 		group.GET("/:guid", providerApi.Get)

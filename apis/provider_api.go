@@ -86,6 +86,30 @@ func (a ProviderApi) Save(c *gin.Context) {
 	response.Ok(services.ProviderRecordFromDomain(provider), c)
 }
 
+// Test 测试上游地址连通性
+// @Summary 测试上游地址连通性
+// @Description 测试上游地址连通性
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body domains.VendorMeta true "上游提供商对象"
+// @Success 200 {object} response.Response{data=services.ProviderTestResult,msg=string}
+// @Router /provider/test [post]
+func (a ProviderApi) Test(c *gin.Context) {
+	var provider domains.VendorMeta
+	if err := c.ShouldBindJSON(&provider); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	result, err := services.ProviderServiceApp.TestConnection(&provider)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(result, c)
+}
+
 // Delete 删除上游提供商
 // @Summary 删除上游提供商
 // @Description 删除上游提供商

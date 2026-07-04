@@ -14,15 +14,28 @@ import (
 
 func TestModelUpsertMetaUpdatesExistingRow(t *testing.T) {
 	withModelTestDB(t)
+	pro := domains.ModelGroup{
+		GroupName:       "pro",
+		DisplayName:     "专业版",
+		QuotaMultiplier: 2,
+		Enabled:         true,
+	}
+	if err := ModelServiceApp.UpsertGroup(&pro); err != nil {
+		t.Fatal(err)
+	}
 
 	model := domains.ModelMeta{
-		ModelName:   "gpt-4o-mini",
-		DisplayName: "GPT-4o Mini",
-		OwnedBy:     "openai",
-		Enabled:     true,
-		Sort:        10,
-		ContextSize: 128000,
-		Remark:      "old",
+		ModelName:           "gpt-4o-mini",
+		DisplayName:         "GPT-4o Mini",
+		OwnedBy:             "openai",
+		OfficialProvider:    "OpenAI",
+		OfficialInputPrice:  0.15,
+		OfficialOutputPrice: 0.6,
+		OfficialCachePrice:  0.075,
+		Enabled:             true,
+		Sort:                10,
+		ContextSize:         128000,
+		Remark:              "old",
 	}
 	if err := ModelServiceApp.UpsertMeta(&model); err != nil {
 		t.Fatal(err)
@@ -37,14 +50,21 @@ func TestModelUpsertMetaUpdatesExistingRow(t *testing.T) {
 	originalGuid := model.Guid
 
 	update := domains.ModelMeta{
-		BaseDataEntity: model.BaseDataEntity,
-		ModelName:      "gpt-4o-mini",
-		DisplayName:    "GPT-4o Mini Updated",
-		OwnedBy:        "navapi",
-		Enabled:        false,
-		Sort:           0,
-		ContextSize:    0,
-		Remark:         "",
+		BaseDataEntity:        model.BaseDataEntity,
+		ModelName:             "gpt-4o-mini",
+		DisplayName:           "GPT-4o Mini Updated",
+		Groups:                []string{"default", "pro"},
+		OwnedBy:               "navapi",
+		OfficialProvider:      "OpenAI",
+		OfficialInputPrice:    0.2,
+		OfficialOutputPrice:   0.7,
+		OfficialCachePrice:    0.1,
+		OfficialPriceUnit:     "",
+		OfficialPricingRemark: "official price",
+		Enabled:               false,
+		Sort:                  0,
+		ContextSize:           0,
+		Remark:                "",
 	}
 	update.Id = 0
 	if err := ModelServiceApp.UpsertMeta(&update); err != nil {
@@ -77,6 +97,15 @@ func TestModelUpsertMetaUpdatesExistingRow(t *testing.T) {
 	}
 	if reloaded.OwnedBy != "navapi" {
 		t.Fatalf("ownedBy = %q, want navapi", reloaded.OwnedBy)
+	}
+	if reloaded.Group != "default,pro" || len(reloaded.Groups) != 2 {
+		t.Fatalf("groups = %q/%+v, want default,pro", reloaded.Group, reloaded.Groups)
+	}
+	if reloaded.OfficialProvider != "OpenAI" || reloaded.OfficialInputPrice != 0.2 || reloaded.OfficialOutputPrice != 0.7 || reloaded.OfficialCachePrice != 0.1 {
+		t.Fatalf("official pricing = provider:%q input:%f output:%f cache:%f", reloaded.OfficialProvider, reloaded.OfficialInputPrice, reloaded.OfficialOutputPrice, reloaded.OfficialCachePrice)
+	}
+	if reloaded.OfficialPriceUnit != "1M tokens" || reloaded.OfficialPricingRemark != "official price" {
+		t.Fatalf("official pricing meta = unit:%q remark:%q", reloaded.OfficialPriceUnit, reloaded.OfficialPricingRemark)
 	}
 	if reloaded.Enabled {
 		t.Fatal("enabled = true, want false")
@@ -125,9 +154,18 @@ func TestTokenCheckModelRequiresMatchingModelGroup(t *testing.T) {
 	if err := ModelServiceApp.UpsertGroup(&pro); err != nil {
 		t.Fatal(err)
 	}
+	vip := domains.ModelGroup{
+		GroupName:       "vip",
+		DisplayName:     "会员版",
+		QuotaMultiplier: 3,
+		Enabled:         true,
+	}
+	if err := ModelServiceApp.UpsertGroup(&vip); err != nil {
+		t.Fatal(err)
+	}
 	model := domains.ModelMeta{
 		ModelName: "gpt-4o",
-		Group:     "pro",
+		Groups:    []string{"pro", "vip"},
 		Enabled:   true,
 	}
 	if err := ModelServiceApp.UpsertMeta(&model); err != nil {
@@ -135,6 +173,9 @@ func TestTokenCheckModelRequiresMatchingModelGroup(t *testing.T) {
 	}
 
 	if err := TokenServiceApp.CheckModel(&domains.ApiToken{Group: "pro"}, "gpt-4o"); err != nil {
+		t.Fatal(err)
+	}
+	if err := TokenServiceApp.CheckModel(&domains.ApiToken{Group: "vip"}, "gpt-4o"); err != nil {
 		t.Fatal(err)
 	}
 	err := TokenServiceApp.CheckModel(&domains.ApiToken{Group: constants.DefaultGroup}, "gpt-4o")

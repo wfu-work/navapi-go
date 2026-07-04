@@ -67,14 +67,17 @@ func (s *ModelService) ListOpenAIModels() (dto.ModelListResponse, error) {
 }
 
 func (s *ModelService) UpsertMeta(meta *domains.ModelMeta) error {
-	meta.Guid = strings.TrimSpace(meta.Guid)
-	meta.Group = normalizeGroup(meta.Group)
-	if err := s.ValidateGroup(meta.Group); err != nil {
+	normalizeModelMeta(meta)
+	if err := s.ValidateModelGroups(meta.Groups); err != nil {
 		return err
 	}
 	if meta.Guid == "" {
 		meta.Id = 0
-		return createWithCrud(&s.CrudService, meta)
+		if err := createWithCrud(&s.CrudService, meta); err != nil {
+			return err
+		}
+		fillModelMetaGroups(meta)
+		return nil
 	}
 	existing, err := s.GetByGuid(meta.Guid)
 	if err != nil {
@@ -92,13 +95,22 @@ func (s *ModelService) UpsertMeta(meta *domains.ModelMeta) error {
 	if err := s.DB().Save(meta).Error; err != nil {
 		return err
 	}
-	return reloadByGuidWithCrud(&s.CrudService, meta)
+	if err := reloadByGuidWithCrud(&s.CrudService, meta); err != nil {
+		return err
+	}
+	fillModelMetaGroups(meta)
+	return nil
 }
 
 func (s *ModelService) ListMeta() ([]domains.ModelMeta, error) {
 	var metas []domains.ModelMeta
-	err := s.DB().Order("sort desc, id desc").Find(&metas).Error
-	return metas, err
+	if err := s.DB().Order("sort desc, id desc").Find(&metas).Error; err != nil {
+		return nil, err
+	}
+	for i := range metas {
+		fillModelMetaGroups(&metas[i])
+	}
+	return metas, nil
 }
 
 func (s *ModelService) DeleteMeta(guid string) error {
@@ -171,8 +183,16 @@ func (s *ModelService) DeleteGroup(guid string) error {
 		return errors.New("default group cannot be deleted")
 	}
 	var count int64
-	if err := s.DB().Model(&domains.ModelMeta{}).Where("group_name = ?", group.GroupName).Count(&count).Error; err != nil {
+	var metas []domains.ModelMeta
+	if err := s.DB().Model(&domains.ModelMeta{}).Find(&metas).Error; err != nil {
 		return err
+	}
+	groupName := normalizeGroup(group.GroupName)
+	for _, meta := range metas {
+		if modelGroupsContain(splitModelGroups(meta.Group), groupName) {
+			count++
+			break
+		}
 	}
 	if count > 0 {
 		return errors.New("model group is in use")
@@ -203,6 +223,9 @@ func (s *ModelService) EnsureDefaultGroup() error {
 
 func (s *ModelService) ValidateGroup(group string) error {
 	group = normalizeGroup(group)
+	if group == "*" {
+		return nil
+	}
 	if err := s.EnsureDefaultGroup(); err != nil {
 		return err
 	}
@@ -215,6 +238,16 @@ func (s *ModelService) ValidateGroup(group string) error {
 	}
 	if !modelGroup.Enabled {
 		return errors.New("model group is disabled")
+	}
+	return nil
+}
+
+func (s *ModelService) ValidateModelGroups(groups []string) error {
+	groups = normalizeModelGroups(groups)
+	for _, group := range groups {
+		if err := s.ValidateGroup(group); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -239,8 +272,7 @@ func (s *ModelService) ModelAllowedForGroup(modelName string, group string) erro
 		if !meta.Enabled {
 			continue
 		}
-		metaGroup := normalizeGroup(meta.Group)
-		if metaGroup == group || metaGroup == "*" {
+		if modelGroupsContain(splitModelGroups(meta.Group), group) {
 			return nil
 		}
 	}
@@ -278,6 +310,71 @@ func normalizeModelGroup(group *domains.ModelGroup) {
 	if group.QuotaMultiplier <= 0 {
 		group.QuotaMultiplier = 1
 	}
+}
+
+func normalizeModelMeta(meta *domains.ModelMeta) {
+	meta.Guid = strings.TrimSpace(meta.Guid)
+	meta.ModelName = strings.TrimSpace(meta.ModelName)
+	meta.DisplayName = strings.TrimSpace(meta.DisplayName)
+	if len(meta.Groups) == 0 {
+		meta.Groups = splitModelGroups(meta.Group)
+	}
+	meta.Groups = normalizeModelGroups(meta.Groups)
+	meta.Group = strings.Join(meta.Groups, ",")
+	meta.OwnedBy = strings.TrimSpace(meta.OwnedBy)
+	meta.OfficialProvider = strings.TrimSpace(meta.OfficialProvider)
+	meta.OfficialPriceUnit = strings.TrimSpace(meta.OfficialPriceUnit)
+	meta.OfficialPricingRemark = strings.TrimSpace(meta.OfficialPricingRemark)
+	meta.Remark = strings.TrimSpace(meta.Remark)
+	if meta.OfficialPriceUnit == "" {
+		meta.OfficialPriceUnit = "1M tokens"
+	}
+	if meta.OfficialInputPrice < 0 {
+		meta.OfficialInputPrice = 0
+	}
+	if meta.OfficialOutputPrice < 0 {
+		meta.OfficialOutputPrice = 0
+	}
+	if meta.OfficialCachePrice < 0 {
+		meta.OfficialCachePrice = 0
+	}
+}
+
+func fillModelMetaGroups(meta *domains.ModelMeta) {
+	meta.FillGroups()
+	if len(meta.Groups) == 0 {
+		meta.Groups = []string{constants.DefaultGroup}
+		meta.Group = constants.DefaultGroup
+	}
+}
+
+func splitModelGroups(raw string) []string {
+	return normalizeModelGroups(splitCSV(raw))
+}
+
+func normalizeModelGroups(groups []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(groups))
+	for _, group := range groups {
+		group = normalizeGroup(group)
+		if group == "*" {
+			return []string{"*"}
+		}
+		if _, ok := seen[group]; ok {
+			continue
+		}
+		seen[group] = struct{}{}
+		out = append(out, group)
+	}
+	if len(out) == 0 {
+		return []string{constants.DefaultGroup}
+	}
+	return out
+}
+
+func modelGroupsContain(groups []string, group string) bool {
+	group = normalizeGroup(group)
+	return containsString(groups, "*") || containsString(groups, group)
 }
 
 func (s *ModelService) UpsertVendor(meta *domains.VendorMeta) error {

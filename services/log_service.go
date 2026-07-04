@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"sort"
 	"time"
 
@@ -84,7 +85,82 @@ func (s *LogService) List(userGuid string, query dto.PageQuery) (dto.PageResult,
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&logs).Error; err != nil {
 		return dto.PageResult{}, err
 	}
+	s.enrichOfficialCosts(logs)
 	return dto.PageResult{List: logs, Total: total, Page: query.Page, Size: query.Size}, nil
+}
+
+func (s *LogService) enrichOfficialCosts(logs []domains.UsageLog) {
+	for i := range logs {
+		extra := usageLogExtraMap(logs[i].Other)
+		if _, ok := extra["finalCost"]; ok {
+			continue
+		}
+		group := normalizeGroup(extraText(extra["group"]))
+		usage := dto.Usage{
+			PromptTokens:     logs[i].PromptTokens,
+			CompletionTokens: logs[i].CompletionTokens,
+			CachedTokens:     int64(extraNumber(extra["cachedTokens"])),
+		}
+		detail := PricingServiceApp.WithDB(s.DB()).OfficialCostDetail(logs[i].ModelName, group, usage)
+		if !detail.OfficialPricing {
+			continue
+		}
+		extra["billingMode"] = detail.BillingMode
+		extra["pricingMatched"] = detail.PricingMatched
+		extra["pricingModel"] = detail.PricingModel
+		extra["pricingGroup"] = detail.PricingGroup
+		extra["groupMultiplier"] = detail.GroupMultiplier
+		extra["regularPromptTokens"] = detail.RegularPromptTokens
+		extra["cachedTokens"] = detail.CachedTokens
+		extra["completionTokens"] = detail.CompletionTokens
+		extra["officialPricing"] = detail.OfficialPricing
+		extra["officialProvider"] = detail.OfficialProvider
+		extra["officialPriceUnit"] = detail.OfficialPriceUnit
+		extra["officialInputPrice"] = detail.OfficialInputPrice
+		extra["officialOutputPrice"] = detail.OfficialOutputPrice
+		extra["officialCachePrice"] = detail.OfficialCachePrice
+		extra["priceUnitTokens"] = detail.PriceUnitTokens
+		extra["rawCost"] = detail.RawCost
+		extra["finalCost"] = detail.FinalCost
+		data, err := json.Marshal(extra)
+		if err == nil {
+			logs[i].Other = string(data)
+		}
+	}
+}
+
+func usageLogExtraMap(raw string) map[string]any {
+	extra := map[string]any{}
+	if raw == "" {
+		return extra
+	}
+	_ = json.Unmarshal([]byte(raw), &extra)
+	return extra
+}
+
+func extraText(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
+func extraNumber(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case json.Number:
+		number, _ := typed.Float64()
+		return number
+	default:
+		return 0
+	}
 }
 
 func (s *LogService) Stats(userGuid string) (map[string]any, error) {
