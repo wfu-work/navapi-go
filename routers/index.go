@@ -23,6 +23,7 @@ type RouterGroup struct {
 	AnnouncementRouter
 	SubscriptionRouter
 	PaymentRouter
+	WalletRouter
 	InvitationRouter
 	CheckinRouter
 	ClientsRouter
@@ -47,6 +48,7 @@ var (
 	announcementApi       = apis.ApiGroupApp.AnnouncementApi
 	subscriptionApi       = apis.ApiGroupApp.SubscriptionApi
 	paymentApi            = apis.ApiGroupApp.PaymentApi
+	walletApi             = apis.ApiGroupApp.WalletApi
 	invitationApi         = apis.ApiGroupApp.InvitationApi
 	checkinApi            = apis.ApiGroupApp.CheckinApi
 	messageEmailConfigApi = apis.ApiGroupApp.MessageEmailConfigApi
@@ -58,6 +60,7 @@ var (
 )
 
 func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gin.RouterGroup) {
+	r.InitRelayRouter(publicGroup)
 	r.InitGatewayRouter(privateGroup)
 	r.InitTokenRouter(privateGroup)
 	r.InitLogRouter(privateGroup)
@@ -71,6 +74,7 @@ func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gi
 	r.InitAnnouncementRouter(privateGroup, publicGroup)
 	r.InitSubscriptionRouter(privateGroup, publicGroup)
 	r.InitPaymentRouter(privateGroup, publicGroup)
+	r.InitWalletRouter(privateGroup)
 	r.InitInvitationRouter(privateGroup)
 	r.InitCheckinRouter(privateGroup)
 	r.InitClientsRouter(privateGroup)

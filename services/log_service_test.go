@@ -24,7 +24,7 @@ func TestLogServiceScopesSelfQueriesByUserGuid(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := LogServiceApp.List("user-a", vos.PageQuery{Page: 1, Size: 10})
+	result, err := LogServiceApp.List("user-a", UsageLogQuery{PageQuery: vos.PageQuery{Page: 1, Size: 10}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +50,41 @@ func TestLogServiceScopesSelfQueriesByUserGuid(t *testing.T) {
 	}
 	if len(daily) != 1 || daily[0].Requests != 1 || daily[0].Quota != 10 || daily[0].UserGuid != "user-a" {
 		t.Fatalf("daily = %+v, want user-a day only", daily)
+	}
+}
+
+func TestLogServiceFiltersUsageLogsByStatusAndTime(t *testing.T) {
+	db := withLogTestDB(t)
+	base := time.Date(2026, 7, 5, 10, 0, 0, 0, time.UTC).UnixMilli()
+	logs := []domains.UsageLog{
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: base - 3600_000}, UserGuid: "user-a", TokenName: "A", ModelName: "gpt-4o", Status: "success", Quota: 10, UseTimeMs: 100},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: base}, UserGuid: "user-a", TokenName: "A", ModelName: "gpt-4o", Status: "error", Quota: 20, UseTimeMs: 200},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: base + 3600_000}, UserGuid: "user-a", TokenName: "A", ModelName: "gpt-4o", Status: "success", Quota: 30, UseTimeMs: 300},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: base}, UserGuid: "user-b", TokenName: "B", ModelName: "gpt-4o", Status: "success", Quota: 40, UseTimeMs: 400},
+	}
+	if err := db.Create(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	query := UsageLogQuery{
+		PageQuery: vos.PageQuery{Page: 1, Size: 10},
+		Status:    "success",
+		StartTime: base - 1,
+		EndTime:   base + 3600_000 + 1,
+	}
+	result, err := LogServiceApp.List("user-a", query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 {
+		t.Fatalf("total = %d, want only matching user-a success log in time range", result.Total)
+	}
+	stats, err := LogServiceApp.Stats("user-a", query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats["totalRequests"] != int64(1) || stats["quota"] != int64(30) || stats["avgUseTimeMs"] != int64(300) {
+		t.Fatalf("stats = %+v, want filtered success log totals", stats)
 	}
 }
 

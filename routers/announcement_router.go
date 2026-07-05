@@ -10,6 +10,7 @@ func (r AnnouncementRouter) InitAnnouncementRouter(privateGroup *gin.RouterGroup
 
 	group := privateGroup.Group("announcement")
 	{
+		group.GET("/client/list", announcementApi.ClientList)
 		group.GET("/list", announcementApi.List)
 		group.GET("/:id", announcementApi.Get)
 		group.POST("/", announcementApi.Save)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"navapi-go/domains"
 	"navapi-go/utils"
+	"navapi-go/webs"
 	"os"
 
 	"navapi-go/routers"
@@ -33,14 +34,18 @@ func Init() {
 	sysInit.OnRouterInit(func(publicGroup *gin.RouterGroup, privateGroup *gin.RouterGroup) {
 		routers.RouterGroupApp.InitRouters(publicGroup, privateGroup)
 	})
-	sysInit.OnWebInit(func(engine *gin.Engine) {
-		routers.RouterGroupApp.InitRelayRouter(engine)
+	sysInit.OnWebInit(func(router *gin.Engine) {
+		_ = webs.InitStatic(router)
 	})
 	sysInit.OnOtherInit(func() {
 		_ = services.OptionServiceApp.Load()
 		services.MessageTemplateServiceApp.SeedDefaults()
 		if err := services.ModelServiceApp.EnsureDefaultGroup(); err != nil {
 			global.NAV_LOG.Error("ensure default model group failed", zap.Error(err))
+			os.Exit(1)
+		}
+		if err := services.PermissionSeedServiceApp.Ensure(); err != nil {
+			global.NAV_LOG.Error("ensure navapi permissions failed", zap.Error(err))
 			os.Exit(1)
 		}
 	})

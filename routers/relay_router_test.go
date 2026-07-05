@@ -29,7 +29,9 @@ func TestRelayRouterRegistersRootAndAPIPrefixedV1(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	RouterGroupApp.InitRelayRouter(engine)
+	publicGroup := engine.Group("/api")
+	privateGroup := engine.Group("/api")
+	RouterGroupApp.InitRouters(publicGroup, privateGroup)
 
 	for _, path := range []string{"/v1/models", "/api/v1/models"} {
 		recorder := httptest.NewRecorder()

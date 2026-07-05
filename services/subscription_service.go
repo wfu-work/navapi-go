@@ -166,7 +166,16 @@ func (s *SubscriptionService) ListUserSubscriptions(userGuid string, query vos.P
 		db = db.Where("user_guid = ?", userGuid)
 	}
 	if query.Q != "" {
-		db = db.Where("plan_name LIKE ? OR plan_code LIKE ? OR status LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+		keyword := "%" + query.Q + "%"
+		db = db.Where(
+			"user_guid LIKE ? OR plan_name LIKE ? OR plan_code LIKE ? OR status LIKE ? OR payment_guid LIKE ? OR remark LIKE ?",
+			keyword,
+			keyword,
+			keyword,
+			keyword,
+			keyword,
+			keyword,
+		)
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err

@@ -68,30 +68,60 @@ type UsageSummary struct {
 	ByUser           []UsageDimensionStat `json:"byUser,omitempty"`
 }
 
+type UsageLogQuery struct {
+	vos.PageQuery
+	Status    string `form:"status" json:"status"`
+	StartTime int64  `form:"startTime" json:"startTime"`
+	EndTime   int64  `form:"endTime" json:"endTime"`
+}
+
 func (s *LogService) Create(log *domains.UsageLog) error {
 	return createWithCrud(&s.CrudService, log)
 }
 
-func (s *LogService) List(userGuid string, query vos.PageQuery) (vos.PageResult, error) {
-	query.Normalize()
+func (s *LogService) List(userGuid string, query UsageLogQuery) (vos.PageResult, error) {
+	query.PageQuery.Normalize()
 	var logs []domains.UsageLog
 	var total int64
 	db := s.DB().Model(&domains.UsageLog{})
+	db = applyUsageLogFilters(db, userGuid, query)
+	if err := db.Count(&total).Error; err != nil {
+		return vos.PageResult{}, err
+	}
+	if err := db.Order("id desc").Offset(query.PageQuery.Offset()).Limit(query.Size).Find(&logs).Error; err != nil {
+		return vos.PageResult{}, err
+	}
+	s.enrichOfficialCosts(logs)
+	return vos.PageResult{List: logs, Total: total, Page: query.Page, Size: query.Size}, nil
+}
+
+func applyUsageLogFilters(db *gorm.DB, userGuid string, query UsageLogQuery) *gorm.DB {
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
 	if query.Q != "" {
 		keyword := "%" + query.Q + "%"
-		db = db.Where("model_name LIKE ? OR token_name LIKE ? OR channel_name LIKE ? OR user_guid LIKE ? OR username LIKE ?", keyword, keyword, keyword, keyword, keyword)
+		db = db.Where("model_name LIKE ? OR token_name LIKE ? OR channel_name LIKE ? OR user_guid LIKE ? OR username LIKE ? OR request_id LIKE ? OR upstream_request_id LIKE ?", keyword, keyword, keyword, keyword, keyword, keyword, keyword)
 	}
-	if err := db.Count(&total).Error; err != nil {
-		return vos.PageResult{}, err
+	if query.Status != "" {
+		db = db.Where("status = ?", query.Status)
 	}
-	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&logs).Error; err != nil {
-		return vos.PageResult{}, err
+	startTime := normalizeUsageQueryTime(query.StartTime)
+	endTime := normalizeUsageQueryTime(query.EndTime)
+	if startTime > 0 {
+		db = db.Where("create_time >= ?", startTime)
 	}
-	s.enrichOfficialCosts(logs)
-	return vos.PageResult{List: logs, Total: total, Page: query.Page, Size: query.Size}, nil
+	if endTime > 0 {
+		db = db.Where("create_time <= ?", endTime)
+	}
+	return db
+}
+
+func normalizeUsageQueryTime(value int64) int64 {
+	if value > 0 && value < 1_000_000_000_000 {
+		return value * 1000
+	}
+	return value
 }
 
 func (s *LogService) enrichOfficialCosts(logs []domains.UsageLog) {
@@ -168,9 +198,11 @@ func extraNumber(value any) float64 {
 	}
 }
 
-func (s *LogService) Stats(userGuid string) (map[string]any, error) {
+func (s *LogService) Stats(userGuid string, filters ...UsageLogQuery) (map[string]any, error) {
 	db := s.DB().Model(&domains.UsageLog{})
-	if userGuid != "" {
+	if len(filters) > 0 {
+		db = applyUsageLogFilters(db, userGuid, filters[0])
+	} else if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
 	var totalRequests int64
@@ -181,13 +213,18 @@ func (s *LogService) Stats(userGuid string) (map[string]any, error) {
 		Quota            int64
 		PromptTokens     int64
 		CompletionTokens int64
+		UseTimeMs        int64
 	}
-	if err := db.Select("COALESCE(SUM(quota),0) as quota, COALESCE(SUM(prompt_tokens),0) as prompt_tokens, COALESCE(SUM(completion_tokens),0) as completion_tokens").Scan(&sums).Error; err != nil {
+	if err := db.Select("COALESCE(SUM(quota),0) as quota, COALESCE(SUM(prompt_tokens),0) as prompt_tokens, COALESCE(SUM(completion_tokens),0) as completion_tokens, COALESCE(SUM(use_time_ms),0) as use_time_ms").Scan(&sums).Error; err != nil {
 		return nil, err
 	}
 	var successCount int64
 	if err := db.Session(&gorm.Session{}).Where("status = ?", "success").Count(&successCount).Error; err != nil {
 		return nil, err
+	}
+	avgUseTimeMs := int64(0)
+	if totalRequests > 0 {
+		avgUseTimeMs = sums.UseTimeMs / totalRequests
 	}
 	return map[string]any{
 		"totalRequests":    totalRequests,
@@ -196,6 +233,8 @@ func (s *LogService) Stats(userGuid string) (map[string]any, error) {
 		"quota":            sums.Quota,
 		"promptTokens":     sums.PromptTokens,
 		"completionTokens": sums.CompletionTokens,
+		"tokens":           sums.PromptTokens + sums.CompletionTokens,
+		"avgUseTimeMs":     avgUseTimeMs,
 	}, nil
 }
 

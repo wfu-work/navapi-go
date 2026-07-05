@@ -5,7 +5,6 @@ import (
 
 	"navapi-go/middlewares"
 	"navapi-go/services"
-	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
@@ -26,7 +25,7 @@ type UsageLogApi struct{}
 // @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /usage/list [get]
 func (a UsageLogApi) List(c *gin.Context) {
-	var query vos.PageQuery
+	var query services.UsageLogQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.LogServiceApp.List("", query)
 	if err != nil {
@@ -49,7 +48,7 @@ func (a UsageLogApi) List(c *gin.Context) {
 // @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /usage/self/list [get]
 func (a UsageLogApi) Self(c *gin.Context) {
-	var query vos.PageQuery
+	var query services.UsageLogQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.LogServiceApp.List(middlewares.ScopedUserGuid(c), query)
 	if err != nil {
@@ -69,7 +68,9 @@ func (a UsageLogApi) Self(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /usage/stat [get]
 func (a UsageLogApi) Stats(c *gin.Context) {
-	stats, err := services.LogServiceApp.Stats("")
+	var query services.UsageLogQuery
+	_ = c.ShouldBindQuery(&query)
+	stats, err := services.LogServiceApp.Stats("", query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -87,7 +88,9 @@ func (a UsageLogApi) Stats(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /usage/self/stat [get]
 func (a UsageLogApi) SelfStats(c *gin.Context) {
-	stats, err := services.LogServiceApp.Stats(middlewares.ScopedUserGuid(c))
+	var query services.UsageLogQuery
+	_ = c.ShouldBindQuery(&query)
+	stats, err := services.LogServiceApp.Stats(middlewares.ScopedUserGuid(c), query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

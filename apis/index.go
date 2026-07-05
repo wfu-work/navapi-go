@@ -19,6 +19,7 @@ type ApiGroup struct {
 	AnnouncementApi
 	SubscriptionApi
 	PaymentApi
+	WalletApi
 	InvitationApi
 	CheckinApi
 	MessageEmailConfigApi

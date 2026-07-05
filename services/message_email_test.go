@@ -418,6 +418,13 @@ func TestClientRegisterConsumesEmailCodeAndCreatesUser(t *testing.T) {
 	if role.Code != commonUserRoleCode {
 		t.Fatalf("role = %+v, want common user role", role)
 	}
+	var tokenCount int64
+	if err := db.Model(&domains.ApiToken{}).Where("user_guid = ?", result.UserGuid).Count(&tokenCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tokenCount != 0 {
+		t.Fatalf("token count = %d, want no default api token", tokenCount)
+	}
 }
 
 func TestClientRegisterRejectsAdminUsername(t *testing.T) {
@@ -562,6 +569,7 @@ func withMessageTestDB(t *testing.T) *gorm.DB {
 		&domains.MessageTemplate{},
 		&domains.MessageSendRecord{},
 		&domains.MessageEmailCode{},
+		&domains.ApiToken{},
 		&domains.UserQuota{},
 		&domains.UserWallet{},
 		&domains.UserWalletRecord{},

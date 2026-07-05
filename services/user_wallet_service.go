@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"navapi-go/domains"
+	"navapi-go/vos"
 
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
@@ -96,6 +97,28 @@ func (s *UserWalletService) Get(userGuid string) (*domains.UserWallet, error) {
 	}
 	normalizeWallet(&wallet)
 	return &wallet, nil
+}
+
+func (s *UserWalletService) ListRecords(userGuid string, query vos.PageQuery) (vos.PageResult, error) {
+	userGuid = strings.TrimSpace(userGuid)
+	if userGuid == "" {
+		return vos.PageResult{}, errors.New("user guid is required")
+	}
+	query.Normalize()
+	var records []domains.UserWalletRecord
+	var total int64
+	db := s.RecordCrud.DB().Model(&domains.UserWalletRecord{}).Where("user_guid = ?", userGuid)
+	if query.Q != "" {
+		keyword := "%" + query.Q + "%"
+		db = db.Where("type LIKE ? OR source LIKE ? OR title LIKE ? OR order_no LIKE ? OR remark LIKE ?", keyword, keyword, keyword, keyword, keyword)
+	}
+	if err := db.Count(&total).Error; err != nil {
+		return vos.PageResult{}, err
+	}
+	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&records).Error; err != nil {
+		return vos.PageResult{}, err
+	}
+	return vos.PageResult{List: records, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *UserWalletService) RecordIncome(tx *gorm.DB, input WalletRecordInput) error {

@@ -92,6 +92,32 @@ func (a AnnouncementApi) List(c *gin.Context) {
 	response.Ok(result, c)
 }
 
+// ClientList 客户端公告列表
+// @Summary 客户端公告列表
+// @Description 返回当前生效且启用的客户端公告
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param page query int false "页码"
+// @Param size query int false "每页数量"
+// @Param q query string false "关键词"
+// @Param level query string false "级别"
+// @Param popup query bool false "是否弹窗"
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
+// @Router /announcement/client/list [get]
+func (a AnnouncementApi) ClientList(c *gin.Context) {
+	var query services.AnnouncementQuery
+	_ = c.ShouldBindQuery(&query)
+	result, err := services.AnnouncementServiceApp.List(query, true)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	result.List = announcementResponses(result.List)
+	response.Ok(result, c)
+}
+
 // Get 公告详情
 // @Summary 公告详情
 // @Description 公告详情

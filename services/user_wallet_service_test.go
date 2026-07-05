@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"navapi-go/domains"
+	"navapi-go/vos"
 
 	"github.com/wfu-work/nav-common-go-lib/global"
 	"gorm.io/driver/sqlite"
@@ -84,6 +85,42 @@ func TestUserWalletRecordsIncomeAndConsume(t *testing.T) {
 	}
 	if records[2].Type != domains.WalletRecordTypeConsume || records[2].QuotaDelta != -40 || records[2].BalanceAfter != 90 {
 		t.Fatalf("consume record = %+v, want -40 balance 90", records[2])
+	}
+}
+
+func TestUserWalletListRecordsScopesByUserGuid(t *testing.T) {
+	withUserWalletTestDB(t)
+	err := UserWalletServiceApp.DB().Transaction(func(tx *gorm.DB) error {
+		if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
+			UserGuid: "user-a",
+			Type:     domains.WalletRecordTypeRecharge,
+			Source:   domains.WalletSourcePayment,
+			Title:    "充值",
+			Quota:    100,
+		}); err != nil {
+			return err
+		}
+		return UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
+			UserGuid: "user-b",
+			Type:     domains.WalletRecordTypeReward,
+			Source:   domains.WalletSourceInvitation,
+			Title:    "奖励",
+			Quota:    50,
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := UserWalletServiceApp.ListRecords("user-a", vos.PageQuery{Page: 1, Size: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 {
+		t.Fatalf("total = %d, want user-a record only", result.Total)
+	}
+	records := result.List.([]domains.UserWalletRecord)
+	if len(records) != 1 || records[0].UserGuid != "user-a" {
+		t.Fatalf("records = %+v, want user-a only", records)
 	}
 }
 
