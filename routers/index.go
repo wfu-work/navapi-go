@@ -26,25 +26,31 @@ type RouterGroup struct {
 	InvitationRouter
 	CheckinRouter
 	ClientsRouter
+	MessageRouter
+	RegisterRouter
 }
 
 var (
-	gatewayApi      = apis.ApiGroupApp.GatewayApi
-	tokenApi        = apis.ApiGroupApp.TokenApi
-	logApi          = apis.ApiGroupApp.UsageLogApi
-	modelApi        = apis.ApiGroupApp.ModelApi
-	relayApi        = apis.ApiGroupApp.RelayApi
-	optionApi       = apis.ApiGroupApp.OptionApi
-	taskApi         = apis.ApiGroupApp.TaskApi
-	redemptionApi   = apis.ApiGroupApp.RedemptionApi
-	pricingApi      = apis.ApiGroupApp.PricingApi
-	quotaApi        = apis.ApiGroupApp.QuotaApi
-	providerApi     = apis.ApiGroupApp.ProviderApi
-	announcementApi = apis.ApiGroupApp.AnnouncementApi
-	subscriptionApi = apis.ApiGroupApp.SubscriptionApi
-	paymentApi      = apis.ApiGroupApp.PaymentApi
-	invitationApi   = apis.ApiGroupApp.InvitationApi
-	checkinApi      = apis.ApiGroupApp.CheckinApi
+	gatewayApi            = apis.ApiGroupApp.GatewayApi
+	tokenApi              = apis.ApiGroupApp.TokenApi
+	logApi                = apis.ApiGroupApp.UsageLogApi
+	modelApi              = apis.ApiGroupApp.ModelApi
+	relayApi              = apis.ApiGroupApp.RelayApi
+	optionApi             = apis.ApiGroupApp.OptionApi
+	taskApi               = apis.ApiGroupApp.TaskApi
+	redemptionApi         = apis.ApiGroupApp.RedemptionApi
+	pricingApi            = apis.ApiGroupApp.PricingApi
+	quotaApi              = apis.ApiGroupApp.QuotaApi
+	providerApi           = apis.ApiGroupApp.ProviderApi
+	announcementApi       = apis.ApiGroupApp.AnnouncementApi
+	subscriptionApi       = apis.ApiGroupApp.SubscriptionApi
+	paymentApi            = apis.ApiGroupApp.PaymentApi
+	invitationApi         = apis.ApiGroupApp.InvitationApi
+	checkinApi            = apis.ApiGroupApp.CheckinApi
+	messageEmailConfigApi = apis.ApiGroupApp.MessageEmailConfigApi
+	messageTemplateApi    = apis.ApiGroupApp.MessageTemplateApi
+	messageSendRecordApi  = apis.ApiGroupApp.MessageSendRecordApi
+	registerApi           = apis.ApiGroupApp.RegisterApi
 )
 
 func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gin.RouterGroup) {
@@ -64,4 +70,6 @@ func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gi
 	r.InitInvitationRouter(privateGroup)
 	r.InitCheckinRouter(privateGroup)
 	r.InitClientsRouter(privateGroup)
+	r.InitMessageRouter(privateGroup)
+	r.InitRegisterRouter(publicGroup)
 }

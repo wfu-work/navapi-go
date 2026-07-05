@@ -36,6 +36,7 @@ func Init() {
 	})
 	sysInit.OnOtherInit(func() {
 		_ = services.OptionServiceApp.Load()
+		services.MessageTemplateServiceApp.SeedDefaults()
 	})
 	sysInit.OnScheInit(func(timers commonScheduleds.Timer, options []cron.Option) {
 		_, _ = timers.AddTaskByFunc("navapi", "@every 1m", func() {
@@ -72,6 +73,10 @@ func registerTables() {
 		domains.InvitationRelation{},
 		domains.CheckinRecord{},
 		domains.QuotaDate{},
+		domains.MessageEmailConfig{},
+		domains.MessageTemplate{},
+		domains.MessageSendRecord{},
+		domains.MessageEmailCode{},
 	); err != nil {
 		global.NAV_LOG.Error("register navapi business tables failed", zap.Error(err))
 		os.Exit(1)

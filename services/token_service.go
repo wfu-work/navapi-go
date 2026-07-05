@@ -43,6 +43,10 @@ type TokenUsage struct {
 }
 
 func (s *TokenService) Create(token *domains.ApiToken) error {
+	token.UserGuid = strings.TrimSpace(token.UserGuid)
+	if token.UserGuid == "" {
+		return errors.New("user guid is required")
+	}
 	key, err := randomHex(24)
 	if err != nil {
 		return err
@@ -285,11 +289,13 @@ func (s *TokenService) Usage(userGuid string) ([]TokenUsage, error) {
 			PromptTokens     int64
 			CompletionTokens int64
 		}
-		if err := s.DB().Model(&domains.UsageLog{}).
+		db := s.DB().Model(&domains.UsageLog{}).
 			Select("token_guid, COUNT(*) AS total_requests, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END),0) AS success_requests, COALESCE(SUM(quota),0) AS quota, COALESCE(SUM(prompt_tokens),0) AS prompt_tokens, COALESCE(SUM(completion_tokens),0) AS completion_tokens").
-			Where("token_guid IN ?", tokenGuids).
-			Group("token_guid").
-			Scan(&rows).Error; err != nil {
+			Where("token_guid IN ?", tokenGuids)
+		if userGuid != "" {
+			db = db.Where("user_guid = ?", userGuid)
+		}
+		if err := db.Group("token_guid").Scan(&rows).Error; err != nil {
 			return nil, err
 		}
 		for _, row := range rows {

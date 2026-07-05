@@ -19,4 +19,8 @@ type ApiGroup struct {
 	PaymentApi
 	InvitationApi
 	CheckinApi
+	MessageEmailConfigApi
+	MessageTemplateApi
+	MessageSendRecordApi
+	RegisterApi
 }

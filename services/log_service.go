@@ -36,6 +36,10 @@ type DailyUsageData struct {
 
 type UsageDimensionStat struct {
 	Name             string `json:"name"`
+	UserGuid         string `json:"userGuid,omitempty"`
+	TokenGuid        string `json:"tokenGuid,omitempty"`
+	ProviderGuid     string `json:"providerGuid,omitempty"`
+	ModelName        string `json:"modelName,omitempty"`
 	Requests         int64  `json:"requests"`
 	Success          int64  `json:"success"`
 	Errors           int64  `json:"errors"`
@@ -77,7 +81,8 @@ func (s *LogService) List(userGuid string, query dto.PageQuery) (dto.PageResult,
 		db = db.Where("user_guid = ?", userGuid)
 	}
 	if query.Q != "" {
-		db = db.Where("model_name LIKE ? OR token_name LIKE ? OR channel_name LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+		keyword := "%" + query.Q + "%"
+		db = db.Where("model_name LIKE ? OR token_name LIKE ? OR channel_name LIKE ? OR user_guid LIKE ? OR username LIKE ?", keyword, keyword, keyword, keyword, keyword)
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return dto.PageResult{}, err
@@ -276,11 +281,20 @@ func (s *LogService) UsageSummary(userGuid string, days int, topN int) (UsageSum
 	byUser := map[string]*UsageDimensionStat{}
 	for _, log := range logs {
 		applyUsageStat(&summary, log)
-		applyDimensionStat(byModel, fallbackName(log.ModelName, "unknown"), log)
-		applyDimensionStat(byProvider, fallbackName(log.ProviderName, log.ProviderGuid), log)
-		applyDimensionStat(byToken, fallbackName(log.TokenName, log.TokenGuid), log)
+		applyDimensionStat(byModel, fallbackName(log.ModelName, "unknown"), fallbackName(log.ModelName, "unknown"), log, func(item *UsageDimensionStat, log domains.UsageLog) {
+			fillUsageDimensionText(&item.ModelName, log.ModelName)
+		})
+		applyDimensionStat(byProvider, fallbackName(log.ProviderGuid, log.ProviderName), fallbackName(log.ProviderName, log.ProviderGuid), log, func(item *UsageDimensionStat, log domains.UsageLog) {
+			fillUsageDimensionText(&item.ProviderGuid, log.ProviderGuid)
+		})
+		applyDimensionStat(byToken, fallbackName(log.TokenGuid, log.TokenName), fallbackName(log.TokenName, log.TokenGuid), log, func(item *UsageDimensionStat, log domains.UsageLog) {
+			fillUsageDimensionText(&item.TokenGuid, log.TokenGuid)
+			fillUsageDimensionText(&item.UserGuid, log.UserGuid)
+		})
 		if userGuid == "" {
-			applyDimensionStat(byUser, fallbackName(log.Username, log.UserGuid), log)
+			applyDimensionStat(byUser, fallbackName(log.UserGuid, log.Username), fallbackName(log.Username, log.UserGuid), log, func(item *UsageDimensionStat, log domains.UsageLog) {
+				fillUsageDimensionText(&item.UserGuid, log.UserGuid)
+			})
 		}
 	}
 	if summary.TotalRequests > 0 {
@@ -312,11 +326,16 @@ func applyUsageStat(summary *UsageSummary, log domains.UsageLog) {
 	summary.AvgUseTimeMs += log.UseTimeMs
 }
 
-func applyDimensionStat(items map[string]*UsageDimensionStat, name string, log domains.UsageLog) {
-	item := items[name]
+func applyDimensionStat(items map[string]*UsageDimensionStat, key string, name string, log domains.UsageLog, decorate func(*UsageDimensionStat, domains.UsageLog)) {
+	key = fallbackName(key, name)
+	name = fallbackName(name, key)
+	item := items[key]
 	if item == nil {
 		item = &UsageDimensionStat{Name: name}
-		items[name] = item
+		items[key] = item
+	}
+	if decorate != nil {
+		decorate(item, log)
 	}
 	item.Requests++
 	if log.Status == "success" {
@@ -329,6 +348,12 @@ func applyDimensionStat(items map[string]*UsageDimensionStat, name string, log d
 	item.CompletionTokens += log.CompletionTokens
 	item.Tokens += log.PromptTokens + log.CompletionTokens
 	item.AvgUseTimeMs += log.UseTimeMs
+}
+
+func fillUsageDimensionText(target *string, value string) {
+	if *target == "" && value != "" {
+		*target = value
+	}
 }
 
 func topUsageStats(items map[string]*UsageDimensionStat, limit int) []UsageDimensionStat {
