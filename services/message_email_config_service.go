@@ -7,7 +7,7 @@ import (
 
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 
 	commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
@@ -41,7 +41,7 @@ func (s *MessageEmailConfigService) WithDB(db *gorm.DB) *MessageEmailConfigServi
 	return &cloned
 }
 
-func (s *MessageEmailConfigService) List(query dto.PageQuery, status string) (dto.PageResult, error) {
+func (s *MessageEmailConfigService) List(query vos.PageQuery, status string) (vos.PageResult, error) {
 	query.Normalize()
 	var rows []domains.MessageEmailConfig
 	var total int64
@@ -53,17 +53,17 @@ func (s *MessageEmailConfigService) List(query dto.PageQuery, status string) (dt
 	if strings.TrimSpace(status) != "" {
 		value, err := strconv.Atoi(strings.TrimSpace(status))
 		if err != nil {
-			return dto.PageResult{}, err
+			return vos.PageResult{}, err
 		}
 		db = db.Where("status = ?", value)
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("is_default desc, id desc").Offset(query.Offset()).Limit(query.Size).Find(&rows).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: rows, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: rows, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *MessageEmailConfigService) Save(req SaveMessageEmailConfigRequest) (*domains.MessageEmailConfig, error) {

@@ -1,0 +1,27 @@
+<p style="margin:0 0 16px;">你好 {{username}}，</p>
+<p style="margin:0 0 16px;">你的 {{appName}} 账户余额不足，后续 API 调用可能会受到影响。请及时充值或调整用量，避免线上请求失败。</p>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;margin:18px 0;border-collapse:separate;border-spacing:0;border:1px solid #fecaca;border-radius:10px;background:#fff7ed;overflow:hidden;">
+  <tr>
+    <td style="padding:16px 18px;border-bottom:1px solid #fed7aa;">
+      <div style="font-size:13px;line-height:1.5;color:#9a3412;font-weight:700;">当前余额</div>
+      <div style="margin-top:4px;font-size:28px;line-height:1.25;color:#c2410c;font-weight:800;">{{remainQuota}} {{quotaUnit}}</div>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:14px 18px;">
+      <div style="font-size:14px;line-height:1.8;color:#475569;">预警阈值：<strong style="color:#0f172a;">{{threshold}} {{quotaUnit}}</strong></div>
+      <div style="font-size:14px;line-height:1.8;color:#475569;">累计额度：<strong style="color:#0f172a;">{{totalQuota}} {{quotaUnit}}</strong></div>
+      <div style="font-size:14px;line-height:1.8;color:#475569;">已用额度：<strong style="color:#0f172a;">{{usedQuota}} {{quotaUnit}}</strong></div>
+    </td>
+  </tr>
+</table>
+
+<p style="margin:0 0 16px;color:#475569;">触发原因：{{reason}}</p>
+
+<p style="margin:20px 0;">
+  <a href="{{rechargeUrl}}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#2563eb;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;">前往充值</a>
+  <a href="{{consoleUrl}}" style="display:inline-block;margin-left:10px;padding:9px 15px;border-radius:8px;border:1px solid #cbd5e1;color:#334155;text-decoration:none;font-size:14px;font-weight:700;">查看控制台</a>
+</p>
+
+<p style="margin:0;color:#64748b;font-size:13px;line-height:1.8;">账户邮箱：{{email}}<br>用户 GUID：{{userGuid}}<br>提醒时间：{{time}}</p>

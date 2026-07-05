@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 
 	commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 	"github.com/wfu-work/nav-common-go-lib/global"
@@ -24,7 +24,7 @@ func TestLogServiceScopesSelfQueriesByUserGuid(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := LogServiceApp.List("user-a", dto.PageQuery{Page: 1, Size: 10})
+	result, err := LogServiceApp.List("user-a", vos.PageQuery{Page: 1, Size: 10})
 	if err != nil {
 		t.Fatal(err)
 	}

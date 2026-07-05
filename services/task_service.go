@@ -6,7 +6,7 @@ import (
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 )
 
 type TaskService struct {
@@ -73,7 +73,7 @@ func (s *TaskService) Delete(taskID string, userGuid string) error {
 	return db.Delete(&domains.Task{}).Error
 }
 
-func (s *TaskService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *TaskService) List(userGuid string, query vos.PageQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var tasks []domains.Task
 	var total int64
@@ -85,12 +85,12 @@ func (s *TaskService) List(userGuid string, query dto.PageQuery) (dto.PageResult
 		db = db.Where("task_id LIKE ? OR model_name LIKE ? OR action LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&tasks).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: tasks, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: tasks, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *TaskService) Get(taskID string, userGuid string) (*domains.Task, error) {

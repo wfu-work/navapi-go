@@ -18,7 +18,7 @@ import (
 
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -45,7 +45,7 @@ type RelayResult struct {
 	StatusCode int
 	Header     http.Header
 	Body       []byte
-	Usage      dto.Usage
+	Usage      vos.Usage
 }
 
 type preparedRelay struct {
@@ -69,6 +69,15 @@ func (e *RelayHTTPError) Error() string {
 // once, reserves quota before touching upstream, then chooses buffered or live
 // streaming delivery based on the original client payload.
 func (s RelayService) RelayHTTP(c *gin.Context, token *domains.ApiToken, endpoint RelayEndpoint) (*RelayResult, bool, error) {
+	if token == nil {
+		return nil, false, &RelayHTTPError{StatusCode: http.StatusUnauthorized, Message: "token is invalid"}
+	}
+	release, err := UserConcurrencyServiceApp.Acquire(token.UserGuid)
+	if err != nil {
+		return nil, false, err
+	}
+	defer release()
+
 	prepared, err := s.prepareRelay(c, token, endpoint)
 	if err != nil {
 		return nil, false, err
@@ -115,7 +124,7 @@ func (s RelayService) prepareRelay(c *gin.Context, token *domains.ApiToken, endp
 	candidates = ProviderServiceApp.ApplyAffinity(token.Guid, modelName, candidates)
 	reservedQuota := int64(0)
 	if !endpoint.NoBilling {
-		reservedQuota = PricingServiceApp.CalculateQuota(modelName, token.Group, dto.Usage{}, estimateQuotaFromBody(body))
+		reservedQuota = PricingServiceApp.CalculateQuota(modelName, token.Group, vos.Usage{}, estimateQuotaFromBody(body))
 		if err := s.reserveQuota(token, reservedQuota); err != nil {
 			return nil, err
 		}
@@ -155,7 +164,7 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 		status = "error"
 		content = err.Error()
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, status, content, prepared.Body, ""))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, prepared.IsStream, status, content, prepared.Body, ""))
 		return nil, err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
@@ -207,13 +216,13 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	useTime := time.Since(start).Milliseconds()
 	if err != nil {
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error(), prepared.Body, ""))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error(), prepared.Body, ""))
 		return err
 	}
 	if result == nil {
 		err = errors.New("upstream response is empty")
 		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, dto.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error(), prepared.Body, ""))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, prepared.IsStream, "error", err.Error(), prepared.Body, ""))
 		return err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
@@ -473,6 +482,9 @@ func (s RelayService) reserveQuota(token *domains.ApiToken, quota int64) error {
 		return nil
 	}
 	return TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
+		if err := UserWalletServiceApp.ensureFromQuota(tx, token.UserGuid); err != nil {
+			return err
+		}
 		if err := TokenServiceApp.Consume(tx, token.Id, quota); err != nil {
 			return err
 		}
@@ -514,7 +526,16 @@ func (s RelayService) settleReservedQuota(token *domains.ApiToken, reservedQuota
 				return err
 			}
 		}
-		return nil
+		return UserWalletServiceApp.RecordConsume(tx, WalletRecordInput{
+			UserGuid:     token.UserGuid,
+			Type:         domains.WalletRecordTypeConsume,
+			Source:       domains.WalletSourceRelay,
+			Title:        "API 消费",
+			Quota:        finalQuota,
+			RequestCount: 1,
+			TokenID:      token.Id,
+			TokenGuid:    token.Guid,
+		})
 	})
 }
 
@@ -606,7 +627,7 @@ func extractModelName(c *gin.Context, endpoint RelayEndpoint, body []byte) strin
 	if strings.Contains(contentType, "multipart/form-data") {
 		return extractMultipartModel(contentType, body)
 	}
-	var req dto.ModelRequest
+	var req vos.ModelRequest
 	if err := json.Unmarshal(body, &req); err == nil {
 		if req.Model != "" {
 			return req.Model
@@ -668,22 +689,22 @@ func rewriteBodyModel(body []byte, model string, contentType string) []byte {
 	return next
 }
 
-func parseUsage(body []byte, contentType string) dto.Usage {
+func parseUsage(body []byte, contentType string) vos.Usage {
 	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 		if usage := parseStreamUsage(body); usage.TotalTokens > 0 || usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
 			return usage
 		}
 	}
 	var payload struct {
-		Usage dto.Usage `json:"usage"`
+		Usage vos.Usage `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return dto.Usage{}
+		return vos.Usage{}
 	}
 	return normalizeUsage(payload.Usage)
 }
 
-func normalizeUsage(usage dto.Usage) dto.Usage {
+func normalizeUsage(usage vos.Usage) vos.Usage {
 	if usage.PromptTokens == 0 {
 		usage.PromptTokens = usage.InputTokens
 	}
@@ -699,8 +720,8 @@ func normalizeUsage(usage dto.Usage) dto.Usage {
 	return usage
 }
 
-func parseStreamUsage(body []byte) dto.Usage {
-	var usage dto.Usage
+func parseStreamUsage(body []byte) vos.Usage {
+	var usage vos.Usage
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data:") {
@@ -720,7 +741,7 @@ func parseStreamUsage(body []byte) dto.Usage {
 
 type streamUsageTracker struct {
 	pending string
-	usage   dto.Usage
+	usage   vos.Usage
 }
 
 // Write incrementally parses SSE "data:" lines while bytes are being proxied.
@@ -740,7 +761,7 @@ func (t *streamUsageTracker) Write(chunk []byte) {
 	}
 }
 
-func (t *streamUsageTracker) Finish() dto.Usage {
+func (t *streamUsageTracker) Finish() vos.Usage {
 	if strings.TrimSpace(t.pending) != "" {
 		t.consumeLine(t.pending)
 	}
@@ -762,14 +783,14 @@ func (t *streamUsageTracker) consumeLine(line string) {
 	}
 }
 
-func calculateQuota(usage dto.Usage) int64 {
+func calculateQuota(usage vos.Usage) int64 {
 	if usage.TotalTokens > 0 {
 		return usage.TotalTokens
 	}
 	return usage.PromptTokens + usage.CompletionTokens
 }
 
-func calculateFinalQuota(modelName string, group string, usage dto.Usage, body []byte, reservedQuota int64) int64 {
+func calculateFinalQuota(modelName string, group string, usage vos.Usage, body []byte, reservedQuota int64) int64 {
 	quota := calculateQuota(usage)
 	if quota > 0 {
 		return PricingServiceApp.CalculateQuota(modelName, group, usage, quota)
@@ -796,7 +817,7 @@ func estimateQuotaFromBody(body []byte) int64 {
 }
 
 func isStreamRequest(body []byte) bool {
-	var req dto.ModelRequest
+	var req vos.ModelRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		return false
 	}
@@ -815,7 +836,7 @@ func extractUpstreamRequestID(result *RelayResult) string {
 	return ""
 }
 
-func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.VendorMeta, modelName string, usage dto.Usage, quota int64, useTimeMs int64, stream bool, status string, content string, body []byte, upstreamRequestID string) *domains.UsageLog {
+func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.VendorMeta, modelName string, usage vos.Usage, quota int64, useTimeMs int64, stream bool, status string, content string, body []byte, upstreamRequestID string) *domains.UsageLog {
 	if len(content) > 2000 {
 		content = content[:2000]
 	}

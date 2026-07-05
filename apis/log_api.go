@@ -3,9 +3,9 @@ package apis
 import (
 	"strconv"
 
-	"navapi-go/authz"
-	"navapi-go/dto"
+	"navapi-go/middlewares"
 	"navapi-go/services"
+	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
@@ -23,10 +23,10 @@ type UsageLogApi struct{}
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /usage/list [get]
 func (a UsageLogApi) List(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.LogServiceApp.List("", query)
 	if err != nil {
@@ -46,12 +46,12 @@ func (a UsageLogApi) List(c *gin.Context) {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /usage/self/list [get]
 func (a UsageLogApi) Self(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.LogServiceApp.List(authz.ScopedUserGuid(c), query)
+	result, err := services.LogServiceApp.List(middlewares.ScopedUserGuid(c), query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -87,7 +87,7 @@ func (a UsageLogApi) Stats(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /usage/self/stat [get]
 func (a UsageLogApi) SelfStats(c *gin.Context) {
-	stats, err := services.LogServiceApp.Stats(authz.ScopedUserGuid(c))
+	stats, err := services.LogServiceApp.Stats(middlewares.ScopedUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -125,7 +125,7 @@ func (a UsageLogApi) Data(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /data/self/list [get]
 func (a UsageLogApi) SelfData(c *gin.Context) {
-	data, err := services.LogServiceApp.DailyData(authz.ScopedUserGuid(c), parseDaysQuery(c))
+	data, err := services.LogServiceApp.DailyData(middlewares.ScopedUserGuid(c), parseDaysQuery(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -165,7 +165,7 @@ func (a UsageLogApi) UsageSummary(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /usage/self/summary [get]
 func (a UsageLogApi) SelfUsageSummary(c *gin.Context) {
-	summary, err := services.LogServiceApp.UsageSummary(authz.ScopedUserGuid(c), parseDaysQuery(c), parseTopQuery(c))
+	summary, err := services.LogServiceApp.UsageSummary(middlewares.ScopedUserGuid(c), parseDaysQuery(c), parseTopQuery(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

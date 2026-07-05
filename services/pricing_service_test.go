@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 
 	"github.com/wfu-work/nav-common-go-lib/global"
 	"gorm.io/driver/sqlite"
@@ -37,7 +37,7 @@ func TestPricingCalculateQuotaAppliesModelGroupMultiplier(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	quota := PricingServiceApp.CalculateQuota("gpt-4o", "pro", dto.Usage{
+	quota := PricingServiceApp.CalculateQuota("gpt-4o", "pro", vos.Usage{
 		PromptTokens:     10,
 		CompletionTokens: 10,
 	}, 20)
@@ -73,7 +73,7 @@ func TestPricingOfficialCostAppliesModelGroupMultiplier(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	detail := PricingServiceApp.OfficialCostDetail("gpt-5.4-mini", "pro", dto.Usage{
+	detail := PricingServiceApp.OfficialCostDetail("gpt-5.4-mini", "pro", vos.Usage{
 		PromptTokens:     26,
 		CompletionTokens: 24,
 		CachedTokens:     6,

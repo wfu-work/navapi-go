@@ -1,4 +1,4 @@
-package authz
+package middlewares
 
 import (
 	"testing"

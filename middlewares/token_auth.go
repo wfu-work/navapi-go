@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"navapi-go/constants"
-	"navapi-go/dto"
 	"navapi-go/services"
+	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
 )
@@ -20,7 +20,7 @@ func TokenAuth() gin.HandlerFunc {
 		tokenValue := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 		token, err := services.TokenServiceApp.Validate(tokenValue, c.ClientIP())
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, dto.OpenAIErrorResponse{Error: dto.OpenAIError{
+			c.JSON(http.StatusUnauthorized, vos.OpenAIErrorResponse{Error: vos.OpenAIError{
 				Message: err.Error(),
 				Type:    "invalid_request_error",
 				Code:    "invalid_api_key",

@@ -41,10 +41,38 @@ func (s *MessageEmailCodeService) Save(code domains.MessageEmailCode) (*domains.
 	}
 	code.CreateTime = now
 	code.UpdateTime = now
+	if err := s.ExpirePending(code.Email, code.Scene); err != nil {
+		return nil, err
+	}
 	if err := s.DB().Create(&code).Error; err != nil {
 		return nil, err
 	}
 	return &code, nil
+}
+
+func (s *MessageEmailCodeService) HasRecentPending(email string, scene string, since int64) (bool, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	scene = strings.TrimSpace(scene)
+	if email == "" || scene == "" {
+		return false, nil
+	}
+	var count int64
+	err := s.DB().Model(&domains.MessageEmailCode{}).
+		Where("email = ? AND scene = ? AND status = ? AND create_time >= ?", email, scene, MessageEmailCodePending, since).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (s *MessageEmailCodeService) ExpirePending(email string, scene string) error {
+	email = strings.ToLower(strings.TrimSpace(email))
+	scene = strings.TrimSpace(scene)
+	if email == "" || scene == "" {
+		return nil
+	}
+	now := nowMilli()
+	return s.DB().Model(&domains.MessageEmailCode{}).
+		Where("email = ? AND scene = ? AND status = ?", email, scene, MessageEmailCodePending).
+		Updates(map[string]any{"status": MessageEmailCodeExpired, "update_time": now}).Error
 }
 
 func (s *MessageEmailCodeService) Verify(email string, scene string, code string) error {

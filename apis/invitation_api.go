@@ -2,8 +2,8 @@ package apis
 
 import (
 	"navapi-go/domains"
-	"navapi-go/dto"
 	"navapi-go/services"
+	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
@@ -76,10 +76,10 @@ func (a InvitationApi) MyCode(c *gin.Context) {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /invitation/self/codes [get]
 func (a InvitationApi) MyCodes(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.InvitationServiceApp.ListCodes(utils.GetUserGuid(c), query)
 	if err != nil {
@@ -99,10 +99,10 @@ func (a InvitationApi) MyCodes(c *gin.Context) {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /invitation/codes [get]
 func (a InvitationApi) Codes(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.InvitationServiceApp.ListCodes("", query)
 	if err != nil {
@@ -217,10 +217,10 @@ func (a InvitationApi) Accept(c *gin.Context) {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /invitation/relations [get]
 func (a InvitationApi) Relations(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.InvitationServiceApp.ListRelations("", query)
 	if err != nil {
@@ -240,10 +240,10 @@ func (a InvitationApi) Relations(c *gin.Context) {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /invitation/self/relations [get]
 func (a InvitationApi) MyRelations(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.InvitationServiceApp.ListRelations(utils.GetUserGuid(c), query)
 	if err != nil {

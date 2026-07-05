@@ -1,4 +1,4 @@
-package dto
+package vos
 
 type PageQuery struct {
 	Page int    `form:"page" json:"page"`

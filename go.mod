@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/robfig/cron/v3 v3.0.1
+	github.com/wechatpay-apiv3/wechatpay-go v0.2.21
 	github.com/wfu-work/nav-common-go-lib v0.0.0-20260620025348-2e815ed3d262
 	go.uber.org/zap v1.28.0
 	go.yaml.in/yaml/v3 v3.0.4

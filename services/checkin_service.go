@@ -7,7 +7,7 @@ import (
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 )
 
 type CheckinService struct {
@@ -69,7 +69,7 @@ func (s *CheckinService) SetSettings(settings CheckinSettings) error {
 	return nil
 }
 
-func (s *CheckinService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *CheckinService) List(userGuid string, query vos.PageQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var records []domains.CheckinRecord
 	var total int64
@@ -81,12 +81,12 @@ func (s *CheckinService) List(userGuid string, query dto.PageQuery) (dto.PageRes
 		db = db.Where("user_guid LIKE ? OR date LIKE ? OR status LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("date desc, id desc").Offset(query.Offset()).Limit(query.Size).Find(&records).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: records, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: records, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *CheckinService) Status(userGuid string) (CheckinStatus, error) {
@@ -159,7 +159,22 @@ func (s *CheckinService) Checkin(userGuid string, req CheckinRequest) (*domains.
 			return err
 		}
 		if reward > 0 {
+			if err := UserWalletServiceApp.ensureFromQuota(tx, userGuid); err != nil {
+				return err
+			}
 			if err := UserQuotaServiceApp.Recharge(tx, userGuid, req.TokenID, reward); err != nil {
+				return err
+			}
+			if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
+				UserGuid:    userGuid,
+				Type:        domains.WalletRecordTypeReward,
+				Source:      domains.WalletSourceCheckin,
+				Title:       "签到奖励",
+				Quota:       reward,
+				TokenID:     req.TokenID,
+				RelatedGuid: record.Guid,
+				Remark:      record.Date,
+			}); err != nil {
 				return err
 			}
 		}

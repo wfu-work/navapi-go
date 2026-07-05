@@ -1,8 +1,8 @@
 package apis
 
 import (
-	"navapi-go/dto"
 	"navapi-go/services"
+	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
@@ -11,7 +11,7 @@ import (
 type MessageSendRecordApi struct{}
 
 func (a MessageSendRecordApi) List(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.MessageSendRecordServiceApp.List(query, c.Query("sendStatus"), c.Query("templateCode"))
 	if err != nil {

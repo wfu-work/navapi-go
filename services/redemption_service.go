@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm/clause"
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 )
 
 type RedemptionService struct {
@@ -97,7 +97,7 @@ func (s *RedemptionService) Get(id uint) (*domains.Redemption, error) {
 	return redemption, nil
 }
 
-func (s *RedemptionService) List(query dto.PageQuery) (dto.PageResult, error) {
+func (s *RedemptionService) List(query vos.PageQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var redemptions []domains.Redemption
 	var total int64
@@ -106,12 +106,12 @@ func (s *RedemptionService) List(query dto.PageQuery) (dto.PageResult, error) {
 		db = db.Where("code LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&redemptions).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: redemptions, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: redemptions, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *RedemptionService) BatchCreate(req RedemptionBatchRequest) ([]domains.Redemption, error) {

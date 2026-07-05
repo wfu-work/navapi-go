@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"mime"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"navapi-go/utils"
 
 	"github.com/google/uuid"
+	commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 )
 
 const emailDialTimeout = 10 * time.Second
@@ -59,10 +61,12 @@ type SendRegisterCodeInput struct {
 }
 
 type DebugEmailConfigInput struct {
-	ConfigGuid     string `json:"-"`
-	RecipientEmail string `json:"recipientEmail"`
-	Subject        string `json:"subject"`
-	Content        string `json:"content"`
+	ConfigGuid     string            `json:"-"`
+	RecipientEmail string            `json:"recipientEmail"`
+	TemplateCode   string            `json:"templateCode"`
+	Subject        string            `json:"subject"`
+	Content        string            `json:"content"`
+	Values         map[string]string `json:"values"`
 }
 
 var emailSendHTML = func(s EmailService, config domains.MessageEmailConfig, recipients []string, subject string, htmlBody string) error {
@@ -134,6 +138,35 @@ func (s EmailService) SendRegisterCode(input SendRegisterCodeInput) (*EmailSendR
 	if email == "" {
 		return nil, errors.New("email required")
 	}
+	if !isValidEmailAddress(email) {
+		return nil, errors.New("email invalid")
+	}
+	settings := RegisterSettingServiceApp.Get()
+	if !settings.Enabled {
+		return nil, errors.New("register is disabled")
+	}
+	if exists, err := clientEmailExists(email); err != nil {
+		return nil, err
+	} else if exists {
+		return nil, errors.New("email already exists")
+	}
+	if recent, err := MessageEmailCodeServiceApp.HasRecentPending(email, MessageSceneRegister, nowMilli()-int64(RegisterEmailCodeCooldown/time.Millisecond)); err != nil {
+		return nil, err
+	} else if recent {
+		return nil, fmt.Errorf("email code sent too frequently, retry after %s", RegisterEmailCodeCooldown.Round(time.Second))
+	}
+	if ok, retryAfter := RateLimitServiceApp.Allow("register-email:"+email, RegisterEmailCodeHourlyLimit, time.Hour); !ok {
+		return nil, fmt.Errorf("too many email code requests, retry after %s", retryAfter.Round(time.Second))
+	}
+	clientIP := strings.TrimSpace(input.ClientIP)
+	if clientIP != "" {
+		if ok, retryAfter := RateLimitServiceApp.Allow("register-ip:"+clientIP, RegisterEmailCodeHourlyLimit*3, time.Hour); !ok {
+			return nil, fmt.Errorf("too many email code requests, retry after %s", retryAfter.Round(time.Second))
+		}
+	}
+	if err := MessageEmailCodeServiceApp.ExpireOld(); err != nil {
+		return nil, err
+	}
 	code, err := randomNumericCode(6)
 	if err != nil {
 		return nil, err
@@ -166,12 +199,25 @@ func (s EmailService) SendRegisterCode(input SendRegisterCodeInput) (*EmailSendR
 		Status:         MessageEmailCodePending,
 		ExpiresTime:    nowMilli() + int64(RegisterEmailCodeTTL/time.Millisecond),
 		SendRecordGuid: sendRecordGuid,
-		ClientIP:       strings.TrimSpace(input.ClientIP),
+		ClientIP:       clientIP,
 	})
 	if err != nil {
 		return result, err
 	}
 	return result, nil
+}
+
+func isValidEmailAddress(email string) bool {
+	addr, err := mail.ParseAddress(email)
+	return err == nil && strings.EqualFold(addr.Address, email)
+}
+
+func clientEmailExists(email string) (bool, error) {
+	var count int64
+	err := MessageEmailCodeServiceApp.DB().Model(&commonDomains.SysUser{}).
+		Where("LOWER(email) = ?", strings.ToLower(strings.TrimSpace(email))).
+		Count(&count).Error
+	return count > 0, err
 }
 
 func (s EmailService) DebugEmailConfig(input DebugEmailConfigInput) (*EmailSendResult, error) {
@@ -190,22 +236,49 @@ func (s EmailService) DebugEmailConfig(input DebugEmailConfigInput) (*EmailSendR
 	if len(recipients) == 0 {
 		return nil, errors.New("recipientEmail required")
 	}
+	templateCode := strings.TrimSpace(input.TemplateCode)
+	templateName := "邮件配置调试"
 	subject := strings.TrimSpace(input.Subject)
+	content := strings.TrimSpace(input.Content)
+	variables := defaultEmailTemplateVariables(templateCode)
+	variables["email"] = recipients[0]
+	for key, value := range input.Values {
+		variables[key] = value
+	}
+	recordTemplateCode := TemplateCodeEmailConfigTest
+	if templateCode != "" {
+		tpl, err := MessageTemplateServiceApp.GetEnabledEmail(templateCode)
+		if err != nil {
+			return nil, err
+		}
+		recordTemplateCode = tpl.Code
+		templateName = tpl.Name
+		if subject == "" {
+			subject = tpl.Subject
+		}
+		if content == "" {
+			content = tpl.Content
+		}
+	}
 	if subject == "" {
 		subject = "Nav API 邮件配置测试"
 	}
-	content := strings.TrimSpace(input.Content)
+	subject = strings.TrimSpace(utils.RenderTemplateText(subject, variables))
+	if subject == "" {
+		subject = templateName
+	}
 	if content == "" {
 		content = "这是一封 Nav API 邮件配置调试邮件。如果你收到这封邮件，说明当前 SMTP 配置可以正常发送邮件。"
 	}
+	content = utils.RenderTemplateText(content, variables)
 	htmlBody := utils.DefaultEmailHTML(utils.EmailHTMLInput{
-		Title:   "邮件配置调试",
+		Title:   templateName,
 		Subject: subject,
 		Content: content,
 	})
 	return s.sendWithConfig(config, emailRenderedInput{
-		TemplateCode: TemplateCodeEmailConfigTest,
-		TemplateName: "邮件配置调试",
+		TemplateCode: recordTemplateCode,
+		TemplateName: templateName,
 		Subject:      subject,
 		HTML:         htmlBody,
 		Recipients:   recipients,
@@ -532,11 +605,49 @@ func formatEmailAddress(name string, email string) string {
 func defaultEmailTemplateVariables(code string) map[string]string {
 	now := time.Now()
 	values := map[string]string{
-		"appName":    "Nav API",
-		"email":      "user@example.com",
-		"code":       "123456",
-		"ttlMinutes": strconv.Itoa(int(RegisterEmailCodeTTL.Minutes())),
-		"time":       now.Format("2006-01-02 15:04:05"),
+		"appName":              "Nav API",
+		"username":             "示例用户",
+		"email":                "user@example.com",
+		"userGuid":             "user-guid-demo",
+		"code":                 "123456",
+		"ttlMinutes":           strconv.Itoa(int(RegisterEmailCodeTTL.Minutes())),
+		"balance":              "120",
+		"remainQuota":          "120",
+		"usedQuota":            "880",
+		"totalQuota":           "1000",
+		"threshold":            "200",
+		"quotaUnit":            "额度",
+		"reason":               "账户可用余额低于预警阈值",
+		"rechargeUrl":          "https://navapi.local/console/wallet",
+		"consoleUrl":           "https://navapi.local/console",
+		"billDate":             now.Format("2006-01-02"),
+		"startTime":            now.Format("2006-01-02") + " 00:00:00",
+		"endTime":              now.Format("2006-01-02") + " 23:59:59",
+		"requestCount":         "128",
+		"successCount":         "126",
+		"failedCount":          "2",
+		"successRate":          "98.44%",
+		"promptTokens":         "1,280,000",
+		"completionTokens":     "320,000",
+		"totalTokens":          "1,600,000",
+		"usageQuota":           "860",
+		"topModel":             "gpt-4o-mini",
+		"usageDetails":         `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;"><tr><td style="padding:8px;border-bottom:1px solid #e2e8f0;">gpt-4o-mini</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:right;">86 次</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:right;">520 额度</td></tr><tr><td style="padding:8px;">text-embedding-3-small</td><td style="padding:8px;text-align:right;">42 次</td><td style="padding:8px;text-align:right;">340 额度</td></tr></table>`,
+		"adminName":            "管理员",
+		"adminEmail":           "admin@example.com",
+		"activeUserCount":      "36",
+		"newUserCount":         "5",
+		"apiKeyCount":          "58",
+		"providerCount":        "4",
+		"platformQuota":        "12,860",
+		"topUser":              "user@example.com",
+		"topProvider":          "openai-main",
+		"adminUserDetails":     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;"><tr><td style="padding:8px;border-bottom:1px solid #e2e8f0;">user@example.com</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:right;">62 次</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:right;">4,280 额度</td></tr><tr><td style="padding:8px;">team@example.com</td><td style="padding:8px;text-align:right;">41 次</td><td style="padding:8px;text-align:right;">3,120 额度</td></tr></table>`,
+		"adminModelDetails":    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;"><tr><td style="padding:8px;border-bottom:1px solid #e2e8f0;">gpt-4o-mini</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:right;">8,900 额度</td></tr><tr><td style="padding:8px;">gpt-4.1</td><td style="padding:8px;text-align:right;">3,960 额度</td></tr></table>`,
+		"adminProviderDetails": `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;"><tr><td style="padding:8px;border-bottom:1px solid #e2e8f0;">openai-main</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:right;">9,420 额度</td></tr><tr><td style="padding:8px;">backup-provider</td><td style="padding:8px;text-align:right;">3,440 额度</td></tr></table>`,
+		"adminUsageUrl":        "https://navapi.local/admin/operation/usage",
+		"usageLogsUrl":         "https://navapi.local/console/usage-logs",
+		"time":                 now.Format("2006-01-02 15:04:05"),
 	}
 	values["templateCode"] = strings.TrimSpace(code)
 	return values

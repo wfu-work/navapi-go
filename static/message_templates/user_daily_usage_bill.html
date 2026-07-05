@@ -1,0 +1,65 @@
+<p style="margin:0 0 16px;">你好 {{username}}，</p>
+<p style="margin:0 0 16px;">以下是你在 {{appName}} 的每日用量账单。本账单统计周期为 {{startTime}} 至 {{endTime}}。</p>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;margin:18px 0;border-collapse:separate;border-spacing:0;border:1px solid #dbeafe;border-radius:10px;background:#eff6ff;overflow:hidden;">
+  <tr>
+    <td style="padding:16px 18px;border-bottom:1px solid #bfdbfe;">
+      <div style="font-size:13px;line-height:1.5;color:#1d4ed8;font-weight:700;">账单日期</div>
+      <div style="margin-top:4px;font-size:26px;line-height:1.25;color:#1e3a8a;font-weight:800;">{{billDate}}</div>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:14px 18px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
+        <tr>
+          <td style="width:50%;padding:6px 10px 6px 0;color:#475569;font-size:14px;line-height:1.7;">请求次数</td>
+          <td style="width:50%;padding:6px 0;text-align:right;color:#0f172a;font-size:14px;line-height:1.7;font-weight:700;">{{requestCount}} 次</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 10px 6px 0;color:#475569;font-size:14px;line-height:1.7;">成功 / 失败</td>
+          <td style="padding:6px 0;text-align:right;color:#0f172a;font-size:14px;line-height:1.7;font-weight:700;">{{successCount}} / {{failedCount}}</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 10px 6px 0;color:#475569;font-size:14px;line-height:1.7;">成功率</td>
+          <td style="padding:6px 0;text-align:right;color:#0f172a;font-size:14px;line-height:1.7;font-weight:700;">{{successRate}}</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 10px 6px 0;color:#475569;font-size:14px;line-height:1.7;">消耗额度</td>
+          <td style="padding:6px 0;text-align:right;color:#0f172a;font-size:14px;line-height:1.7;font-weight:700;">{{usageQuota}} {{quotaUnit}}</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 10px 6px 0;color:#475569;font-size:14px;line-height:1.7;">剩余额度</td>
+          <td style="padding:6px 0;text-align:right;color:#0f172a;font-size:14px;line-height:1.7;font-weight:700;">{{remainQuota}} {{quotaUnit}}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;margin:0 0 18px;border-collapse:separate;border-spacing:0;border:1px solid #e2e8f0;border-radius:10px;background:#ffffff;overflow:hidden;">
+  <tr>
+    <td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;">
+      <div style="font-size:15px;line-height:1.5;color:#0f172a;font-weight:700;">Token 用量</div>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:14px 18px;color:#475569;font-size:14px;line-height:1.8;">
+      输入 Token：<strong style="color:#0f172a;">{{promptTokens}}</strong><br>
+      输出 Token：<strong style="color:#0f172a;">{{completionTokens}}</strong><br>
+      Token 合计：<strong style="color:#0f172a;">{{totalTokens}}</strong><br>
+      主要模型：<strong style="color:#0f172a;">{{topModel}}</strong>
+    </td>
+  </tr>
+</table>
+
+<div style="margin:0 0 18px;">
+  <div style="margin:0 0 8px;font-size:15px;line-height:1.5;color:#0f172a;font-weight:700;">模型用量明细</div>
+  {{usageDetails}}
+</div>
+
+<p style="margin:20px 0;">
+  <a href="{{usageLogsUrl}}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#2563eb;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;">查看用量日志</a>
+  <a href="{{consoleUrl}}" style="display:inline-block;margin-left:10px;padding:9px 15px;border-radius:8px;border:1px solid #cbd5e1;color:#334155;text-decoration:none;font-size:14px;font-weight:700;">进入控制台</a>
+</p>
+
+<p style="margin:0;color:#64748b;font-size:13px;line-height:1.8;">账户邮箱：{{email}}<br>用户 GUID：{{userGuid}}<br>生成时间：{{time}}</p>

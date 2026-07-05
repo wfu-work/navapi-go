@@ -2,8 +2,8 @@ package apis
 
 import (
 	"navapi-go/domains"
-	"navapi-go/dto"
 	"navapi-go/services"
+	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
@@ -21,10 +21,10 @@ type SubscriptionApi struct{}
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /subscription/public/plans [get]
 func (a SubscriptionApi) PublicPlans(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.SubscriptionServiceApp.ListPlans(query, true)
 	if err != nil {
@@ -44,10 +44,10 @@ func (a SubscriptionApi) PublicPlans(c *gin.Context) {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /subscription/plans [get]
 func (a SubscriptionApi) Plans(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.SubscriptionServiceApp.ListPlans(query, false)
 	if err != nil {
@@ -138,10 +138,10 @@ func (a SubscriptionApi) DeletePlan(c *gin.Context) {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /subscription/list [get]
 func (a SubscriptionApi) List(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.SubscriptionServiceApp.ListUserSubscriptions("", query)
 	if err != nil {
@@ -161,10 +161,10 @@ func (a SubscriptionApi) List(c *gin.Context) {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /subscription/self/list [get]
 func (a SubscriptionApi) Self(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.SubscriptionServiceApp.ListUserSubscriptions(utils.GetUserGuid(c), query)
 	if err != nil {

@@ -2,8 +2,8 @@ package apis
 
 import (
 	"navapi-go/domains"
-	"navapi-go/dto"
 	"navapi-go/services"
+	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
@@ -154,10 +154,10 @@ func (a TaskApi) DeleteSelf(c *gin.Context) {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /task/list [get]
 func (a TaskApi) List(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.TaskServiceApp.List("", query)
 	if err != nil {
@@ -177,10 +177,10 @@ func (a TaskApi) List(c *gin.Context) {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /task/self/list [get]
 func (a TaskApi) Self(c *gin.Context) {
-	var query dto.PageQuery
+	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := services.TaskServiceApp.List(utils.GetUserGuid(c), query)
 	if err != nil {

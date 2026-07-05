@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,7 +11,7 @@ import (
 
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/global"
@@ -46,7 +47,7 @@ func TestStreamUsageTrackerParsesSplitSSEChunks(t *testing.T) {
 	tracker.Write([]byte("data: [DONE]\n"))
 
 	usage := tracker.Finish()
-	if usage != (dto.Usage{PromptTokens: 4, CompletionTokens: 6, TotalTokens: 10}) {
+	if usage != (vos.Usage{PromptTokens: 4, CompletionTokens: 6, TotalTokens: 10}) {
 		t.Fatalf("usage = %+v, want prompt=4 completion=6 total=10", usage)
 	}
 }
@@ -94,7 +95,7 @@ func TestAttachGeminiKeyPreservesIncomingQuery(t *testing.T) {
 }
 
 func TestCalculateFinalQuotaKeepsReservedQuotaWhenUsageMissing(t *testing.T) {
-	quota := calculateFinalQuota("gpt-test", "default", dto.Usage{}, []byte(`{"model":"gpt-test"}`), 42)
+	quota := calculateFinalQuota("gpt-test", "default", vos.Usage{}, []byte(`{"model":"gpt-test"}`), 42)
 
 	if quota != 42 {
 		t.Fatalf("quota = %d, want reserved quota 42", quota)
@@ -192,7 +193,7 @@ func TestRelayHTTPForwardsOpenAIChatAndSettlesQuota(t *testing.T) {
 	if upstreamBody["model"] != "upstream-model" {
 		t.Fatalf("upstream model = %v, want upstream-model", upstreamBody["model"])
 	}
-	if result.Usage != (dto.Usage{PromptTokens: 8, CompletionTokens: 4, TotalTokens: 12, CachedTokens: 2, PromptTokensDetails: dto.TokenUsageDetails{CachedTokens: 2}}) {
+	if result.Usage != (vos.Usage{PromptTokens: 8, CompletionTokens: 4, TotalTokens: 12, CachedTokens: 2, PromptTokensDetails: vos.TokenUsageDetails{CachedTokens: 2}}) {
 		t.Fatalf("usage = %+v, want 8/4/12", result.Usage)
 	}
 
@@ -227,6 +228,56 @@ func TestRelayHTTPForwardsOpenAIChatAndSettlesQuota(t *testing.T) {
 	if other["reasoningEffort"] != "medium" || other["cachedTokens"] != float64(2) || other["group"] != constants.DefaultGroup {
 		t.Fatalf("usage log other = %+v, want reasoning/cached/group metadata", other)
 	}
+	var wallet domains.UserWallet
+	if err := db.Where("user_guid = ?", "user-1").First(&wallet).Error; err != nil {
+		t.Fatal(err)
+	}
+	if wallet.BalanceQuota != 988 || wallet.PaidBalanceQuota != 988 || wallet.TotalConsumedQuota != 12 || wallet.TotalRequestCount != 1 || wallet.TotalRechargeQuota != 1000 {
+		t.Fatalf("wallet = %+v, want balance=988 consumed=12 requests=1", wallet)
+	}
+	var walletRecord domains.UserWalletRecord
+	if err := db.Where("user_guid = ? AND type = ?", "user-1", domains.WalletRecordTypeConsume).First(&walletRecord).Error; err != nil {
+		t.Fatal(err)
+	}
+	if walletRecord.QuotaDelta != -12 || walletRecord.BalanceAfter != 988 || walletRecord.TokenGuid != token.Guid {
+		t.Fatalf("wallet record = %+v, want consume delta -12 balance 988", walletRecord)
+	}
+}
+
+func TestRelayHTTPRejectsWhenUserConcurrencyLimitReached(t *testing.T) {
+	withRelayTestDB(t)
+
+	if _, err := UserSettingsServiceApp.Save("user-1", &domains.UserSettings{
+		QuotaReminderEnabled:        true,
+		PlatformAnnouncementEnabled: true,
+		MaxConcurrency:              1,
+		ExtraConfig:                 "{}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	release, err := UserConcurrencyServiceApp.Acquire("user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	c := newRelayTestContext(`{"model":"public-model","messages":[{"role":"user","content":"again"}]}`)
+	token := domains.ApiToken{UserGuid: "user-1"}
+	result, streamed, err := RelayServiceApp.RelayHTTP(c, &token, RelayEndpoint{
+		UpstreamPath: "/v1/chat/completions",
+		Method:       http.MethodPost,
+		Format:       constants.ProviderTypeOpenAI,
+	})
+	if err == nil {
+		t.Fatal("relay succeeded, want concurrency limit error")
+	}
+	var relayErr *RelayHTTPError
+	if !errors.As(err, &relayErr) || relayErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("relay error = %v, want 429 RelayHTTPError", err)
+	}
+	if result != nil || streamed {
+		t.Fatalf("relay result=%+v streamed=%v, want no result", result, streamed)
+	}
 }
 
 func withRelayTestDB(t *testing.T) *gorm.DB {
@@ -239,6 +290,9 @@ func withRelayTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&domains.ApiToken{},
 		&domains.UserQuota{},
+		&domains.UserWallet{},
+		&domains.UserWalletRecord{},
+		&domains.UserSettings{},
 		&domains.VendorMeta{},
 		&domains.UsageLog{},
 		&domains.Option{},
@@ -249,6 +303,7 @@ func withRelayTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	global.NAV_DB = db
+	UserConcurrencyServiceApp.reset()
 	OptionServiceApp.mu.Lock()
 	OptionServiceApp.cache = map[string]string{}
 	OptionServiceApp.mu.Unlock()
@@ -262,9 +317,20 @@ func withRelayTestDB(t *testing.T) *gorm.DB {
 	}
 	t.Cleanup(func() {
 		global.NAV_DB = previousDB
+		UserConcurrencyServiceApp.reset()
 		OptionServiceApp.mu.Lock()
 		OptionServiceApp.cache = map[string]string{}
 		OptionServiceApp.mu.Unlock()
 	})
 	return db
+}
+
+func newRelayTestContext(body string) *gin.Context {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-client")
+	req.Header.Set("Content-Type", "application/json")
+	c.Request = req
+	return c
 }

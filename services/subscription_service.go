@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 )
 
 type SubscriptionService struct {
@@ -35,7 +35,7 @@ type SubscribeRequest struct {
 	Remark  string `json:"remark"`
 }
 
-func (s *SubscriptionService) ListPlans(query dto.PageQuery, enabledOnly bool) (dto.PageResult, error) {
+func (s *SubscriptionService) ListPlans(query vos.PageQuery, enabledOnly bool) (vos.PageResult, error) {
 	query.Normalize()
 	var plans []domains.SubscriptionPlan
 	var total int64
@@ -47,12 +47,12 @@ func (s *SubscriptionService) ListPlans(query dto.PageQuery, enabledOnly bool) (
 		db = db.Where("name LIKE ? OR code LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("sort desc, id desc").Offset(query.Offset()).Limit(query.Size).Find(&plans).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: plans, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: plans, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *SubscriptionService) SavePlan(plan *domains.SubscriptionPlan) error {
@@ -157,7 +157,7 @@ func (s *SubscriptionService) GetPlan(id uint) (*domains.SubscriptionPlan, error
 	return plan, nil
 }
 
-func (s *SubscriptionService) ListUserSubscriptions(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *SubscriptionService) ListUserSubscriptions(userGuid string, query vos.PageQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var subscriptions []domains.UserSubscription
 	var total int64
@@ -169,12 +169,12 @@ func (s *SubscriptionService) ListUserSubscriptions(userGuid string, query dto.P
 		db = db.Where("plan_name LIKE ? OR plan_code LIKE ? OR status LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&subscriptions).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: subscriptions, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: subscriptions, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *SubscriptionService) Subscribe(userGuid string, req SubscribeRequest, paymentGuid string) (*domains.UserSubscription, error) {
@@ -197,7 +197,26 @@ func (s *SubscriptionService) Subscribe(userGuid string, req SubscribeRequest, p
 		if err != nil {
 			return err
 		}
+		if err := UserWalletServiceApp.ensureFromQuota(tx, userGuid); err != nil {
+			return err
+		}
 		if err := UserQuotaServiceApp.Recharge(tx, userGuid, req.TokenID, plan.Quota); err != nil {
+			return err
+		}
+		if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
+			UserGuid:         userGuid,
+			Type:             domains.WalletRecordTypeSubscription,
+			Source:           domains.WalletSourceSubscription,
+			Title:            "订阅开通",
+			Quota:            plan.Quota,
+			AmountCents:      plan.PriceCents,
+			Currency:         plan.Currency,
+			PaymentGuid:      paymentGuid,
+			SubscriptionGuid: created.Guid,
+			TokenID:          req.TokenID,
+			RelatedGuid:      plan.Guid,
+			Remark:           req.Remark,
+		}); err != nil {
 			return err
 		}
 		subscription = *created

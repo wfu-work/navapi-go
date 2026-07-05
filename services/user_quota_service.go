@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm/clause"
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 )
 
 type UserQuotaService struct {
@@ -62,7 +62,7 @@ func (s *UserQuotaService) Get(userGuid string) (*domains.UserQuota, error) {
 	return &account, nil
 }
 
-func (s *UserQuotaService) List(query dto.PageQuery) (dto.PageResult, error) {
+func (s *UserQuotaService) List(query vos.PageQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var accounts []domains.UserQuota
 	var total int64
@@ -71,12 +71,12 @@ func (s *UserQuotaService) List(query dto.PageQuery) (dto.PageResult, error) {
 		db = db.Where("user_guid LIKE ? OR group_name LIKE ? OR allowed_groups LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&accounts).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: accounts, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: accounts, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *UserQuotaService) Update(account *domains.UserQuota) error {

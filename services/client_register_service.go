@@ -9,7 +9,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const commonUserRoleCode = "USER"
+const (
+	commonUserRoleCode = "USER"
+	commonUserRoleName = "普通用户"
+)
 
 type ClientRegisterService struct{}
 
@@ -64,7 +67,7 @@ func (s ClientRegisterService) Register(req ClientRegisterRequest) (*ClientRegis
 		if count > 0 {
 			return errors.New("username already exists")
 		}
-		if err := tx.Model(&commonDomains.SysUser{}).Where("email = ?", req.Email).Count(&count).Error; err != nil {
+		if err := tx.Model(&commonDomains.SysUser{}).Where("LOWER(email) = ?", req.Email).Count(&count).Error; err != nil {
 			return err
 		}
 		if count > 0 {
@@ -89,6 +92,12 @@ func (s ClientRegisterService) Register(req ClientRegisterRequest) (*ClientRegis
 		if err := UserQuotaServiceApp.WithDB(tx).Ensure(tx, created.Guid); err != nil {
 			return err
 		}
+		if err := UserSettingsServiceApp.WithDB(tx).Ensure(tx, created.Guid); err != nil {
+			return err
+		}
+		if err := UserWalletServiceApp.WithDB(tx).ensureFromQuota(tx, created.Guid); err != nil {
+			return err
+		}
 		if req.InviteCode != "" {
 			_, err := InvitationServiceApp.WithDB(tx).AcceptInvite(created.Guid, AcceptInviteRequest{Code: req.InviteCode})
 			if err != nil {
@@ -110,9 +119,18 @@ func assignCommonUserRole(tx *gorm.DB, userGuid string) error {
 	var role commonDomains.SysRole
 	if err := tx.Where("code = ?", commonUserRoleCode).First(&role).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
+			role = commonDomains.SysRole{
+				Name:   commonUserRoleName,
+				Code:   commonUserRoleCode,
+				Sort:   3,
+				Remark: commonUserRoleName,
+			}
+			if err := tx.Create(&role).Error; err != nil {
+				return err
+			}
+		} else {
+			return err
 		}
-		return err
 	}
 	return tx.Where(commonDomains.SysUserRole{UserGuid: userGuid, RoleGuid: role.Guid}).
 		FirstOrCreate(&commonDomains.SysUserRole{UserGuid: userGuid, RoleGuid: role.Guid}).Error

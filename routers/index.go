@@ -28,6 +28,8 @@ type RouterGroup struct {
 	ClientsRouter
 	MessageRouter
 	RegisterRouter
+	UserSettingsRouter
+	SettingRouter
 }
 
 var (
@@ -51,6 +53,8 @@ var (
 	messageTemplateApi    = apis.ApiGroupApp.MessageTemplateApi
 	messageSendRecordApi  = apis.ApiGroupApp.MessageSendRecordApi
 	registerApi           = apis.ApiGroupApp.RegisterApi
+	userSettingsApi       = apis.ApiGroupApp.UserSettingsApi
+	settingApi            = apis.ApiGroupApp.SettingApi
 )
 
 func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gin.RouterGroup) {
@@ -66,10 +70,12 @@ func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gi
 	r.InitProviderRouter(privateGroup)
 	r.InitAnnouncementRouter(privateGroup, publicGroup)
 	r.InitSubscriptionRouter(privateGroup, publicGroup)
-	r.InitPaymentRouter(privateGroup)
+	r.InitPaymentRouter(privateGroup, publicGroup)
 	r.InitInvitationRouter(privateGroup)
 	r.InitCheckinRouter(privateGroup)
 	r.InitClientsRouter(privateGroup)
 	r.InitMessageRouter(privateGroup)
 	r.InitRegisterRouter(publicGroup)
+	r.InitUserSettingsRouter(privateGroup)
+	r.InitSettingRouter(privateGroup, publicGroup)
 }

@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"strings"
 
-	"navapi-go/authz"
 	"navapi-go/domains"
+	"navapi-go/middlewares"
 	"navapi-go/services"
 
 	"github.com/gin-gonic/gin"
@@ -37,7 +37,7 @@ func (a TokenApi) List(c *gin.Context) {
 // @Success 200 {object} response.Response{data=[]domains.ApiToken,msg=string}
 // @Router /token/self/list [get]
 func (a TokenApi) SelfList(c *gin.Context) {
-	a.list(c, authz.ScopedUserGuid(c))
+	a.list(c, middlewares.ScopedUserGuid(c))
 }
 
 func (a TokenApi) list(c *gin.Context, userGuid string) {
@@ -77,7 +77,7 @@ func (a TokenApi) Get(c *gin.Context) {
 // @Success 200 {object} response.Response{data=domains.ApiToken,msg=string}
 // @Router /token/self/{id} [get]
 func (a TokenApi) SelfGet(c *gin.Context) {
-	a.get(c, authz.ScopedUserGuid(c))
+	a.get(c, middlewares.ScopedUserGuid(c))
 }
 
 func (a TokenApi) get(c *gin.Context, userGuid string) {
@@ -115,7 +115,7 @@ func (a TokenApi) Create(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /token/self [post]
 func (a TokenApi) CreateSelf(c *gin.Context) {
-	a.create(c, authz.ScopedUserGuid(c))
+	a.create(c, middlewares.ScopedUserGuid(c))
 }
 
 func (a TokenApi) create(c *gin.Context, userGuid string) {
@@ -127,7 +127,7 @@ func (a TokenApi) create(c *gin.Context, userGuid string) {
 	if userGuid != "" {
 		token.UserGuid = userGuid
 	} else if strings.TrimSpace(token.UserGuid) == "" {
-		token.UserGuid = authz.CurrentUserGuid(c)
+		token.UserGuid = middlewares.CurrentUserGuid(c)
 	}
 	if err := services.TokenServiceApp.Create(&token); err != nil {
 		response.FailWithMessage(err.Error(), c)
@@ -161,7 +161,7 @@ func (a TokenApi) Update(c *gin.Context) {
 // @Success 200 {object} response.Response{data=domains.ApiToken,msg=string}
 // @Router /token/self [put]
 func (a TokenApi) UpdateSelf(c *gin.Context) {
-	a.update(c, authz.ScopedUserGuid(c))
+	a.update(c, middlewares.ScopedUserGuid(c))
 }
 
 func (a TokenApi) update(c *gin.Context, userGuid string) {
@@ -215,7 +215,7 @@ func (a TokenApi) Delete(c *gin.Context) {
 // @Success 200 {object} response.Response{data=bool,msg=string}
 // @Router /token/self/{id} [delete]
 func (a TokenApi) DeleteSelf(c *gin.Context) {
-	a.delete(c, authz.ScopedUserGuid(c))
+	a.delete(c, middlewares.ScopedUserGuid(c))
 }
 
 func (a TokenApi) delete(c *gin.Context, userGuid string) {
@@ -251,7 +251,7 @@ func (a TokenApi) Key(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /token/self/{id}/key [post]
 func (a TokenApi) KeySelf(c *gin.Context) {
-	a.key(c, authz.ScopedUserGuid(c))
+	a.key(c, middlewares.ScopedUserGuid(c))
 }
 
 func (a TokenApi) key(c *gin.Context, userGuid string) {
@@ -302,7 +302,7 @@ func existingTokenForUpdate(token domains.ApiToken, userGuid string) (*domains.A
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /usage/token [get]
 func (a TokenApi) Usage(c *gin.Context) {
-	usage, err := services.TokenServiceApp.Usage(authz.ScopedUserGuid(c))
+	usage, err := services.TokenServiceApp.Usage(middlewares.ScopedUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

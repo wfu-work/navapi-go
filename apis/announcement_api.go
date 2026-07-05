@@ -32,7 +32,7 @@ type announcementResponse struct {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /announcements/list [get]
 func (a AnnouncementApi) PublicList(c *gin.Context) {
 	var query services.AnnouncementQuery
@@ -78,7 +78,7 @@ func (a AnnouncementApi) PublicLatest(c *gin.Context) {
 // @Param status query int false "状态"
 // @Param level query string false "级别"
 // @Param popup query bool false "是否弹窗"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /announcement/list [get]
 func (a AnnouncementApi) List(c *gin.Context) {
 	var query services.AnnouncementQuery

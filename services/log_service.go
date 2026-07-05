@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
@@ -72,7 +72,7 @@ func (s *LogService) Create(log *domains.UsageLog) error {
 	return createWithCrud(&s.CrudService, log)
 }
 
-func (s *LogService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *LogService) List(userGuid string, query vos.PageQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var logs []domains.UsageLog
 	var total int64
@@ -85,13 +85,13 @@ func (s *LogService) List(userGuid string, query dto.PageQuery) (dto.PageResult,
 		db = db.Where("model_name LIKE ? OR token_name LIKE ? OR channel_name LIKE ? OR user_guid LIKE ? OR username LIKE ?", keyword, keyword, keyword, keyword, keyword)
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&logs).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	s.enrichOfficialCosts(logs)
-	return dto.PageResult{List: logs, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: logs, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *LogService) enrichOfficialCosts(logs []domains.UsageLog) {
@@ -101,7 +101,7 @@ func (s *LogService) enrichOfficialCosts(logs []domains.UsageLog) {
 			continue
 		}
 		group := normalizeGroup(extraText(extra["group"]))
-		usage := dto.Usage{
+		usage := vos.Usage{
 			PromptTokens:     logs[i].PromptTokens,
 			CompletionTokens: logs[i].CompletionTokens,
 			CachedTokens:     int64(extraNumber(extra["cachedTokens"])),

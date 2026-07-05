@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"navapi-go/domains"
-	"navapi-go/dto"
 	"navapi-go/utils"
+	"navapi-go/vos"
 
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
@@ -24,7 +24,7 @@ func (s *MessageSendRecordService) WithDB(db *gorm.DB) *MessageSendRecordService
 	return &cloned
 }
 
-func (s *MessageSendRecordService) List(query dto.PageQuery, sendStatus string, templateCode string) (dto.PageResult, error) {
+func (s *MessageSendRecordService) List(query vos.PageQuery, sendStatus string, templateCode string) (vos.PageResult, error) {
 	query.Normalize()
 	var rows []domains.MessageSendRecord
 	var total int64
@@ -40,12 +40,12 @@ func (s *MessageSendRecordService) List(query dto.PageQuery, sendStatus string, 
 		db = db.Where("template_code = ?", strings.TrimSpace(templateCode))
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&rows).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: rows, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: rows, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *MessageSendRecordService) Get(guid string) (*domains.MessageSendRecord, error) {

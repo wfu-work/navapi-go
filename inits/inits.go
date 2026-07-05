@@ -3,10 +3,10 @@ package inits
 import (
 	_ "embed"
 	"fmt"
+	"navapi-go/domains"
 	"navapi-go/utils"
 	"os"
 
-	"navapi-go/domains"
 	"navapi-go/routers"
 	"navapi-go/services"
 
@@ -27,7 +27,9 @@ func Init() {
 		os.Exit(1)
 	}
 	sysInit := inits.SysInit{}
-	sysInit.OnTableInit(registerTables)
+	sysInit.OnTableInit(func() {
+		domains.RegisterTables()
+	})
 	sysInit.OnRouterInit(func(publicGroup *gin.RouterGroup, privateGroup *gin.RouterGroup) {
 		routers.RouterGroupApp.InitRouters(publicGroup, privateGroup)
 	})
@@ -37,6 +39,10 @@ func Init() {
 	sysInit.OnOtherInit(func() {
 		_ = services.OptionServiceApp.Load()
 		services.MessageTemplateServiceApp.SeedDefaults()
+		if err := services.ModelServiceApp.EnsureDefaultGroup(); err != nil {
+			global.NAV_LOG.Error("ensure default model group failed", zap.Error(err))
+			os.Exit(1)
+		}
 	})
 	sysInit.OnScheInit(func(timers commonScheduleds.Timer, options []cron.Option) {
 		_, _ = timers.AddTaskByFunc("navapi", "@every 1m", func() {
@@ -47,43 +53,4 @@ func Init() {
 		return []commonScheduleds.ClearDB{}
 	})
 	sysInit.Init()
-}
-
-func registerTables() {
-	db := global.NAV_DB
-	if db == nil {
-		return
-	}
-	if err := db.AutoMigrate(
-		domains.ApiToken{},
-		domains.UserQuota{},
-		domains.UsageLog{},
-		domains.Announcement{},
-		domains.ModelMeta{},
-		domains.ModelGroup{},
-		domains.VendorMeta{},
-		domains.Pricing{},
-		domains.Option{},
-		domains.Task{},
-		domains.Redemption{},
-		domains.SubscriptionPlan{},
-		domains.UserSubscription{},
-		domains.PaymentOrder{},
-		domains.InvitationCode{},
-		domains.InvitationRelation{},
-		domains.CheckinRecord{},
-		domains.QuotaDate{},
-		domains.MessageEmailConfig{},
-		domains.MessageTemplate{},
-		domains.MessageSendRecord{},
-		domains.MessageEmailCode{},
-	); err != nil {
-		global.NAV_LOG.Error("register navapi business tables failed", zap.Error(err))
-		os.Exit(1)
-	}
-	if err := services.ModelServiceApp.EnsureDefaultGroup(); err != nil {
-		global.NAV_LOG.Error("ensure default model group failed", zap.Error(err))
-		os.Exit(1)
-	}
-	global.NAV_LOG.Info("register navapi business tables success")
 }

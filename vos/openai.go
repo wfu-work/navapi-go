@@ -1,4 +1,4 @@
-package dto
+package vos
 
 type OpenAIChatRequest struct {
 	Model    string        `json:"model"`

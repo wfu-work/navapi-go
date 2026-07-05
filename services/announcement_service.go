@@ -7,7 +7,7 @@ import (
 
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
@@ -26,19 +26,19 @@ func (s *AnnouncementService) WithDB(db *gorm.DB) *AnnouncementService {
 }
 
 type AnnouncementQuery struct {
-	dto.PageQuery
+	vos.PageQuery
 	Status int    `form:"status" json:"status"`
 	Level  string `form:"level" json:"level"`
 	Popup  *bool  `form:"popup" json:"popup"`
 }
 
-func (s *AnnouncementService) List(query AnnouncementQuery, activeOnly bool) (dto.PageResult, error) {
+func (s *AnnouncementService) List(query AnnouncementQuery, activeOnly bool) (vos.PageResult, error) {
 	query.PageQuery.Normalize()
 	var announcements []domains.Announcement
 	var total int64
 	db := s.DB()
 	if db == nil {
-		return dto.PageResult{}, errors.New("database is not initialized")
+		return vos.PageResult{}, errors.New("database is not initialized")
 	}
 	db = db.Model(&domains.Announcement{})
 	if activeOnly {
@@ -58,12 +58,12 @@ func (s *AnnouncementService) List(query AnnouncementQuery, activeOnly bool) (dt
 		db = db.Where("title LIKE ? OR content LIKE ? OR level LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("priority desc, id desc").Offset(query.PageQuery.Offset()).Limit(query.Size).Find(&announcements).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: announcements, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: announcements, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *AnnouncementService) Latest(limit int) ([]domains.Announcement, error) {

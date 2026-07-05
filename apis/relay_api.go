@@ -8,8 +8,8 @@ import (
 
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
 	"navapi-go/services"
+	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
 )
@@ -176,7 +176,7 @@ func (a RelayApi) AsyncTask(c *gin.Context, platform string) {
 }
 
 func openAIError(c *gin.Context, code int, message string) {
-	c.JSON(code, dto.OpenAIErrorResponse{Error: dto.OpenAIError{
+	c.JSON(code, vos.OpenAIErrorResponse{Error: vos.OpenAIError{
 		Message: message,
 		Type:    "invalid_request_error",
 	}})

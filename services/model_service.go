@@ -8,7 +8,7 @@ import (
 
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
@@ -30,21 +30,21 @@ func (s *ModelService) WithDB(db *gorm.DB) *ModelService {
 	return &cloned
 }
 
-func (s *ModelService) ListOpenAIModels() (dto.ModelListResponse, error) {
+func (s *ModelService) ListOpenAIModels() (vos.ModelListResponse, error) {
 	models, err := ProviderServiceApp.ListEnabledModels()
 	if err != nil {
-		return dto.ModelListResponse{}, err
+		return vos.ModelListResponse{}, err
 	}
 	metas, err := s.ListMeta()
 	if err != nil {
-		return dto.ModelListResponse{}, err
+		return vos.ModelListResponse{}, err
 	}
 	metaByModel := map[string]domains.ModelMeta{}
 	for _, meta := range metas {
 		metaByModel[meta.ModelName] = meta
 	}
 	sort.Strings(models)
-	data := make([]dto.ModelInfo, 0, len(models))
+	data := make([]vos.ModelInfo, 0, len(models))
 	now := time.Now().Unix()
 	for _, model := range models {
 		ownedBy := "navapi-go"
@@ -56,14 +56,14 @@ func (s *ModelService) ListOpenAIModels() (dto.ModelListResponse, error) {
 				ownedBy = meta.OwnedBy
 			}
 		}
-		data = append(data, dto.ModelInfo{
+		data = append(data, vos.ModelInfo{
 			ID:      model,
 			Object:  "model",
 			Created: now,
 			OwnedBy: ownedBy,
 		})
 	}
-	return dto.ModelListResponse{Object: "list", Data: data}, nil
+	return vos.ModelListResponse{Object: "list", Data: data}, nil
 }
 
 func (s *ModelService) UpsertMeta(meta *domains.ModelMeta) error {

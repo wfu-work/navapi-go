@@ -14,7 +14,7 @@ import (
 
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
@@ -41,7 +41,7 @@ type ProviderRecord struct {
 }
 
 type ProviderListQuery struct {
-	dto.PageQuery
+	vos.PageQuery
 	Type      string `form:"type" json:"type"`
 	Status    string `form:"status" json:"status"`
 	KeyStatus string `form:"keyStatus" json:"keyStatus"`
@@ -87,13 +87,13 @@ func ProviderRecordFromDomain(provider domains.VendorMeta) ProviderRecord {
 	}
 }
 
-func (s *ProviderService) List(query ProviderListQuery) (dto.PageResult, error) {
+func (s *ProviderService) List(query ProviderListQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var providers []domains.VendorMeta
 	var total int64
 	db := s.DB()
 	if db == nil {
-		return dto.PageResult{}, errors.New("database is not initialized")
+		return vos.PageResult{}, errors.New("database is not initialized")
 	}
 	db = db.Model(&domains.VendorMeta{})
 	if query.Q != "" {
@@ -116,16 +116,16 @@ func (s *ProviderService) List(query ProviderListQuery) (dto.PageResult, error) 
 		db = db.Where("TRIM(COALESCE(`key`, '')) = ''")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("sort desc, id desc").Offset(query.Offset()).Limit(query.Size).Find(&providers).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	records := make([]ProviderRecord, 0, len(providers))
 	for _, provider := range providers {
 		records = append(records, ProviderRecordFromDomain(provider))
 	}
-	return dto.PageResult{List: records, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: records, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *ProviderService) GetByID(id uint) (*domains.VendorMeta, error) {

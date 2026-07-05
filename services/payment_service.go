@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,7 +11,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 )
 
 type PaymentService struct {
@@ -42,7 +43,7 @@ type ConfirmPaymentRequest struct {
 	NotifyData    string `json:"notifyData"`
 }
 
-func (s *PaymentService) List(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *PaymentService) List(userGuid string, query vos.PageQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var orders []domains.PaymentOrder
 	var total int64
@@ -54,15 +55,19 @@ func (s *PaymentService) List(userGuid string, query dto.PageQuery) (dto.PageRes
 		db = db.Where("order_no LIKE ? OR type LIKE ? OR status LIKE ? OR provider LIKE ? OR transaction_id LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&orders).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: orders, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: orders, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *PaymentService) Create(userGuid string, req CreatePaymentRequest) (*domains.PaymentOrder, error) {
+	return s.CreateWithContext(context.Background(), userGuid, req)
+}
+
+func (s *PaymentService) CreateWithContext(ctx context.Context, userGuid string, req CreatePaymentRequest) (*domains.PaymentOrder, error) {
 	if userGuid == "" {
 		return nil, errors.New("user is required")
 	}
@@ -104,6 +109,16 @@ func (s *PaymentService) Create(userGuid string, req CreatePaymentRequest) (*dom
 	if err := createWithCrud(&s.CrudService, &order); err != nil {
 		return nil, err
 	}
+	if isWechatPaymentProvider(order.Provider) {
+		if err := s.createWechatNativePrepay(ctx, &order); err != nil {
+			_ = s.DB().Model(&domains.PaymentOrder{}).Where("guid = ?", order.Guid).Updates(map[string]any{
+				"status":      "closed",
+				"closed_at":   time.Now().Unix(),
+				"notify_data": "wechat prepay failed: " + err.Error(),
+			}).Error
+			return nil, err
+		}
+	}
 	return &order, nil
 }
 
@@ -127,6 +142,7 @@ func (s *PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrd
 			return errors.New("payment order is not pending")
 		}
 		now := time.Now().Unix()
+		var subscription *domains.UserSubscription
 		order.Status = "paid"
 		order.PaidAt = now
 		order.TransactionID = req.TransactionID
@@ -142,11 +158,48 @@ func (s *PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrd
 			if err != nil {
 				return err
 			}
-			if _, err := SubscriptionServiceApp.createSubscriptionWithTx(tx, order.UserGuid, plan, order.Guid, order.Remark); err != nil {
+			subscription, err = SubscriptionServiceApp.createSubscriptionWithTx(tx, order.UserGuid, plan, order.Guid, order.Remark)
+			if err != nil {
 				return err
 			}
 		}
+		if err := UserWalletServiceApp.ensureFromQuota(tx, order.UserGuid); err != nil {
+			return err
+		}
 		if err := UserQuotaServiceApp.Recharge(tx, order.UserGuid, order.TokenID, order.Quota); err != nil {
+			return err
+		}
+		recordType := domains.WalletRecordTypeRecharge
+		source := domains.WalletSourcePayment
+		title := "充值"
+		subscriptionGuid := ""
+		relatedGuid := order.Guid
+		if order.Type == "subscription" {
+			recordType = domains.WalletRecordTypeSubscription
+			source = domains.WalletSourceSubscription
+			title = "订阅购买"
+			if subscription != nil {
+				subscriptionGuid = subscription.Guid
+			}
+			relatedGuid = order.PlanGuid
+		}
+		if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
+			UserGuid:         order.UserGuid,
+			Type:             recordType,
+			Source:           source,
+			Title:            title,
+			Quota:            order.Quota,
+			AmountCents:      order.AmountCents,
+			Currency:         order.Currency,
+			OrderNo:          order.OrderNo,
+			PaymentGuid:      order.Guid,
+			SubscriptionGuid: subscriptionGuid,
+			TokenID:          order.TokenID,
+			TokenGuid:        order.TokenGuid,
+			RelatedGuid:      relatedGuid,
+			Remark:           order.Remark,
+			OccurredAt:       now,
+		}); err != nil {
 			return err
 		}
 		paid = order
@@ -204,9 +257,12 @@ func normalizePaymentType(value string) string {
 }
 
 func normalizePaymentProvider(value string) string {
-	value = strings.TrimSpace(value)
+	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
 		return "manual"
+	}
+	if isWechatPaymentProvider(value) {
+		return paymentProviderWechat
 	}
 	return value
 }

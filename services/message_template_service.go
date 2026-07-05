@@ -7,8 +7,8 @@ import (
 
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
 	"navapi-go/static"
+	"navapi-go/vos"
 
 	commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
@@ -38,7 +38,7 @@ func (s *MessageTemplateService) WithDB(db *gorm.DB) *MessageTemplateService {
 	return &cloned
 }
 
-func (s *MessageTemplateService) List(query dto.PageQuery, channel string, status string) (dto.PageResult, error) {
+func (s *MessageTemplateService) List(query vos.PageQuery, channel string, status string) (vos.PageResult, error) {
 	query.Normalize()
 	var rows []domains.MessageTemplate
 	var total int64
@@ -53,17 +53,17 @@ func (s *MessageTemplateService) List(query dto.PageQuery, channel string, statu
 	if strings.TrimSpace(status) != "" {
 		value, err := strconv.Atoi(strings.TrimSpace(status))
 		if err != nil {
-			return dto.PageResult{}, err
+			return vos.PageResult{}, err
 		}
 		db = db.Where("status = ?", value)
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&rows).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: rows, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: rows, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *MessageTemplateService) Get(identity string) (*domains.MessageTemplate, error) {
@@ -179,6 +179,36 @@ func defaultMessageTemplates(now int64) []domains.MessageTemplate {
 			Subject:        "{{appName}} 注册验证码：{{code}}",
 			Content:        strings.TrimSpace(static.RegisterEmailCodeTemplateHTML),
 			Description:    "客户端用户注册时发送邮箱验证码，模板编码不要修改。",
+			Status:         constants.StatusEnabled,
+		},
+		{
+			BaseDataEntity: commonDomains.BaseDataEntity{Guid: TemplateCodeUserBalanceInsufficient, CreateTime: now, UpdateTime: now},
+			Code:           TemplateCodeUserBalanceInsufficient,
+			Name:           "用户余额不足提醒",
+			Channel:        MessageChannelEmail,
+			Subject:        "{{appName}} 用户余额不足提醒",
+			Content:        strings.TrimSpace(static.UserBalanceInsufficientTemplateHTML),
+			Description:    "用户账户余额或额度低于阈值时发送提醒，模板编码不要修改。",
+			Status:         constants.StatusEnabled,
+		},
+		{
+			BaseDataEntity: commonDomains.BaseDataEntity{Guid: TemplateCodeUserDailyUsageBill, CreateTime: now, UpdateTime: now},
+			Code:           TemplateCodeUserDailyUsageBill,
+			Name:           "普通用户每日用量账单",
+			Channel:        MessageChannelEmail,
+			Subject:        "{{appName}} 每日用量账单：{{billDate}}",
+			Content:        strings.TrimSpace(static.UserDailyUsageBillTemplateHTML),
+			Description:    "普通用户每日 API 调用、Token 与额度消耗账单邮件，模板编码不要修改。",
+			Status:         constants.StatusEnabled,
+		},
+		{
+			BaseDataEntity: commonDomains.BaseDataEntity{Guid: TemplateCodeAdminDailyUsageBill, CreateTime: now, UpdateTime: now},
+			Code:           TemplateCodeAdminDailyUsageBill,
+			Name:           "管理员每日用量账单",
+			Channel:        MessageChannelEmail,
+			Subject:        "{{appName}} 管理员每日用量账单：{{billDate}}",
+			Content:        strings.TrimSpace(static.AdminDailyUsageBillTemplateHTML),
+			Description:    "管理员每日平台调用、用户、模型与渠道用量汇总账单邮件，模板编码不要修改。",
 			Status:         constants.StatusEnabled,
 		},
 	}

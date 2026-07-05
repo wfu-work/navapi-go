@@ -29,7 +29,7 @@ type providerKeyRequest struct {
 // @Param type query string false "类型"
 // @Param status query string false "状态 enabled/disabled"
 // @Param keyStatus query string false "密钥状态 set/missing"
-// @Success 200 {object} response.Response{data=dto.PageResult,msg=string}
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /provider/list [get]
 func (a ProviderApi) List(c *gin.Context) {
 	var query services.ProviderListQuery

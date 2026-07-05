@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
@@ -50,25 +50,25 @@ func (s *PricingService) WithDB(db *gorm.DB) *PricingService {
 	return &cloned
 }
 
-func (s *PricingService) List(query dto.PageQuery) (dto.PageResult, error) {
+func (s *PricingService) List(query vos.PageQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var pricing []domains.Pricing
 	var total int64
 	db := s.DB()
 	if db == nil {
-		return dto.PageResult{}, errors.New("database is not initialized")
+		return vos.PageResult{}, errors.New("database is not initialized")
 	}
 	db = db.Model(&domains.Pricing{})
 	if query.Q != "" {
 		db = db.Where("model_name LIKE ? OR group_name LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("model_name asc, group_name asc, id desc").Offset(query.Offset()).Limit(query.Size).Find(&pricing).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: pricing, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: pricing, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *PricingService) PublicList() ([]domains.Pricing, error) {
@@ -105,11 +105,11 @@ func (s *PricingService) Delete(id uint) error {
 	return deleteByIDWithCrud(&s.CrudService, id, "pricing not found")
 }
 
-func (s *PricingService) CalculateQuota(modelName string, group string, usage dto.Usage, fallback int64) int64 {
+func (s *PricingService) CalculateQuota(modelName string, group string, usage vos.Usage, fallback int64) int64 {
 	return s.CalculateQuotaDetail(modelName, group, usage, fallback).Quota
 }
 
-func (s *PricingService) CalculateQuotaDetail(modelName string, group string, usage dto.Usage, fallback int64) QuotaCalculationDetail {
+func (s *PricingService) CalculateQuotaDetail(modelName string, group string, usage vos.Usage, fallback int64) QuotaCalculationDetail {
 	groupMultiplier := s.groupQuotaMultiplier(group)
 	if groupMultiplier <= 0 {
 		groupMultiplier = 1
@@ -177,7 +177,7 @@ func (s *PricingService) CalculateQuotaDetail(modelName string, group string, us
 	return detail
 }
 
-func (s *PricingService) OfficialCostDetail(modelName string, group string, usage dto.Usage) QuotaCalculationDetail {
+func (s *PricingService) OfficialCostDetail(modelName string, group string, usage vos.Usage) QuotaCalculationDetail {
 	groupMultiplier := s.groupQuotaMultiplier(group)
 	if groupMultiplier <= 0 {
 		groupMultiplier = 1
@@ -203,7 +203,7 @@ func (s *PricingService) groupQuotaMultiplier(group string) float64 {
 	return ModelServiceApp.WithDB(s.DB()).GroupQuotaMultiplier(group)
 }
 
-func (s *PricingService) applyOfficialCost(detail *QuotaCalculationDetail, modelName string, group string, usage dto.Usage) {
+func (s *PricingService) applyOfficialCost(detail *QuotaCalculationDetail, modelName string, group string, usage vos.Usage) {
 	if detail == nil || s.DB() == nil {
 		return
 	}

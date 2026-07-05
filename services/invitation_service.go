@@ -8,7 +8,7 @@ import (
 
 	"navapi-go/constants"
 	"navapi-go/domains"
-	"navapi-go/dto"
+	"navapi-go/vos"
 
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
@@ -79,7 +79,7 @@ func (s *InvitationService) SetSettings(settings InviteSettings) error {
 	return nil
 }
 
-func (s *InvitationService) ListCodes(ownerUserGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *InvitationService) ListCodes(ownerUserGuid string, query vos.PageQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var codes []domains.InvitationCode
 	var total int64
@@ -91,15 +91,15 @@ func (s *InvitationService) ListCodes(ownerUserGuid string, query dto.PageQuery)
 		db = db.Where("code LIKE ? OR owner_user_guid LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&codes).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: codes, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: codes, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
-func (s *InvitationService) ListRelations(userGuid string, query dto.PageQuery) (dto.PageResult, error) {
+func (s *InvitationService) ListRelations(userGuid string, query vos.PageQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var relations []domains.InvitationRelation
 	var total int64
@@ -111,12 +111,12 @@ func (s *InvitationService) ListRelations(userGuid string, query dto.PageQuery) 
 		db = db.Where("code LIKE ? OR inviter_user_guid LIKE ? OR invitee_user_guid LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&relations).Error; err != nil {
-		return dto.PageResult{}, err
+		return vos.PageResult{}, err
 	}
-	return dto.PageResult{List: relations, Total: total, Page: query.Page, Size: query.Size}, nil
+	return vos.PageResult{List: relations, Total: total, Page: query.Page, Size: query.Size}, nil
 }
 
 func (s *InvitationService) SaveCode(code *domains.InvitationCode) error {
@@ -261,12 +261,41 @@ func (s *InvitationService) AcceptInvite(userGuid string, req AcceptInviteReques
 			return err
 		}
 		if code.OwnerUserGuid != "" && code.RewardQuota > 0 {
+			if err := UserWalletServiceApp.ensureFromQuota(tx, code.OwnerUserGuid); err != nil {
+				return err
+			}
 			if err := UserQuotaServiceApp.Recharge(tx, code.OwnerUserGuid, 0, code.RewardQuota); err != nil {
+				return err
+			}
+			if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
+				UserGuid:    code.OwnerUserGuid,
+				Type:        domains.WalletRecordTypeCommission,
+				Source:      domains.WalletSourceInvitation,
+				Title:       "邀请分佣",
+				Quota:       code.RewardQuota,
+				RelatedGuid: relation.Guid,
+				Remark:      code.Code,
+			}); err != nil {
 				return err
 			}
 		}
 		if code.InviteeRewardQuota > 0 {
+			if err := UserWalletServiceApp.ensureFromQuota(tx, userGuid); err != nil {
+				return err
+			}
 			if err := UserQuotaServiceApp.Recharge(tx, userGuid, req.TokenID, code.InviteeRewardQuota); err != nil {
+				return err
+			}
+			if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
+				UserGuid:    userGuid,
+				Type:        domains.WalletRecordTypeReward,
+				Source:      domains.WalletSourceInvitation,
+				Title:       "邀请注册奖励",
+				Quota:       code.InviteeRewardQuota,
+				TokenID:     req.TokenID,
+				RelatedGuid: relation.Guid,
+				Remark:      code.Code,
+			}); err != nil {
 				return err
 			}
 		}

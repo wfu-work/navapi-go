@@ -16,6 +16,9 @@ type PaymentOrder struct {
 	Quota         int64  `json:"quota" gorm:"column:quota;default:0;comment:充值额度"`
 	PlanGuid      string `json:"planGuid" gorm:"column:plan_guid;size:100;index;comment:订阅套餐 GUID"`
 	PlanCode      string `json:"planCode" gorm:"column:plan_code;size:80;index;comment:订阅套餐编码"`
+	TradeType     string `json:"tradeType" gorm:"column:trade_type;size:40;comment:三方交易类型"`
+	CodeURL       string `json:"codeUrl" gorm:"column:code_url;type:text;comment:微信支付二维码链接"`
+	PrepayID      string `json:"prepayId" gorm:"column:prepay_id;size:120;comment:预支付会话标识"`
 	TransactionID string `json:"transactionId" gorm:"column:transaction_id;size:120;index;comment:三方交易号"`
 	PaidAt        int64  `json:"paidAt" gorm:"column:paid_at;default:0;index;comment:支付时间秒"`
 	ClosedAt      int64  `json:"closedAt" gorm:"column:closed_at;default:0;comment:关闭时间秒"`
