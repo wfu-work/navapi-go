@@ -10,5 +10,5 @@ type Setting struct {
 }
 
 func (Setting) TableName() string {
-	return "nginx_settings"
+	return "nav_api_settings"
 }

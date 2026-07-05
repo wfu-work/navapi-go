@@ -42,6 +42,48 @@ func TestSettingContactSettingsSaveAndClear(t *testing.T) {
 	}
 }
 
+func TestRegisterSettingsDefaultAndSaveUseSetting(t *testing.T) {
+	db := withSettingTestDB(t)
+
+	defaults := RegisterSettingServiceApp.Get()
+	if !defaults.Enabled || !defaults.RequireCaptcha || defaults.RequireInvite ||
+		defaults.DefaultQuota != defaultRegisterQuota ||
+		defaults.DefaultGroup != "default" ||
+		defaults.Notice != defaultRegisterNotice {
+		t.Fatalf("defaults = %+v, want open registration, captcha and quota defaults", defaults)
+	}
+
+	err := RegisterSettingServiceApp.Set(RegisterSettings{
+		Enabled:        false,
+		DefaultQuota:   25,
+		DefaultGroup:   " vip ",
+		AllowedGroups:  " default, vip ,, enterprise ",
+		RequireInvite:  true,
+		RequireCaptcha: false,
+		Notice:         " 内测开放 ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := RegisterSettingServiceApp.Get()
+	if saved.Enabled ||
+		saved.DefaultQuota != 25 ||
+		saved.DefaultGroup != "vip" ||
+		saved.AllowedGroups != "default,vip,enterprise" ||
+		!saved.RequireInvite ||
+		saved.RequireCaptcha ||
+		saved.Notice != "内测开放" {
+		t.Fatalf("saved = %+v, want normalized setting values", saved)
+	}
+	var row domains.Setting
+	if err := db.Where("key = ?", settingRegisterDefaultQuota).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.Value != "25" {
+		t.Fatalf("default quota setting = %+v, want value 25", row)
+	}
+}
+
 func withSettingTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	previousDB := global.NAV_DB

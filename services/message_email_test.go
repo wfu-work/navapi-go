@@ -182,8 +182,25 @@ func TestSendRegisterCodeRejectsRegisteredEmail(t *testing.T) {
 	}
 
 	_, err := EmailServiceApp.SendRegisterCode(SendRegisterCodeInput{Email: "taken@example.com"})
-	if err == nil || !strings.Contains(err.Error(), "email already exists") {
+	if err == nil || !strings.Contains(err.Error(), clientEmailExistsMessage) {
 		t.Fatalf("err = %v, want registered email rejection", err)
+	}
+}
+
+func TestSendRegisterCodeRejectsDisabledRegistration(t *testing.T) {
+	db := withMessageTestDB(t)
+	disableRegister(t)
+
+	_, err := EmailServiceApp.SendRegisterCode(SendRegisterCodeInput{Email: "closed@example.com"})
+	if err == nil || !strings.Contains(err.Error(), registerDisabledMessage) {
+		t.Fatalf("err = %v, want register disabled rejection", err)
+	}
+	var count int64
+	if err := db.Model(&domains.MessageEmailCode{}).Where("email = ?", "closed@example.com").Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("email code count = %d, want none", count)
 	}
 }
 
@@ -372,6 +389,9 @@ func TestClientRegisterConsumesEmailCodeAndCreatesUser(t *testing.T) {
 	if err := db.Where("user_guid = ?", result.UserGuid).First(&quota).Error; err != nil {
 		t.Fatal(err)
 	}
+	if quota.RemainQuota != defaultRegisterQuota || quota.TotalQuota != defaultRegisterQuota {
+		t.Fatalf("quota = %+v, want default register quota", quota)
+	}
 	var settings domains.UserSettings
 	if err := db.Where("user_guid = ?", result.UserGuid).First(&settings).Error; err != nil {
 		t.Fatal(err)
@@ -397,6 +417,93 @@ func TestClientRegisterConsumesEmailCodeAndCreatesUser(t *testing.T) {
 	}
 	if role.Code != commonUserRoleCode {
 		t.Fatalf("role = %+v, want common user role", role)
+	}
+}
+
+func TestClientRegisterRejectsAdminUsername(t *testing.T) {
+	db := withMessageTestDB(t)
+	_, err := ClientRegisterServiceApp.Register(ClientRegisterRequest{
+		Username: " Admin ",
+		Email:    "admin-new@example.com",
+		Password: "not-used",
+		Captcha:  "123456",
+	})
+	if err == nil || !strings.Contains(err.Error(), "系统管理员账号") {
+		t.Fatalf("err = %v, want reserved admin username rejection", err)
+	}
+	var count int64
+	if err := db.Model(&commonDomains.SysUser{}).Where("LOWER(username) = ?", "admin").Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("admin users = %d, want none", count)
+	}
+}
+
+func TestClientRegisterRejectsDuplicateUsernameAndEmail(t *testing.T) {
+	db := withMessageTestDB(t)
+	if err := db.Create(&commonDomains.SysUser{
+		BaseDataEntity: commonDomains.BaseDataEntity{Guid: "existing-unique-user"},
+		Username:       "ExistingUser",
+		Email:          "Taken@Example.com",
+		Password:       "hashed",
+		Enable:         1,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	password, err := commonUtils.AesEncrypt("secret123")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ClientRegisterServiceApp.Register(ClientRegisterRequest{
+		Username: " existinguser ",
+		Email:    "new-unique@example.com",
+		Password: password,
+		Captcha:  "123456",
+	})
+	if err == nil || !strings.Contains(err.Error(), clientUsernameExistsMessage) {
+		t.Fatalf("err = %v, want duplicate username rejection", err)
+	}
+
+	_, err = ClientRegisterServiceApp.Register(ClientRegisterRequest{
+		Username: "new-unique-user",
+		Email:    "taken@example.com",
+		Password: password,
+		Captcha:  "123456",
+	})
+	if err == nil || !strings.Contains(err.Error(), clientEmailExistsMessage) {
+		t.Fatalf("err = %v, want duplicate email rejection", err)
+	}
+
+	var count int64
+	if err := db.Model(&commonDomains.SysUser{}).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("user count = %d, want only existing user", count)
+	}
+}
+
+func TestClientRegisterRejectsDisabledRegistration(t *testing.T) {
+	db := withMessageTestDB(t)
+	disableRegister(t)
+
+	_, err := ClientRegisterServiceApp.Register(ClientRegisterRequest{
+		Username: "closed-user",
+		Email:    "closed-user@example.com",
+		Password: "not-used",
+		Captcha:  "123456",
+	})
+	if err == nil || !strings.Contains(err.Error(), registerDisabledMessage) {
+		t.Fatalf("err = %v, want register disabled rejection", err)
+	}
+	var count int64
+	if err := db.Model(&commonDomains.SysUser{}).Where("email = ?", "closed-user@example.com").Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("user count = %d, want none", count)
 	}
 }
 
@@ -460,6 +567,7 @@ func withMessageTestDB(t *testing.T) *gorm.DB {
 		&domains.UserWalletRecord{},
 		&domains.UserSettings{},
 		&domains.Option{},
+		&domains.Setting{},
 		&commonDomains.SysUser{},
 		&commonDomains.SysRole{},
 		&commonDomains.SysUserRole{},
@@ -484,4 +592,16 @@ func withMessageTestDB(t *testing.T) *gorm.DB {
 		RateLimitServiceApp.mu.Unlock()
 	})
 	return db
+}
+
+func disableRegister(t *testing.T) {
+	t.Helper()
+	if err := RegisterSettingServiceApp.Set(RegisterSettings{
+		Enabled:        false,
+		DefaultQuota:   defaultRegisterQuota,
+		DefaultGroup:   "default",
+		RequireCaptcha: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -3,12 +3,14 @@ package middlewares
 import (
 	"strings"
 
+	"navapi-go/constants"
+
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/configs"
 	commonUtils "github.com/wfu-work/nav-common-go-lib/utils"
 )
 
-const AdminUsername = "admin"
+const AdminUsername = constants.AdminUsername
 
 func IsAdminUser(c *gin.Context) bool {
 	return CurrentUsername(c) == AdminUsername

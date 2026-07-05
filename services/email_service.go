@@ -143,12 +143,12 @@ func (s EmailService) SendRegisterCode(input SendRegisterCodeInput) (*EmailSendR
 	}
 	settings := RegisterSettingServiceApp.Get()
 	if !settings.Enabled {
-		return nil, errors.New("register is disabled")
+		return nil, errors.New(registerDisabledMessage)
 	}
 	if exists, err := clientEmailExists(email); err != nil {
 		return nil, err
 	} else if exists {
-		return nil, errors.New("email already exists")
+		return nil, errors.New(clientEmailExistsMessage)
 	}
 	if recent, err := MessageEmailCodeServiceApp.HasRecentPending(email, MessageSceneRegister, nowMilli()-int64(RegisterEmailCodeCooldown/time.Millisecond)); err != nil {
 		return nil, err

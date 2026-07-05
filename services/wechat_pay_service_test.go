@@ -41,8 +41,8 @@ func TestConfirmWechatTransactionRechargesWallet(t *testing.T) {
 	if err := db.Where("user_guid = ?", "user-wechat").First(&quota).Error; err != nil {
 		t.Fatal(err)
 	}
-	if quota.RemainQuota != 200 || quota.TotalQuota != 200 {
-		t.Fatalf("quota = %+v, want recharge quota 200", quota)
+	if quota.RemainQuota != defaultRegisterQuota+200 || quota.TotalQuota != defaultRegisterQuota+200 {
+		t.Fatalf("quota = %+v, want default quota plus recharge quota", quota)
 	}
 
 	var wallet domains.UserWallet
@@ -151,6 +151,7 @@ func withWechatPaymentTestDB(t *testing.T) *gorm.DB {
 		&domains.UserWallet{},
 		&domains.UserWalletRecord{},
 		&domains.Option{},
+		&domains.Setting{},
 	); err != nil {
 		t.Fatal(err)
 	}

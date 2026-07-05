@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 
+	"navapi-go/constants"
+
 	commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 	commonUtils "github.com/wfu-work/nav-common-go-lib/utils"
 	"gorm.io/gorm"
@@ -12,6 +14,9 @@ import (
 const (
 	commonUserRoleCode = "USER"
 	commonUserRoleName = "普通用户"
+
+	clientUsernameExistsMessage = "用户名已存在，请更换后重试"
+	clientEmailExistsMessage    = "邮箱已被注册，请直接登录或更换邮箱"
 )
 
 type ClientRegisterService struct{}
@@ -43,15 +48,18 @@ func (s ClientRegisterService) Register(req ClientRegisterRequest) (*ClientRegis
 	if req.Password == "" {
 		return nil, errors.New("password required")
 	}
-	if req.Captcha == "" {
-		return nil, errors.New("email code required")
+	if isReservedClientUsername(req.Username) {
+		return nil, errors.New("admin 为系统管理员账号，不能用于注册")
 	}
 	settings := RegisterSettingServiceApp.Get()
 	if !settings.Enabled {
-		return nil, errors.New("register is disabled")
+		return nil, errors.New(registerDisabledMessage)
 	}
 	if settings.RequireInvite && req.InviteCode == "" {
 		return nil, errors.New("invite code is required")
+	}
+	if settings.RequireCaptcha && req.Captcha == "" {
+		return nil, errors.New("email code required")
 	}
 	password, err := commonUtils.AesDecrypt(req.Password)
 	if err != nil {
@@ -61,20 +69,22 @@ func (s ClientRegisterService) Register(req ClientRegisterRequest) (*ClientRegis
 	var created commonDomains.SysUser
 	err = MessageEmailCodeServiceApp.DB().Transaction(func(tx *gorm.DB) error {
 		var count int64
-		if err := tx.Model(&commonDomains.SysUser{}).Where("username = ?", req.Username).Count(&count).Error; err != nil {
+		if err := tx.Model(&commonDomains.SysUser{}).Where("LOWER(username) = ?", strings.ToLower(req.Username)).Count(&count).Error; err != nil {
 			return err
 		}
 		if count > 0 {
-			return errors.New("username already exists")
+			return errors.New(clientUsernameExistsMessage)
 		}
 		if err := tx.Model(&commonDomains.SysUser{}).Where("LOWER(email) = ?", req.Email).Count(&count).Error; err != nil {
 			return err
 		}
 		if count > 0 {
-			return errors.New("email already exists")
+			return errors.New(clientEmailExistsMessage)
 		}
-		if err := MessageEmailCodeServiceApp.WithDB(tx).Verify(req.Email, MessageSceneRegister, req.Captcha); err != nil {
-			return err
+		if settings.RequireCaptcha {
+			if err := MessageEmailCodeServiceApp.WithDB(tx).Verify(req.Email, MessageSceneRegister, req.Captcha); err != nil {
+				return err
+			}
 		}
 		created = commonDomains.SysUser{
 			Username: req.Username,
@@ -143,4 +153,8 @@ func normalizeClientRegisterRequest(req ClientRegisterRequest) ClientRegisterReq
 	req.Captcha = strings.TrimSpace(req.Captcha)
 	req.InviteCode = strings.TrimSpace(req.InviteCode)
 	return req
+}
+
+func isReservedClientUsername(username string) bool {
+	return strings.EqualFold(strings.TrimSpace(username), constants.AdminUsername)
 }

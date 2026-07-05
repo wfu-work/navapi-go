@@ -10,6 +10,8 @@ const (
 
 	DefaultGroup = "default"
 
+	AdminUsername = "admin"
+
 	ContextToken = "navapi_token"
 	ContextModel = "navapi_model"
 )
