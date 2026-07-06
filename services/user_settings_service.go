@@ -87,6 +87,36 @@ func (s *UserSettingsService) Save(userGuid string, settings *domains.UserSettin
 	return s.Get(userGuid)
 }
 
+func (s *UserSettingsService) SavePreferences(userGuid string, settings *domains.UserSettings) (*domains.UserSettings, error) {
+	userGuid = strings.TrimSpace(userGuid)
+	if userGuid == "" {
+		return nil, errors.New("user guid is required")
+	}
+	if settings == nil {
+		return nil, errors.New("user settings is required")
+	}
+	updating := *settings
+	updating.UserGuid = userGuid
+	normalizeUserSettings(&updating)
+	if err := validateOptionalJSONObject(updating.ExtraConfig, "extraConfig"); err != nil {
+		return nil, err
+	}
+	if err := s.DB().Transaction(func(tx *gorm.DB) error {
+		if err := s.Ensure(tx, userGuid); err != nil {
+			return err
+		}
+		return tx.Model(&domains.UserSettings{}).Where("user_guid = ?", userGuid).Updates(map[string]any{
+			"quota_reminder_enabled":        updating.QuotaReminderEnabled,
+			"platform_announcement_enabled": updating.PlatformAnnouncementEnabled,
+			"abnormal_call_alert_enabled":   updating.AbnormalCallAlertEnabled,
+			"extra_config":                  updating.ExtraConfig,
+		}).Error
+	}); err != nil {
+		return nil, err
+	}
+	return s.Get(userGuid)
+}
+
 func defaultUserSettings(userGuid string) domains.UserSettings {
 	return domains.UserSettings{
 		UserGuid:                    userGuid,

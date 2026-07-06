@@ -5,6 +5,8 @@ import commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 type ApiToken struct {
 	commonDomains.BaseDataEntity
 	UserGuid           string `json:"userGuid" gorm:"column:user_guid;size:100;index;comment:用户 GUID"`
+	Username           string `json:"username" gorm:"-"`
+	Email              string `json:"email" gorm:"-"`
 	Name               string `json:"name" gorm:"column:name;size:100;index;comment:令牌名称"`
 	Key                string `json:"-" gorm:"column:key;size:128;uniqueIndex;comment:令牌 key"`
 	MaskedKey          string `json:"key" gorm:"-"`

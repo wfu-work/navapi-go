@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -164,8 +165,43 @@ func (s *TokenService) List(userGuid string) ([]domains.ApiToken, error) {
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
-	err := db.Find(&tokens).Error
-	return tokens, err
+	if err := db.Find(&tokens).Error; err != nil {
+		return nil, err
+	}
+	s.fillTokenUsers(tokens)
+	return tokens, nil
+}
+
+func (s *TokenService) fillTokenUsers(tokens []domains.ApiToken) {
+	userGuids := make([]string, 0, len(tokens))
+	seen := map[string]bool{}
+	for _, token := range tokens {
+		guid := strings.TrimSpace(token.UserGuid)
+		if guid == "" || seen[guid] {
+			continue
+		}
+		seen[guid] = true
+		userGuids = append(userGuids, guid)
+	}
+	if len(userGuids) == 0 {
+		return
+	}
+	var users []commonDomains.SysUser
+	if err := s.DB().Where("guid IN ?", userGuids).Find(&users).Error; err != nil {
+		return
+	}
+	userMap := make(map[string]commonDomains.SysUser, len(users))
+	for _, user := range users {
+		userMap[user.Guid] = user
+	}
+	for i := range tokens {
+		user, ok := userMap[tokens[i].UserGuid]
+		if !ok {
+			continue
+		}
+		tokens[i].Username = user.Username
+		tokens[i].Email = user.Email
+	}
 }
 
 func (s *TokenService) Validate(key string, clientIP string) (*domains.ApiToken, error) {

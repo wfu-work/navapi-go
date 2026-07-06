@@ -49,6 +49,38 @@ func TestUserSettingsSavePersistsBooleanValues(t *testing.T) {
 	}
 }
 
+func TestUserSettingsSavePreferencesPreservesMaxConcurrency(t *testing.T) {
+	withUserSettingsTestDB(t)
+
+	if _, err := UserSettingsServiceApp.Save("user-003", &domains.UserSettings{
+		QuotaReminderEnabled:        true,
+		PlatformAnnouncementEnabled: true,
+		AbnormalCallAlertEnabled:    false,
+		MaxConcurrency:              12,
+		ExtraConfig:                 `{}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, err := UserSettingsServiceApp.SavePreferences("user-003", &domains.UserSettings{
+		QuotaReminderEnabled:        false,
+		PlatformAnnouncementEnabled: false,
+		AbnormalCallAlertEnabled:    true,
+		MaxConcurrency:              1,
+		ExtraConfig:                 `{"notify":"compact"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.QuotaReminderEnabled ||
+		settings.PlatformAnnouncementEnabled ||
+		!settings.AbnormalCallAlertEnabled ||
+		settings.MaxConcurrency != 12 ||
+		settings.ExtraConfig != `{"notify":"compact"}` {
+		t.Fatalf("settings = %+v, want preferences saved and max concurrency preserved", settings)
+	}
+}
+
 func withUserSettingsTestDB(t *testing.T) {
 	t.Helper()
 	previousDB := global.NAV_DB

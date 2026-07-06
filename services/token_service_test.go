@@ -7,6 +7,7 @@ import (
 	"navapi-go/constants"
 	"navapi-go/domains"
 
+	commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 	"github.com/wfu-work/nav-common-go-lib/global"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -56,6 +57,42 @@ func TestTokenUsageFiltersLogsByUserGuid(t *testing.T) {
 	}
 }
 
+func TestTokenListIncludesUserProfile(t *testing.T) {
+	db := withTokenTestDB(t)
+	user := commonDomains.SysUser{
+		Username: "alice",
+		Email:    "alice@example.com",
+	}
+	user.Guid = "user-alice"
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	token := domains.ApiToken{
+		UserGuid:       user.Guid,
+		Name:           "alice-token",
+		Key:            "sk-alice",
+		Status:         constants.StatusEnabled,
+		Group:          constants.DefaultGroup,
+		RemainQuota:    100,
+		UnlimitedQuota: false,
+	}
+	token.Guid = "token-alice"
+	if err := db.Create(&token).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	tokens, err := TokenServiceApp.List("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 1 {
+		t.Fatalf("tokens len = %d, want 1", len(tokens))
+	}
+	if tokens[0].Username != user.Username || tokens[0].Email != user.Email {
+		t.Fatalf("token user = %q/%q, want %q/%q", tokens[0].Username, tokens[0].Email, user.Username, user.Email)
+	}
+}
+
 func withTokenTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	previousDB := global.NAV_DB
@@ -64,7 +101,7 @@ func withTokenTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&domains.ApiToken{}, &domains.UsageLog{}, &domains.UserQuota{}, &domains.Option{}, &domains.ModelMeta{}, &domains.ModelGroup{}); err != nil {
+	if err := db.AutoMigrate(&domains.ApiToken{}, &domains.UsageLog{}, &domains.UserQuota{}, &domains.Option{}, &domains.ModelMeta{}, &domains.ModelGroup{}, &commonDomains.SysUser{}); err != nil {
 		t.Fatal(err)
 	}
 	global.NAV_DB = db

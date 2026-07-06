@@ -26,7 +26,7 @@ func (a UserSettingsApi) SaveSelf(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	settings, err := services.UserSettingsServiceApp.Save(utils.GetUserGuid(c), &req)
+	settings, err := services.UserSettingsServiceApp.SavePreferences(utils.GetUserGuid(c), &req)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

@@ -52,6 +52,32 @@ func TestStreamUsageTrackerParsesSplitSSEChunks(t *testing.T) {
 	}
 }
 
+func TestEnsureOpenAIStreamUsageAddsIncludeUsage(t *testing.T) {
+	body := []byte(`{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+
+	next := ensureOpenAIStreamUsage(body, "application/json")
+	var payload map[string]any
+	if err := json.Unmarshal(next, &payload); err != nil {
+		t.Fatal(err)
+	}
+	options, ok := payload["stream_options"].(map[string]any)
+	if !ok {
+		t.Fatalf("stream_options = %#v, want object", payload["stream_options"])
+	}
+	if options["include_usage"] != true {
+		t.Fatalf("include_usage = %#v, want true", options["include_usage"])
+	}
+}
+
+func TestEnsureOpenAIStreamUsageSkipsNonStreamRequest(t *testing.T) {
+	body := []byte(`{"model":"gpt-test","stream":false}`)
+
+	next := ensureOpenAIStreamUsage(body, "application/json")
+	if string(next) != string(body) {
+		t.Fatalf("non-stream body changed: %s", string(next))
+	}
+}
+
 func TestRewriteBodyModelOnlyTouchesJSONModel(t *testing.T) {
 	body := []byte(`{"model":"public-model","messages":[{"role":"user","content":"hi"}]}`)
 
