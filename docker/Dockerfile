@@ -7,7 +7,7 @@ ENV PREFER_HOST_MODE="ip"\
 
 WORKDIR $BASE_DIR
 
-COPY ../build/navapi .
+COPY navapi .
 
 RUN chmod +x navapi
 
