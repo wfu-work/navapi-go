@@ -1,0 +1,1 @@
+docker build -t registry.cn-hangzhou.aliyuncs.com/navfirst/navapi:1.0.0 .

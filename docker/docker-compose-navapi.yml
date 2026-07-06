@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  navapi:
+    image: registry.cn-hangzhou.aliyuncs.com/navfirst/navapi:1.0.0
+    container_name: navapi
+    hostname: navapi
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./navapi/logback:/app/navapi/logback
+      - ./navapi/data:/app/navapi/data
+    restart: always
+    networks:
+      - nav-net
+
+networks:
+  nav-net:
+    driver: bridge
