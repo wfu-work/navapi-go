@@ -52,6 +52,10 @@ func (a MessageEmailConfigApi) DebugSend(c *gin.Context) {
 	req.ConfigGuid = c.Param("guid")
 	result, err := services.EmailServiceApp.DebugEmailConfig(req)
 	if err != nil {
+		if result != nil {
+			response.FailWithDetailed(result, err.Error(), c)
+			return
+		}
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

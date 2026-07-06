@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -340,6 +341,49 @@ func TestDebugEmailConfigCanRenderSelectedTemplate(t *testing.T) {
 	}
 	if record.TemplateCode != TemplateCodeAdminDailyUsageBill || record.TemplateName != "管理员每日用量账单" || record.SendStatus != MessageSendStatusSuccess {
 		t.Fatalf("record = %+v, want selected template send record", record)
+	}
+}
+
+func TestDebugEmailConfigReturnsSMTPFailureDetails(t *testing.T) {
+	db := withMessageTestDB(t)
+	config, err := MessageEmailConfigServiceApp.Save(SaveMessageEmailConfigRequest{
+		Name:       "broken smtp",
+		Host:       "smtp.broken.example.com",
+		Port:       465,
+		FromEmail:  "debug@example.com",
+		FromName:   "Debug Mail",
+		Encryption: "ssl",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousSender := emailSendHTML
+	emailSendHTML = func(_ EmailService, _ domains.MessageEmailConfig, _ []string, _ string, _ string) error {
+		return errors.New("dial tcp smtp.broken.example.com:465: connect: connection refused")
+	}
+	t.Cleanup(func() { emailSendHTML = previousSender })
+
+	result, err := EmailServiceApp.DebugEmailConfig(DebugEmailConfigInput{
+		ConfigGuid:     config.Guid,
+		RecipientEmail: "ops@example.com",
+	})
+	if err == nil || !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("err = %v, want underlying smtp failure", err)
+	}
+	if result == nil || result.Failures != 1 || len(result.RecordGuids) != 1 || len(result.FailureDetails) != 1 {
+		t.Fatalf("result = %+v, want one failure with details", result)
+	}
+	if result.FailureDetails[0].RecordGuid != result.RecordGuids[0] ||
+		result.FailureDetails[0].RecipientEmail != "ops@example.com" ||
+		!strings.Contains(result.FailureDetails[0].Error, "connection refused") {
+		t.Fatalf("failure details = %+v, want record guid, recipient and smtp error", result.FailureDetails[0])
+	}
+	var record domains.MessageSendRecord
+	if err := db.Where("guid = ?", result.RecordGuids[0]).First(&record).Error; err != nil {
+		t.Fatal(err)
+	}
+	if record.SendStatus != MessageSendStatusFailed || !strings.Contains(record.ErrorMessage, "connection refused") {
+		t.Fatalf("record = %+v, want failed send record with smtp error", record)
 	}
 }
 

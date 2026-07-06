@@ -47,12 +47,19 @@ type EmailTemplatePreviewResult struct {
 }
 
 type EmailSendResult struct {
-	Recipients  int      `json:"recipients"`
-	Subject     string   `json:"subject"`
-	Successes   int      `json:"successes"`
-	Failures    int      `json:"failures"`
-	BatchGuid   string   `json:"batchGuid"`
-	RecordGuids []string `json:"recordGuids"`
+	Recipients     int                `json:"recipients"`
+	Subject        string             `json:"subject"`
+	Successes      int                `json:"successes"`
+	Failures       int                `json:"failures"`
+	BatchGuid      string             `json:"batchGuid"`
+	RecordGuids    []string           `json:"recordGuids"`
+	FailureDetails []EmailSendFailure `json:"failureDetails,omitempty"`
+}
+
+type EmailSendFailure struct {
+	RecordGuid     string `json:"recordGuid,omitempty"`
+	RecipientEmail string `json:"recipientEmail,omitempty"`
+	Error          string `json:"error"`
 }
 
 type SendRegisterCodeInput struct {
@@ -345,16 +352,19 @@ func (s EmailService) sendRenderedHTML(input emailRenderedInput) (*EmailSendResu
 		created, err := MessageSendRecordServiceApp.Create(record)
 		if err != nil {
 			result.Failures++
+			appendEmailSendFailure(result, "", recipient, err)
 			continue
 		}
 		result.RecordGuids = append(result.RecordGuids, created.Guid)
 		if configErr != nil {
 			result.Failures++
+			appendEmailSendFailure(result, created.Guid, recipient, configErr)
 			_ = markEmailRecordFailed(created.Guid, configErr)
 			continue
 		}
 		if err := emailSendHTML(s, *config, []string{recipient}, subject, htmlBody); err != nil {
 			result.Failures++
+			appendEmailSendFailure(result, created.Guid, recipient, err)
 			_ = markEmailRecordFailed(created.Guid, err)
 			continue
 		}
@@ -401,11 +411,13 @@ func (s EmailService) sendWithConfig(config domains.MessageEmailConfig, input em
 		created, err := MessageSendRecordServiceApp.Create(record)
 		if err != nil {
 			result.Failures++
+			appendEmailSendFailure(result, "", recipient, err)
 			continue
 		}
 		result.RecordGuids = append(result.RecordGuids, created.Guid)
 		if err := emailSendHTML(s, config, []string{recipient}, subject, htmlBody); err != nil {
 			result.Failures++
+			appendEmailSendFailure(result, created.Guid, recipient, err)
 			_ = markEmailRecordFailed(created.Guid, err)
 			continue
 		}
@@ -413,9 +425,31 @@ func (s EmailService) sendWithConfig(config domains.MessageEmailConfig, input em
 		_ = markEmailRecordSuccess(created.Guid)
 	}
 	if result.Failures > 0 {
-		return result, fmt.Errorf("email send failed: %d/%d", result.Failures, result.Recipients)
+		return result, emailSendFailedError(result)
 	}
 	return result, nil
+}
+
+func appendEmailSendFailure(result *EmailSendResult, recordGuid string, recipient string, err error) {
+	if result == nil || err == nil {
+		return
+	}
+	result.FailureDetails = append(result.FailureDetails, EmailSendFailure{
+		RecordGuid:     strings.TrimSpace(recordGuid),
+		RecipientEmail: strings.TrimSpace(recipient),
+		Error:          err.Error(),
+	})
+}
+
+func emailSendFailedError(result *EmailSendResult) error {
+	if result == nil {
+		return errors.New("email send failed")
+	}
+	message := fmt.Sprintf("email send failed: %d/%d", result.Failures, result.Recipients)
+	if len(result.FailureDetails) > 0 && strings.TrimSpace(result.FailureDetails[0].Error) != "" {
+		message += ": " + strings.TrimSpace(result.FailureDetails[0].Error)
+	}
+	return errors.New(message)
 }
 
 func markEmailRecordSuccess(guid string) error {
