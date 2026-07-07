@@ -55,7 +55,7 @@ func TestProviderSaveNormalizesAndPreservesKeyOnUpdate(t *testing.T) {
 	if provider.QuotaModelWhitelist != "deepseek-chat,deepseek-reasoner" {
 		t.Fatalf("quotaModelWhitelist = %q, want normalized list", provider.QuotaModelWhitelist)
 	}
-	if provider.BalanceTemplate != "generic" || provider.BalanceCustomPath != "/v1/usage" || provider.BalanceAuthType != "provider_bearer" || provider.BalanceRemainingPath != "remaining" || provider.BalanceMultiplier != 1 || provider.BalanceUnit != "USD" {
+	if provider.BalanceTemplate != "generic" || provider.BalanceCustomPath != "/user/balance" || provider.BalanceAuthType != "provider_bearer" || provider.BalanceRemainingPath != "remaining" || provider.BalanceMultiplier != 1 || provider.BalanceUnit != "USD" {
 		t.Fatalf("balance defaults were not normalized: %+v", provider)
 	}
 	if !provider.ProxyEnabled || provider.ProxyType != "socks5" || provider.ProxyURL != "127.0.0.1:7890" || provider.ProxyUsername != "proxy-user" || provider.ProxyPassword != "proxy-pass" {
@@ -295,6 +295,111 @@ func TestProviderTestConnectionMeasuresBaseURL(t *testing.T) {
 	}
 	if !result.OK || result.StatusCode != http.StatusNoContent || result.TargetURL != upstream.URL+"/v1" {
 		t.Fatalf("result = %+v, want successful 204 probe", result)
+	}
+}
+
+func TestProviderBalanceGenericCCSTemplate(t *testing.T) {
+	requests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/user/balance" {
+			t.Fatalf("path = %s, want /user/balance", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer sk-provider" {
+			t.Fatalf("authorization = %q, want provider bearer", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("User-Agent") != "cc-switch/1.0" {
+			t.Fatalf("user-agent = %q, want cc-switch/1.0", r.Header.Get("User-Agent"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"remaining":12.5,"total":20,"used":7.5,"plan":"pro","active":true}`))
+	}))
+	defer upstream.Close()
+
+	result, err := ProviderServiceApp.TestBalance(&domains.VendorMeta{
+		Type:            constants.ProviderTypeOpenAI,
+		BaseURL:         upstream.URL + "/v1",
+		Key:             "sk-provider",
+		BalanceTemplate: "generic",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	if !result.OK || result.StatusCode != http.StatusOK || result.TargetURL != upstream.URL+"/user/balance" {
+		t.Fatalf("result = %+v, want successful balance query", result)
+	}
+	if result.Remaining == nil || *result.Remaining != 12.5 || result.Total == nil || *result.Total != 20 || result.Used == nil || *result.Used != 7.5 {
+		t.Fatalf("result amounts = %+v, want parsed remaining/total/used", result)
+	}
+	if result.Plan != "pro" || result.Valid == nil || !*result.Valid {
+		t.Fatalf("plan/valid = %q/%v, want pro/true", result.Plan, result.Valid)
+	}
+}
+
+func TestProviderBalanceNewAPITemplate(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/user/self" {
+			t.Fatalf("path = %s, want /api/user/self", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer balance-token" {
+			t.Fatalf("authorization = %q, want balance token", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"quota":500000,"used_quota":250000,"group":"default"}}`))
+	}))
+	defer upstream.Close()
+
+	result, err := ProviderServiceApp.TestBalance(&domains.VendorMeta{
+		Type:               constants.ProviderTypeOpenAI,
+		BaseURL:            upstream.URL + "/v1",
+		Key:                "sk-provider",
+		BalanceTemplate:    "newapi",
+		BalanceAccessToken: "balance-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || result.Remaining == nil || *result.Remaining != 1 || result.Used == nil || *result.Used != 0.5 || result.Total == nil || *result.Total != 1.5 {
+		t.Fatalf("result = %+v, want converted NewAPI quota values", result)
+	}
+	if result.Plan != "default" || result.Unit != "USD" {
+		t.Fatalf("plan/unit = %q/%q, want default/USD", result.Plan, result.Unit)
+	}
+}
+
+func TestProviderBalanceOfficialTemplate(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dashboard/billing/credit_grants" {
+			t.Fatalf("path = %s, want official billing path", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer sk-official" {
+			t.Fatalf("authorization = %q, want provider bearer", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"total_available":3.2,"total_granted":5,"total_used":1.8}`))
+	}))
+	defer upstream.Close()
+
+	result, err := ProviderServiceApp.TestBalance(&domains.VendorMeta{
+		Type:            constants.ProviderTypeOpenAI,
+		BaseURL:         upstream.URL + "/v1",
+		Key:             "sk-official",
+		BalanceTemplate: "official",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || result.TargetURL != upstream.URL+"/dashboard/billing/credit_grants" {
+		t.Fatalf("result = %+v, want successful official query", result)
+	}
+	if result.Remaining == nil || *result.Remaining != 3.2 || result.Total == nil || *result.Total != 5 || result.Used == nil || *result.Used != 1.8 {
+		t.Fatalf("result amounts = %+v, want official credit fields", result)
 	}
 }
 

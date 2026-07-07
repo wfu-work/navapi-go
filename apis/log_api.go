@@ -144,11 +144,13 @@ func (a UsageLogApi) SelfData(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param days query int false "统计天数"
+// @Param startTime query int false "开始时间"
+// @Param endTime query int false "结束时间"
 // @Param top query int false "返回数量"
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /usage/summary [get]
 func (a UsageLogApi) UsageSummary(c *gin.Context) {
-	summary, err := services.LogServiceApp.UsageSummary("", parseDaysQuery(c), parseTopQuery(c))
+	summary, err := services.LogServiceApp.UsageSummaryByQuery("", parseUsageSummaryQuery(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -164,11 +166,13 @@ func (a UsageLogApi) UsageSummary(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param days query int false "统计天数"
+// @Param startTime query int false "开始时间"
+// @Param endTime query int false "结束时间"
 // @Param top query int false "返回数量"
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /usage/self/summary [get]
 func (a UsageLogApi) SelfUsageSummary(c *gin.Context) {
-	summary, err := services.LogServiceApp.UsageSummary(middlewares.ScopedUserGuid(c), parseDaysQuery(c), parseTopQuery(c))
+	summary, err := services.LogServiceApp.UsageSummaryByQuery(middlewares.ScopedUserGuid(c), parseUsageSummaryQuery(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -190,4 +194,21 @@ func parseTopQuery(c *gin.Context) int {
 		return 10
 	}
 	return top
+}
+
+func parseUsageSummaryQuery(c *gin.Context) services.UsageSummaryQuery {
+	return services.UsageSummaryQuery{
+		Days:      parseDaysQuery(c),
+		TopN:      parseTopQuery(c),
+		StartTime: parseInt64Query(c, "startTime"),
+		EndTime:   parseInt64Query(c, "endTime"),
+	}
+}
+
+func parseInt64Query(c *gin.Context, key string) int64 {
+	value, err := strconv.ParseInt(c.DefaultQuery(key, "0"), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return value
 }

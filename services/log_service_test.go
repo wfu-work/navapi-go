@@ -91,6 +91,13 @@ func TestLogServiceFiltersUsageLogsByStatusAndTime(t *testing.T) {
 func TestUsageSummaryKeepsUsersSeparateByGuid(t *testing.T) {
 	db := withLogTestDB(t)
 	now := time.Now().UnixMilli()
+	users := []commonDomains.SysUser{
+		{BaseDataEntity: commonDomains.BaseDataEntity{Guid: "user-a"}, Username: "alice", Email: "alice@example.com"},
+		{BaseDataEntity: commonDomains.BaseDataEntity{Guid: "user-b"}, Username: "bob", Email: "bob@example.com"},
+	}
+	if err := db.Create(&users).Error; err != nil {
+		t.Fatal(err)
+	}
 	logs := []domains.UsageLog{
 		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: now}, UserGuid: "user-a", Username: "same-name", TokenGuid: "token-a", TokenName: "dev", ProviderGuid: "provider-1", ProviderName: "OpenAI", ModelName: "gpt-4o", Quota: 10, PromptTokens: 4, CompletionTokens: 6, Status: "success"},
 		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: now}, UserGuid: "user-b", Username: "same-name", TokenGuid: "token-b", TokenName: "dev", ProviderGuid: "provider-1", ProviderName: "OpenAI", ModelName: "gpt-4o", Quota: 20, PromptTokens: 8, CompletionTokens: 12, Status: "success"},
@@ -115,6 +122,18 @@ func TestUsageSummaryKeepsUsersSeparateByGuid(t *testing.T) {
 	}
 	if !seen["user-a"] || !seen["user-b"] {
 		t.Fatalf("byUser = %+v, want userGuid fields for both users", summary.ByUser)
+	}
+	for _, item := range summary.ByUser {
+		switch item.UserGuid {
+		case "user-a":
+			if item.Name != "alice" || item.Username != "alice" || item.Email != "alice@example.com" {
+				t.Fatalf("user-a stat = %+v, want enriched alice identity", item)
+			}
+		case "user-b":
+			if item.Name != "bob" || item.Username != "bob" || item.Email != "bob@example.com" {
+				t.Fatalf("user-b stat = %+v, want enriched bob identity", item)
+			}
+		}
 	}
 
 	selfSummary, err := LogServiceApp.UsageSummary("user-a", 1, 10)
@@ -169,6 +188,43 @@ func TestUsageSummaryIncludesModelSeriesScopedByUser(t *testing.T) {
 	}
 }
 
+func TestUsageSummaryByQueryUsesCustomTimeRange(t *testing.T) {
+	db := withLogTestDB(t)
+	day1 := time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)
+	day2 := time.Date(2026, 7, 2, 9, 0, 0, 0, time.UTC)
+	day3 := time.Date(2026, 7, 3, 9, 0, 0, 0, time.UTC)
+	logs := []domains.UsageLog{
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: day1.UnixMilli()}, UserGuid: "user-a", ModelName: "gpt-5.5", Quota: 99, PromptTokens: 50, CompletionTokens: 49, Status: "success"},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: day2.UnixMilli()}, UserGuid: "user-a", ModelName: "gpt-5.5", Quota: 10, PromptTokens: 4, CompletionTokens: 6, Status: "success"},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: day3.UnixMilli()}, UserGuid: "user-a", ModelName: "gpt-5.4", Quota: 20, PromptTokens: 8, CompletionTokens: 12, Status: "error"},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: day2.UnixMilli()}, UserGuid: "user-b", ModelName: "gpt-5.5", Quota: 30, PromptTokens: 10, CompletionTokens: 20, Status: "success"},
+	}
+	if err := db.Create(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := LogServiceApp.UsageSummaryByQuery("user-a", UsageSummaryQuery{
+		StartTime: day2.Add(-time.Hour).UnixMilli(),
+		EndTime:   day3.Add(time.Hour).UnixMilli(),
+		TopN:      10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Days != 2 || len(summary.Series) != 2 {
+		t.Fatalf("summary range = days:%d series:%+v, want 2 days", summary.Days, summary.Series)
+	}
+	if summary.TotalRequests != 2 || summary.Quota != 30 || summary.SuccessRequests != 1 || summary.ErrorRequests != 1 {
+		t.Fatalf("summary totals = %+v, want only user-a logs in custom range", summary)
+	}
+	if summary.Series[0].Date != "2026-07-02" || summary.Series[0].Quota != 10 {
+		t.Fatalf("first series point = %+v, want 2026-07-02 quota 10", summary.Series[0])
+	}
+	if summary.Series[1].Date != "2026-07-03" || summary.Series[1].Quota != 20 {
+		t.Fatalf("second series point = %+v, want 2026-07-03 quota 20", summary.Series[1])
+	}
+}
+
 func withLogTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	previousDB := global.NAV_DB
@@ -176,7 +232,7 @@ func withLogTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&domains.UsageLog{}, &domains.ModelMeta{}, &domains.ModelGroup{}); err != nil {
+	if err := db.AutoMigrate(&domains.UsageLog{}, &domains.ModelMeta{}, &domains.ModelGroup{}, &commonDomains.SysUser{}); err != nil {
 		t.Fatal(err)
 	}
 	global.NAV_DB = db

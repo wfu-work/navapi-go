@@ -8,6 +8,7 @@ import (
 	"navapi-go/domains"
 	"navapi-go/vos"
 
+	commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
 )
@@ -43,6 +44,8 @@ type UsageNamedSeries struct {
 type UsageDimensionStat struct {
 	Name             string `json:"name"`
 	UserGuid         string `json:"userGuid,omitempty"`
+	Username         string `json:"username,omitempty"`
+	Email            string `json:"email,omitempty"`
 	TokenGuid        string `json:"tokenGuid,omitempty"`
 	ProviderGuid     string `json:"providerGuid,omitempty"`
 	ModelName        string `json:"modelName,omitempty"`
@@ -58,6 +61,8 @@ type UsageDimensionStat struct {
 
 type UsageSummary struct {
 	Days             int                  `json:"days"`
+	StartTime        int64                `json:"startTime,omitempty"`
+	EndTime          int64                `json:"endTime,omitempty"`
 	TotalRequests    int64                `json:"totalRequests"`
 	SuccessRequests  int64                `json:"successRequests"`
 	ErrorRequests    int64                `json:"errorRequests"`
@@ -73,6 +78,13 @@ type UsageSummary struct {
 	ByProvider       []UsageDimensionStat `json:"byProvider"`
 	ByToken          []UsageDimensionStat `json:"byToken"`
 	ByUser           []UsageDimensionStat `json:"byUser,omitempty"`
+}
+
+type UsageSummaryQuery struct {
+	Days      int
+	TopN      int
+	StartTime int64
+	EndTime   int64
 }
 
 type UsageLogQuery struct {
@@ -254,7 +266,33 @@ func (s *LogService) DailyData(userGuid string, days int) ([]DailyUsageData, err
 	}
 	end := time.Now()
 	start := beginningOfDay(end).AddDate(0, 0, -(days - 1))
-	db := s.DB().Model(&domains.UsageLog{}).Where("create_time >= ?", start.UnixMilli())
+	return s.dailyDataInRange(userGuid, start.UnixMilli(), end.UnixMilli())
+}
+
+func (s *LogService) dailyDataInRange(userGuid string, startTime int64, endTime int64) ([]DailyUsageData, error) {
+	startTime = normalizeUsageQueryTime(startTime)
+	endTime = normalizeUsageQueryTime(endTime)
+	if endTime <= 0 {
+		endTime = time.Now().UnixMilli()
+	}
+	if startTime <= 0 {
+		startTime = beginningOfDay(time.UnixMilli(endTime)).AddDate(0, 0, -6).UnixMilli()
+	}
+	if startTime > endTime {
+		startTime, endTime = endTime, startTime
+	}
+	start := beginningOfDay(time.UnixMilli(startTime))
+	endDay := beginningOfDay(time.UnixMilli(endTime))
+	days := int(endDay.Sub(start).Hours()/24) + 1
+	if days <= 0 {
+		days = 1
+	}
+	if days > 366 {
+		days = 366
+		start = endDay.AddDate(0, 0, -(days - 1))
+		startTime = start.UnixMilli()
+	}
+	db := s.DB().Model(&domains.UsageLog{}).Where("create_time >= ? AND create_time <= ?", startTime, endTime)
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -294,24 +332,16 @@ func (s *LogService) DailyData(userGuid string, days int) ([]DailyUsageData, err
 // UsageSummary builds dashboard-ready aggregates without relying on
 // database-specific date functions, keeping the statistics portable.
 func (s *LogService) UsageSummary(userGuid string, days int, topN int) (UsageSummary, error) {
-	if days <= 0 {
-		days = 7
-	}
-	if days > 90 {
-		days = 90
-	}
-	if topN <= 0 {
-		topN = 10
-	}
-	if topN > 50 {
-		topN = 50
-	}
-	series, err := s.DailyData(userGuid, days)
+	return s.UsageSummaryByQuery(userGuid, UsageSummaryQuery{Days: days, TopN: topN})
+}
+
+func (s *LogService) UsageSummaryByQuery(userGuid string, query UsageSummaryQuery) (UsageSummary, error) {
+	normalized := normalizeUsageSummaryQuery(query)
+	series, err := s.dailyDataInRange(userGuid, normalized.StartTime, normalized.EndTime)
 	if err != nil {
 		return UsageSummary{}, err
 	}
-	start := beginningOfDay(time.Now()).AddDate(0, 0, -(days - 1))
-	db := s.DB().Model(&domains.UsageLog{}).Where("create_time >= ?", start.UnixMilli())
+	db := s.DB().Model(&domains.UsageLog{}).Where("create_time >= ? AND create_time <= ?", normalized.StartTime, normalized.EndTime)
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
@@ -320,7 +350,7 @@ func (s *LogService) UsageSummary(userGuid string, days int, topN int) (UsageSum
 		Find(&logs).Error; err != nil {
 		return UsageSummary{}, err
 	}
-	summary := UsageSummary{Days: days, Series: series}
+	summary := UsageSummary{Days: normalized.Days, StartTime: normalized.StartTime, EndTime: normalized.EndTime, Series: series}
 	byModel := map[string]*UsageDimensionStat{}
 	byProvider := map[string]*UsageDimensionStat{}
 	byToken := map[string]*UsageDimensionStat{}
@@ -344,20 +374,102 @@ func (s *LogService) UsageSummary(userGuid string, days int, topN int) (UsageSum
 		if userGuid == "" {
 			applyDimensionStat(byUser, fallbackName(log.UserGuid, log.Username), fallbackName(log.Username, log.UserGuid), log, func(item *UsageDimensionStat, log domains.UsageLog) {
 				fillUsageDimensionText(&item.UserGuid, log.UserGuid)
+				fillUsageDimensionText(&item.Username, log.Username)
 			})
 		}
 	}
 	if summary.TotalRequests > 0 {
 		summary.AvgUseTimeMs = summary.AvgUseTimeMs / summary.TotalRequests
 	}
-	summary.ByModel = topUsageStats(byModel, topN)
+	summary.ByModel = topUsageStats(byModel, normalized.TopN)
 	summary.SeriesByModel = buildModelSeries(byModelSeries, summary.ByModel, series)
-	summary.ByProvider = topUsageStats(byProvider, topN)
-	summary.ByToken = topUsageStats(byToken, topN)
+	summary.ByProvider = topUsageStats(byProvider, normalized.TopN)
+	summary.ByToken = topUsageStats(byToken, normalized.TopN)
 	if userGuid == "" {
-		summary.ByUser = topUsageStats(byUser, topN)
+		summary.ByUser = topUsageStats(byUser, normalized.TopN)
+		s.enrichUsageUsers(summary.ByUser)
 	}
 	return summary, nil
+}
+
+func (s *LogService) enrichUsageUsers(rows []UsageDimensionStat) {
+	userGuids := make([]string, 0, len(rows))
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if row.UserGuid == "" || seen[row.UserGuid] {
+			continue
+		}
+		seen[row.UserGuid] = true
+		userGuids = append(userGuids, row.UserGuid)
+	}
+	if len(userGuids) == 0 {
+		return
+	}
+	var users []commonDomains.SysUser
+	if err := s.DB().Where("guid IN ?", userGuids).Find(&users).Error; err != nil {
+		return
+	}
+	userByGuid := make(map[string]commonDomains.SysUser, len(users))
+	for _, user := range users {
+		userByGuid[user.Guid] = user
+	}
+	for i := range rows {
+		user, ok := userByGuid[rows[i].UserGuid]
+		if !ok {
+			continue
+		}
+		if user.Username != "" {
+			rows[i].Username = user.Username
+			rows[i].Name = user.Username
+		}
+		if user.Email != "" {
+			rows[i].Email = user.Email
+		}
+	}
+}
+
+func normalizeUsageSummaryQuery(query UsageSummaryQuery) UsageSummaryQuery {
+	days := query.Days
+	if days <= 0 {
+		days = 7
+	}
+	if days > 90 {
+		days = 90
+	}
+	topN := query.TopN
+	if topN <= 0 {
+		topN = 10
+	}
+	if topN > 50 {
+		topN = 50
+	}
+	endTime := normalizeUsageQueryTime(query.EndTime)
+	startTime := normalizeUsageQueryTime(query.StartTime)
+	if startTime <= 0 && endTime <= 0 {
+		end := time.Now()
+		start := beginningOfDay(end).AddDate(0, 0, -(days - 1))
+		return UsageSummaryQuery{Days: days, TopN: topN, StartTime: start.UnixMilli(), EndTime: end.UnixMilli()}
+	}
+	if endTime <= 0 {
+		endTime = time.Now().UnixMilli()
+	}
+	if startTime <= 0 {
+		startTime = beginningOfDay(time.UnixMilli(endTime)).AddDate(0, 0, -(days - 1)).UnixMilli()
+	}
+	if startTime > endTime {
+		startTime, endTime = endTime, startTime
+	}
+	startDay := beginningOfDay(time.UnixMilli(startTime))
+	endDay := beginningOfDay(time.UnixMilli(endTime))
+	days = int(endDay.Sub(startDay).Hours()/24) + 1
+	if days <= 0 {
+		days = 1
+	}
+	if days > 366 {
+		days = 366
+		startTime = endDay.AddDate(0, 0, -(days - 1)).UnixMilli()
+	}
+	return UsageSummaryQuery{Days: days, TopN: topN, StartTime: startTime, EndTime: endTime}
 }
 
 func applyUsageStat(summary *UsageSummary, log domains.UsageLog) {

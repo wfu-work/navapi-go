@@ -283,13 +283,16 @@ func normalizeProviderBalanceConfig(provider *domains.VendorMeta) {
 	provider.BalanceBaseURL = strings.TrimSpace(provider.BalanceBaseURL)
 	provider.BalanceAccessToken = strings.TrimSpace(provider.BalanceAccessToken)
 	provider.BalanceUserID = strings.TrimSpace(provider.BalanceUserID)
-	provider.BalanceCustomPath = defaultString(provider.BalanceCustomPath, "/v1/usage")
-	provider.BalanceAuthType = defaultString(provider.BalanceAuthType, balanceAuthProviderBearer)
-	provider.BalanceRemainingPath = defaultString(provider.BalanceRemainingPath, "remaining")
-	if provider.BalanceMultiplier <= 0 {
-		provider.BalanceMultiplier = 1
+	provider.BalanceCustomPath = strings.TrimSpace(provider.BalanceCustomPath)
+	if provider.BalanceCustomPath == "" || provider.BalanceCustomPath == "/v1/usage" {
+		provider.BalanceCustomPath = defaultBalancePath(provider.BalanceTemplate)
 	}
-	provider.BalanceUnit = defaultString(provider.BalanceUnit, "USD")
+	provider.BalanceAuthType = defaultString(provider.BalanceAuthType, balanceAuthProviderBearer)
+	provider.BalanceRemainingPath = defaultString(provider.BalanceRemainingPath, defaultBalanceRemainingPath(provider.BalanceTemplate))
+	if provider.BalanceMultiplier <= 0 {
+		provider.BalanceMultiplier = defaultBalanceMultiplier(provider.BalanceTemplate)
+	}
+	provider.BalanceUnit = defaultString(provider.BalanceUnit, defaultBalanceUnit(provider.BalanceTemplate))
 	provider.BalanceTotalPath = strings.TrimSpace(provider.BalanceTotalPath)
 	provider.BalanceUsedPath = strings.TrimSpace(provider.BalanceUsedPath)
 	provider.BalancePlanPath = strings.TrimSpace(provider.BalancePlanPath)
@@ -622,8 +625,10 @@ func normalizeBalanceTemplate(template string) string {
 	switch strings.ToLower(strings.TrimSpace(template)) {
 	case balanceTemplateNewAPI:
 		return balanceTemplateNewAPI
+	case balanceTemplateOfficial:
+		return balanceTemplateOfficial
 	case balanceTemplateCustom:
-		return balanceTemplateCustom
+		return balanceTemplateGeneric
 	default:
 		return balanceTemplateGeneric
 	}

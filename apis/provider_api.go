@@ -110,6 +110,49 @@ func (a ProviderApi) Test(c *gin.Context) {
 	response.Ok(result, c)
 }
 
+// Balance 查询上游余额
+// @Summary 查询上游余额
+// @Description 按服务商 GUID 查询上游余额
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param guid path string true "GUID"
+// @Success 200 {object} response.Response{data=services.ProviderBalanceResult,msg=string}
+// @Router /provider/{guid}/balance [get]
+func (a ProviderApi) Balance(c *gin.Context) {
+	result, err := services.ProviderServiceApp.Balance(providerGuidParam(c))
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(result, c)
+}
+
+// TestBalance 测试上游余额查询
+// @Summary 测试上游余额查询
+// @Description 使用提交的服务商配置测试余额查询
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body domains.VendorMeta true "上游提供商对象"
+// @Success 200 {object} response.Response{data=services.ProviderBalanceResult,msg=string}
+// @Router /provider/balance/test [post]
+func (a ProviderApi) TestBalance(c *gin.Context) {
+	var provider domains.VendorMeta
+	if err := c.ShouldBindJSON(&provider); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	result, err := services.ProviderServiceApp.TestBalance(&provider)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(result, c)
+}
+
 // Delete 删除上游提供商
 // @Summary 删除上游提供商
 // @Description 删除上游提供商
