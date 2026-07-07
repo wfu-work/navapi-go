@@ -23,10 +23,10 @@ func (s *CheckinService) WithDB(db *gorm.DB) *CheckinService {
 }
 
 type CheckinSettings struct {
-	Enabled          bool  `json:"enabled"`
-	DailyQuota       int64 `json:"dailyQuota"`
-	StreakBonusQuota int64 `json:"streakBonusQuota"`
-	MaxBonusDays     int   `json:"maxBonusDays"`
+	Enabled           bool  `json:"enabled"`
+	DailyAmount       int64 `json:"dailyAmount"`
+	StreakBonusAmount int64 `json:"streakBonusAmount"`
+	MaxBonusDays      int   `json:"maxBonusDays"`
 }
 
 type CheckinRequest struct {
@@ -37,24 +37,24 @@ type CheckinStatus struct {
 	TodayChecked bool   `json:"todayChecked"`
 	Today        string `json:"today"`
 	Streak       int    `json:"streak"`
-	TodayReward  int64  `json:"todayReward"`
-	NextReward   int64  `json:"nextReward"`
+	TodayAmount  int64  `json:"todayAmount"`
+	NextAmount   int64  `json:"nextAmount"`
 }
 
 func (s *CheckinService) Settings() CheckinSettings {
 	return CheckinSettings{
-		Enabled:          OptionServiceApp.Int64("checkin.enabled", 1) > 0,
-		DailyQuota:       OptionServiceApp.Int64("checkin.daily_quota", 0),
-		StreakBonusQuota: OptionServiceApp.Int64("checkin.streak_bonus_quota", 0),
-		MaxBonusDays:     int(OptionServiceApp.Int64("checkin.max_bonus_days", 7)),
+		Enabled:           OptionServiceApp.Int64("checkin.enabled", 1) > 0,
+		DailyAmount:       OptionServiceApp.Int64("checkin.daily_amount", 0),
+		StreakBonusAmount: OptionServiceApp.Int64("checkin.streak_bonus_amount", 0),
+		MaxBonusDays:      int(OptionServiceApp.Int64("checkin.max_bonus_days", 7)),
 	}
 }
 
 func (s *CheckinService) SetSettings(settings CheckinSettings) error {
 	values := map[string]string{
-		"checkin.daily_quota":        int64ToString(settings.DailyQuota),
-		"checkin.streak_bonus_quota": int64ToString(settings.StreakBonusQuota),
-		"checkin.max_bonus_days":     int64ToString(int64(settings.MaxBonusDays)),
+		"checkin.daily_amount":        int64ToString(settings.DailyAmount),
+		"checkin.streak_bonus_amount": int64ToString(settings.StreakBonusAmount),
+		"checkin.max_bonus_days":      int64ToString(int64(settings.MaxBonusDays)),
 	}
 	if settings.Enabled {
 		values["checkin.enabled"] = "1"
@@ -100,8 +100,8 @@ func (s *CheckinService) Status(userGuid string) (CheckinStatus, error) {
 	if err == nil {
 		status.TodayChecked = true
 		status.Streak = record.Streak
-		status.TodayReward = record.RewardQuota
-		status.NextReward = s.calculateReward(record.Streak + 1)
+		status.TodayAmount = record.RewardAmount
+		status.NextAmount = s.calculateReward(record.Streak + 1)
 		return status, nil
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -112,7 +112,7 @@ func (s *CheckinService) Status(userGuid string) (CheckinStatus, error) {
 		return status, err
 	}
 	status.Streak = streak
-	status.NextReward = s.calculateReward(streak + 1)
+	status.NextAmount = s.calculateReward(streak + 1)
 	return status, nil
 }
 
@@ -144,12 +144,12 @@ func (s *CheckinService) Checkin(userGuid string, req CheckinRequest) (*domains.
 		streak++
 		reward := s.calculateReward(streak)
 		record := domains.CheckinRecord{
-			UserGuid:    userGuid,
-			Date:        today,
-			RewardQuota: reward,
-			Streak:      streak,
-			TokenID:     req.TokenID,
-			Status:      "success",
+			UserGuid:     userGuid,
+			Date:         today,
+			RewardAmount: reward,
+			Streak:       streak,
+			TokenID:      req.TokenID,
+			Status:       "success",
 		}
 		if err := record.BeforeCreate(nil); err != nil {
 			return err
@@ -159,21 +159,19 @@ func (s *CheckinService) Checkin(userGuid string, req CheckinRequest) (*domains.
 			return err
 		}
 		if reward > 0 {
-			if err := UserWalletServiceApp.ensureFromQuota(tx, userGuid); err != nil {
-				return err
-			}
-			if err := UserQuotaServiceApp.Recharge(tx, userGuid, req.TokenID, reward); err != nil {
+			amountMicros := WholeAmountToMicros(reward)
+			if err := UserQuotaServiceApp.RechargeAmount(tx, userGuid, req.TokenID, amountMicros); err != nil {
 				return err
 			}
 			if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
-				UserGuid:    userGuid,
-				Type:        domains.WalletRecordTypeReward,
-				Source:      domains.WalletSourceCheckin,
-				Title:       "签到奖励",
-				Quota:       reward,
-				TokenID:     req.TokenID,
-				RelatedGuid: record.Guid,
-				Remark:      record.Date,
+				UserGuid:     userGuid,
+				Type:         domains.WalletRecordTypeReward,
+				Source:       domains.WalletSourceCheckin,
+				Title:        "签到奖励",
+				AmountMicros: amountMicros,
+				TokenID:      req.TokenID,
+				RelatedGuid:  record.Guid,
+				Remark:       record.Date,
 			}); err != nil {
 				return err
 			}
@@ -212,7 +210,7 @@ func (s *CheckinService) calculateReward(streak int) int64 {
 	if settings.MaxBonusDays > 0 && bonusDays > settings.MaxBonusDays {
 		bonusDays = settings.MaxBonusDays
 	}
-	return settings.DailyQuota + int64(bonusDays)*settings.StreakBonusQuota
+	return settings.DailyAmount + int64(bonusDays)*settings.StreakBonusAmount
 }
 
 func todayString() string {

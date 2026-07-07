@@ -188,7 +188,7 @@ func defaultMessageTemplates(now int64) []domains.MessageTemplate {
 			Channel:        MessageChannelEmail,
 			Subject:        "{{appName}} 用户余额不足提醒",
 			Content:        strings.TrimSpace(static.UserBalanceInsufficientTemplateHTML),
-			Description:    "用户账户余额或额度低于阈值时发送提醒，模板编码不要修改。",
+			Description:    "用户账户余额低于阈值时发送提醒，模板编码不要修改。",
 			Status:         constants.StatusEnabled,
 		},
 		{
@@ -198,7 +198,7 @@ func defaultMessageTemplates(now int64) []domains.MessageTemplate {
 			Channel:        MessageChannelEmail,
 			Subject:        "{{appName}} 每日用量账单：{{billDate}}",
 			Content:        strings.TrimSpace(static.UserDailyUsageBillTemplateHTML),
-			Description:    "普通用户每日 API 调用、Token 与额度消耗账单邮件，模板编码不要修改。",
+			Description:    "普通用户每日 API 调用、Token 与金额消耗账单邮件，模板编码不要修改。",
 			Status:         constants.StatusEnabled,
 		},
 		{

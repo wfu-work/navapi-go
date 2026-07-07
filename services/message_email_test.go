@@ -48,10 +48,10 @@ func TestMessageSeedDefaultsAndPreviewRegisterTemplate(t *testing.T) {
 	balancePreview, err := EmailServiceApp.PreviewTemplate(EmailTemplatePreviewInput{
 		Code: TemplateCodeUserBalanceInsufficient,
 		Values: map[string]string{
-			"remainQuota": "8",
-			"threshold":   "10",
-			"quotaUnit":   "元",
-			"rechargeUrl": "https://example.com/wallet",
+			"remainAmount": "8",
+			"threshold":    "10",
+			"amountUnit":   "元",
+			"rechargeUrl":  "https://example.com/wallet",
 		},
 	})
 	if err != nil {
@@ -76,10 +76,10 @@ func TestMessageSeedDefaultsAndPreviewRegisterTemplate(t *testing.T) {
 		Values: map[string]string{
 			"billDate":     "2026-07-04",
 			"requestCount": "42",
-			"usageQuota":   "88",
-			"remainQuota":  "912",
-			"quotaUnit":    "点",
-			"usageDetails": "<p>gpt-test：42 次 / 88 点</p>",
+			"usageAmount":  "88",
+			"remainAmount": "912",
+			"amountUnit":   "元",
+			"usageDetails": "<p>gpt-test：42 次 / 88 元</p>",
 		},
 	})
 	if err != nil {
@@ -87,7 +87,7 @@ func TestMessageSeedDefaultsAndPreviewRegisterTemplate(t *testing.T) {
 	}
 	if !strings.Contains(usageBillPreview.Subject, "2026-07-04") ||
 		!strings.Contains(usageBillPreview.HTML, "42 次") ||
-		!strings.Contains(usageBillPreview.HTML, "88 点") {
+		!strings.Contains(usageBillPreview.HTML, "88 元") {
 		t.Fatalf("preview = %+v, want rendered daily usage bill", usageBillPreview)
 	}
 
@@ -104,18 +104,18 @@ func TestMessageSeedDefaultsAndPreviewRegisterTemplate(t *testing.T) {
 		Values: map[string]string{
 			"billDate":             "2026-07-04",
 			"requestCount":         "168",
-			"platformQuota":        "1880",
-			"quotaUnit":            "点",
-			"adminUserDetails":     "<p>alice@example.com：860 点</p>",
-			"adminModelDetails":    "<p>gpt-test：1020 点</p>",
-			"adminProviderDetails": "<p>openai-main：1880 点</p>",
+			"platformAmount":       "1880",
+			"amountUnit":           "元",
+			"adminUserDetails":     "<p>alice@example.com：860 元</p>",
+			"adminModelDetails":    "<p>gpt-test：1020 元</p>",
+			"adminProviderDetails": "<p>openai-main：1880 元</p>",
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(adminUsageBillPreview.Subject, "2026-07-04") ||
-		!strings.Contains(adminUsageBillPreview.HTML, "1880 点") ||
+		!strings.Contains(adminUsageBillPreview.HTML, "1880 元") ||
 		!strings.Contains(adminUsageBillPreview.HTML, "alice@example.com") {
 		t.Fatalf("preview = %+v, want rendered admin daily usage bill", adminUsageBillPreview)
 	}
@@ -312,7 +312,7 @@ func TestDebugEmailConfigCanRenderSelectedTemplate(t *testing.T) {
 		if len(recipients) != 1 || recipients[0] != "admin@example.com" {
 			t.Fatalf("recipients = %+v, want admin@example.com", recipients)
 		}
-		if !strings.Contains(subject, "2026-07-04") || !strings.Contains(htmlBody, "1880 点") {
+		if !strings.Contains(subject, "2026-07-04") || !strings.Contains(htmlBody, "1880 元") {
 			t.Fatalf("subject/html not rendered from selected template: %q", subject)
 		}
 		return nil
@@ -324,9 +324,9 @@ func TestDebugEmailConfigCanRenderSelectedTemplate(t *testing.T) {
 		RecipientEmail: "admin@example.com",
 		TemplateCode:   TemplateCodeAdminDailyUsageBill,
 		Values: map[string]string{
-			"billDate":      "2026-07-04",
-			"platformQuota": "1880",
-			"quotaUnit":     "点",
+			"billDate":       "2026-07-04",
+			"platformAmount": "1880",
+			"amountUnit":     "元",
 		},
 	})
 	if err != nil {
@@ -433,14 +433,15 @@ func TestClientRegisterConsumesEmailCodeAndCreatesUser(t *testing.T) {
 	if err := db.Where("user_guid = ?", result.UserGuid).First(&quota).Error; err != nil {
 		t.Fatal(err)
 	}
-	if quota.RemainQuota != defaultRegisterQuota || quota.TotalQuota != defaultRegisterQuota {
-		t.Fatalf("quota = %+v, want default register quota", quota)
+	if quota.RemainAmountMicros != WholeAmountToMicros(defaultRegisterAmount) ||
+		quota.TotalAmountMicros != WholeAmountToMicros(defaultRegisterAmount) {
+		t.Fatalf("quota = %+v, want default register amount", quota)
 	}
 	var settings domains.UserSettings
 	if err := db.Where("user_guid = ?", result.UserGuid).First(&settings).Error; err != nil {
 		t.Fatal(err)
 	}
-	if !settings.QuotaReminderEnabled ||
+	if !settings.BalanceReminderEnabled ||
 		!settings.PlatformAnnouncementEnabled ||
 		settings.AbnormalCallAlertEnabled ||
 		settings.MaxConcurrency != DefaultUserMaxConcurrency ||
@@ -450,6 +451,10 @@ func TestClientRegisterConsumesEmailCodeAndCreatesUser(t *testing.T) {
 	var wallet domains.UserWallet
 	if err := db.Where("user_guid = ?", result.UserGuid).First(&wallet).Error; err != nil {
 		t.Fatal(err)
+	}
+	if wallet.BalanceAmountMicros != WholeAmountToMicros(defaultRegisterAmount) ||
+		wallet.TotalRechargeAmountMicros != WholeAmountToMicros(defaultRegisterAmount) {
+		t.Fatalf("wallet = %+v, want default register amount", wallet)
 	}
 	var userRole commonDomains.SysUserRole
 	if err := db.Where("user_guid = ?", result.UserGuid).First(&userRole).Error; err != nil {
@@ -650,7 +655,7 @@ func disableRegister(t *testing.T) {
 	t.Helper()
 	if err := RegisterSettingServiceApp.Set(RegisterSettings{
 		Enabled:        false,
-		DefaultQuota:   defaultRegisterQuota,
+		DefaultAmount:  defaultRegisterAmount,
 		DefaultGroup:   "default",
 		RequireCaptcha: true,
 	}); err != nil {

@@ -75,7 +75,7 @@ func (s *UserSettingsService) Save(userGuid string, settings *domains.UserSettin
 			return err
 		}
 		return tx.Model(&domains.UserSettings{}).Where("user_guid = ?", userGuid).Updates(map[string]any{
-			"quota_reminder_enabled":        updating.QuotaReminderEnabled,
+			"balance_reminder_enabled":      updating.BalanceReminderEnabled,
 			"platform_announcement_enabled": updating.PlatformAnnouncementEnabled,
 			"abnormal_call_alert_enabled":   updating.AbnormalCallAlertEnabled,
 			"max_concurrency":               updating.MaxConcurrency,
@@ -106,7 +106,7 @@ func (s *UserSettingsService) SavePreferences(userGuid string, settings *domains
 			return err
 		}
 		return tx.Model(&domains.UserSettings{}).Where("user_guid = ?", userGuid).Updates(map[string]any{
-			"quota_reminder_enabled":        updating.QuotaReminderEnabled,
+			"balance_reminder_enabled":      updating.BalanceReminderEnabled,
 			"platform_announcement_enabled": updating.PlatformAnnouncementEnabled,
 			"abnormal_call_alert_enabled":   updating.AbnormalCallAlertEnabled,
 			"extra_config":                  updating.ExtraConfig,
@@ -120,7 +120,7 @@ func (s *UserSettingsService) SavePreferences(userGuid string, settings *domains
 func defaultUserSettings(userGuid string) domains.UserSettings {
 	return domains.UserSettings{
 		UserGuid:                    userGuid,
-		QuotaReminderEnabled:        true,
+		BalanceReminderEnabled:      true,
 		PlatformAnnouncementEnabled: true,
 		AbnormalCallAlertEnabled:    false,
 		MaxConcurrency:              DefaultUserMaxConcurrency,

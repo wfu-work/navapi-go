@@ -40,7 +40,7 @@ func TestNavapiUserPermissionSeedsCoverClientConsole(t *testing.T) {
 		"POST /token/self":            {},
 		"PUT /token/self":             {},
 		"DELETE /token/self/:id":      {},
-		"GET /quota/self":             {},
+		"GET /balance/self":           {},
 		"GET /user-settings/self":     {},
 		"PUT /user-settings/self":     {},
 		"GET /usage/self/summary":     {},

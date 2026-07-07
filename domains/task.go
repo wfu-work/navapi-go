@@ -10,7 +10,7 @@ type Task struct {
 	Group        string `json:"group" gorm:"column:group_name;size:100;index;comment:分组"`
 	ProviderGuid string `json:"providerGuid" gorm:"column:channel_guid;size:100;index;comment:上游服务商 GUID"`
 	ModelName    string `json:"modelName" gorm:"column:model_name;size:100;index;comment:模型"`
-	Quota        int64  `json:"quota" gorm:"column:quota;default:0;comment:额度"`
+	Quota        int64  `json:"quota" gorm:"column:quota;default:0;comment:Token 用量"`
 	Action       string `json:"action" gorm:"column:action;size:60;index;comment:动作"`
 	Status       string `json:"status" gorm:"column:status;size:30;index;comment:状态"`
 	FailReason   string `json:"failReason" gorm:"column:fail_reason;type:text;comment:失败原因"`

@@ -26,7 +26,8 @@ func TestSubscriptionSavePlanGeneratesCodeFromName(t *testing.T) {
 
 	plan := domains.SubscriptionPlan{
 		Name:         "Pro Month",
-		WeeklyQuota:  -10,
+		WeeklyAmount: -10,
+		Amount:       300,
 		DurationDays: 30,
 	}
 	if err := SubscriptionServiceApp.SavePlan(&plan); err != nil {
@@ -35,7 +36,7 @@ func TestSubscriptionSavePlanGeneratesCodeFromName(t *testing.T) {
 	if plan.Code != "pro-month" {
 		t.Fatalf("code = %q, want pro-month", plan.Code)
 	}
-	if plan.WeeklyQuota != 0 {
-		t.Fatalf("weekly quota = %d, want 0", plan.WeeklyQuota)
+	if plan.WeeklyAmount != 0 {
+		t.Fatalf("weekly amount = %d, want 0", plan.WeeklyAmount)
 	}
 }

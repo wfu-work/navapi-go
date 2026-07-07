@@ -8,12 +8,12 @@ type PaymentOrder struct {
 	UserGuid      string `json:"userGuid" gorm:"column:user_guid;size:100;index;comment:用户 GUID"`
 	TokenID       uint   `json:"tokenId" gorm:"column:token_id;index;comment:充值目标 Token ID"`
 	TokenGuid     string `json:"tokenGuid" gorm:"column:token_guid;size:100;index;comment:充值目标 Token GUID"`
-	Type          string `json:"type" gorm:"column:type;size:30;index;comment:订单类型 quota/subscription"`
+	Type          string `json:"type" gorm:"column:type;size:30;index;comment:订单类型 recharge/subscription"`
 	Status        string `json:"status" gorm:"column:status;size:30;default:pending;index;comment:状态"`
 	Provider      string `json:"provider" gorm:"column:provider;size:40;index;comment:支付提供方"`
 	AmountCents   int64  `json:"amountCents" gorm:"column:amount_cents;default:0;comment:金额分"`
+	AmountMicros  int64  `json:"amountMicros" gorm:"column:amount_micros;default:0;comment:入账金额微单位"`
 	Currency      string `json:"currency" gorm:"column:currency;size:20;default:CNY;comment:币种"`
-	Quota         int64  `json:"quota" gorm:"column:quota;default:0;comment:充值额度"`
 	PlanGuid      string `json:"planGuid" gorm:"column:plan_guid;size:100;index;comment:订阅套餐 GUID"`
 	PlanCode      string `json:"planCode" gorm:"column:plan_code;size:80;index;comment:订阅套餐编码"`
 	TradeType     string `json:"tradeType" gorm:"column:trade_type;size:40;comment:三方交易类型"`

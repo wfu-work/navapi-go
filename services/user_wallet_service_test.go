@@ -11,14 +11,9 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestUserWalletEnsureMirrorsExistingQuota(t *testing.T) {
+func TestUserWalletEnsureWithInitialAmount(t *testing.T) {
 	db := withUserWalletTestDB(t)
-	if err := db.Create(&domains.UserQuota{
-		UserGuid:    "user-001",
-		RemainQuota: 80,
-		UsedQuota:   20,
-		TotalQuota:  100,
-	}).Error; err != nil {
+	if err := UserWalletServiceApp.EnsureWithInitialAmount(db, "user-001", 80); err != nil {
 		t.Fatal(err)
 	}
 
@@ -26,8 +21,11 @@ func TestUserWalletEnsureMirrorsExistingQuota(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wallet.BalanceQuota != 80 || wallet.PaidBalanceQuota != 80 || wallet.TotalConsumedQuota != 20 || wallet.TotalRechargeQuota != 100 {
-		t.Fatalf("wallet = %+v, want mirrored quota totals", wallet)
+	if wallet.BalanceAmountMicros != 80 ||
+		wallet.PaidBalanceAmountMicros != 80 ||
+		wallet.TotalConsumedAmountMicros != 0 ||
+		wallet.TotalRechargeAmountMicros != 80 {
+		t.Fatalf("wallet = %+v, want initial amount totals", wallet)
 	}
 }
 
@@ -36,26 +34,26 @@ func TestUserWalletRecordsIncomeAndConsume(t *testing.T) {
 
 	err := UserWalletServiceApp.DB().Transaction(func(tx *gorm.DB) error {
 		if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
-			UserGuid: "user-002",
-			Type:     domains.WalletRecordTypeRecharge,
-			Source:   domains.WalletSourcePayment,
-			Title:    "充值",
-			Quota:    100,
+			UserGuid:     "user-002",
+			Type:         domains.WalletRecordTypeRecharge,
+			Source:       domains.WalletSourcePayment,
+			Title:        "充值",
+			AmountMicros: 100,
 		}); err != nil {
 			return err
 		}
 		if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
-			UserGuid: "user-002",
-			Type:     domains.WalletRecordTypeReward,
-			Source:   domains.WalletSourceInvitation,
-			Title:    "奖励",
-			Quota:    30,
+			UserGuid:     "user-002",
+			Type:         domains.WalletRecordTypeReward,
+			Source:       domains.WalletSourceInvitation,
+			Title:        "奖励",
+			AmountMicros: 30,
 		}); err != nil {
 			return err
 		}
 		return UserWalletServiceApp.RecordConsume(tx, WalletRecordInput{
 			UserGuid:     "user-002",
-			Quota:        40,
+			AmountMicros: 40,
 			RequestCount: 2,
 		})
 	})
@@ -67,12 +65,12 @@ func TestUserWalletRecordsIncomeAndConsume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wallet.BalanceQuota != 90 ||
-		wallet.PaidBalanceQuota != 90 ||
-		wallet.RewardBalanceQuota != 0 ||
-		wallet.TotalRechargeQuota != 100 ||
-		wallet.TotalRewardQuota != 30 ||
-		wallet.TotalConsumedQuota != 40 ||
+	if wallet.BalanceAmountMicros != 90 ||
+		wallet.PaidBalanceAmountMicros != 90 ||
+		wallet.RewardBalanceAmountMicros != 0 ||
+		wallet.TotalRechargeAmountMicros != 100 ||
+		wallet.TotalRewardAmountMicros != 30 ||
+		wallet.TotalConsumedAmountMicros != 40 ||
 		wallet.TotalRequestCount != 2 {
 		t.Fatalf("wallet = %+v, want income and consumption totals", wallet)
 	}
@@ -83,8 +81,8 @@ func TestUserWalletRecordsIncomeAndConsume(t *testing.T) {
 	if len(records) != 3 {
 		t.Fatalf("records len = %d, want 3", len(records))
 	}
-	if records[2].Type != domains.WalletRecordTypeConsume || records[2].QuotaDelta != -40 || records[2].BalanceAfter != 90 {
-		t.Fatalf("consume record = %+v, want -40 balance 90", records[2])
+	if records[2].Type != domains.WalletRecordTypeConsume || records[2].AmountMicrosDelta != -40 || records[2].BalanceAmountMicrosAfter != 90 {
+		t.Fatalf("consume record = %+v, want amount -40 balance 90", records[2])
 	}
 }
 
@@ -92,20 +90,20 @@ func TestUserWalletListRecordsScopesByUserGuid(t *testing.T) {
 	withUserWalletTestDB(t)
 	err := UserWalletServiceApp.DB().Transaction(func(tx *gorm.DB) error {
 		if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
-			UserGuid: "user-a",
-			Type:     domains.WalletRecordTypeRecharge,
-			Source:   domains.WalletSourcePayment,
-			Title:    "充值",
-			Quota:    100,
+			UserGuid:     "user-a",
+			Type:         domains.WalletRecordTypeRecharge,
+			Source:       domains.WalletSourcePayment,
+			Title:        "充值",
+			AmountMicros: 100,
 		}); err != nil {
 			return err
 		}
 		return UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
-			UserGuid: "user-b",
-			Type:     domains.WalletRecordTypeReward,
-			Source:   domains.WalletSourceInvitation,
-			Title:    "奖励",
-			Quota:    50,
+			UserGuid:     "user-b",
+			Type:         domains.WalletRecordTypeReward,
+			Source:       domains.WalletSourceInvitation,
+			Title:        "奖励",
+			AmountMicros: 50,
 		})
 	})
 	if err != nil {

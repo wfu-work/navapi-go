@@ -18,7 +18,7 @@ func TestUserSettingsGetCreatesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if settings.UserGuid != "user-001" ||
-		!settings.QuotaReminderEnabled ||
+		!settings.BalanceReminderEnabled ||
 		!settings.PlatformAnnouncementEnabled ||
 		settings.AbnormalCallAlertEnabled ||
 		settings.MaxConcurrency != DefaultUserMaxConcurrency ||
@@ -31,7 +31,7 @@ func TestUserSettingsSavePersistsBooleanValues(t *testing.T) {
 	withUserSettingsTestDB(t)
 
 	settings, err := UserSettingsServiceApp.Save("user-002", &domains.UserSettings{
-		QuotaReminderEnabled:        false,
+		BalanceReminderEnabled:      false,
 		PlatformAnnouncementEnabled: false,
 		AbnormalCallAlertEnabled:    true,
 		MaxConcurrency:              8,
@@ -40,7 +40,7 @@ func TestUserSettingsSavePersistsBooleanValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.QuotaReminderEnabled ||
+	if settings.BalanceReminderEnabled ||
 		settings.PlatformAnnouncementEnabled ||
 		!settings.AbnormalCallAlertEnabled ||
 		settings.MaxConcurrency != 8 ||
@@ -53,7 +53,7 @@ func TestUserSettingsSavePreferencesPreservesMaxConcurrency(t *testing.T) {
 	withUserSettingsTestDB(t)
 
 	if _, err := UserSettingsServiceApp.Save("user-003", &domains.UserSettings{
-		QuotaReminderEnabled:        true,
+		BalanceReminderEnabled:      true,
 		PlatformAnnouncementEnabled: true,
 		AbnormalCallAlertEnabled:    false,
 		MaxConcurrency:              12,
@@ -63,7 +63,7 @@ func TestUserSettingsSavePreferencesPreservesMaxConcurrency(t *testing.T) {
 	}
 
 	settings, err := UserSettingsServiceApp.SavePreferences("user-003", &domains.UserSettings{
-		QuotaReminderEnabled:        false,
+		BalanceReminderEnabled:      false,
 		PlatformAnnouncementEnabled: false,
 		AbnormalCallAlertEnabled:    true,
 		MaxConcurrency:              1,
@@ -72,7 +72,7 @@ func TestUserSettingsSavePreferencesPreservesMaxConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.QuotaReminderEnabled ||
+	if settings.BalanceReminderEnabled ||
 		settings.PlatformAnnouncementEnabled ||
 		!settings.AbnormalCallAlertEnabled ||
 		settings.MaxConcurrency != 12 ||

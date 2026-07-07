@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -193,25 +194,46 @@ func TestRelayHTTPForwardsOpenAIChatAndSettlesQuota(t *testing.T) {
 	if err := db.Create(&provider).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Create(&domains.ModelMeta{
+		ModelName:           "public-model",
+		OfficialProvider:    "openai",
+		OfficialInputPrice:  1,
+		OfficialOutputPrice: 1,
+		OfficialCachePrice:  1,
+		OfficialPriceUnit:   "1M tokens",
+		Enabled:             true,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 	token := domains.ApiToken{
-		UserGuid:       "user-1",
-		Name:           "Client Token",
-		Key:            "sk-client",
-		Status:         constants.StatusEnabled,
-		Group:          constants.DefaultGroup,
-		RemainQuota:    1000,
-		UnlimitedQuota: false,
+		UserGuid:            "user-1",
+		Name:                "Client Token",
+		Key:                 "sk-client",
+		Status:              constants.StatusEnabled,
+		Group:               constants.DefaultGroup,
+		BalanceAmountMicros: 1000000000,
+		UnlimitedBalance:    false,
 	}
 	if err := db.Create(&token).Error; err != nil {
 		t.Fatal(err)
 	}
 	account := domains.UserQuota{
-		UserGuid:    "user-1",
-		RemainQuota: 1000,
-		TotalQuota:  1000,
-		Group:       constants.DefaultGroup,
+		UserGuid:           "user-1",
+		RemainAmountMicros: 1000000000,
+		TotalAmountMicros:  1000000000,
+		Group:              constants.DefaultGroup,
 	}
 	if err := db.Create(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	wallet := domains.UserWallet{
+		UserGuid:                  "user-1",
+		BalanceAmountMicros:       1000000000,
+		PaidBalanceAmountMicros:   1000000000,
+		TotalRechargeAmountMicros: 1000000000,
+		Currency:                  "CNY",
+	}
+	if err := db.Create(&wallet).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -251,21 +273,30 @@ func TestRelayHTTPForwardsOpenAIChatAndSettlesQuota(t *testing.T) {
 	if err := db.First(&storedToken, token.Id).Error; err != nil {
 		t.Fatal(err)
 	}
-	if storedToken.UsedQuota != 12 || storedToken.RemainQuota != 988 {
-		t.Fatalf("token quota used=%d remain=%d, want 12/988", storedToken.UsedQuota, storedToken.RemainQuota)
+	if storedToken.UsedAmountMicros != 12 || storedToken.BalanceAmountMicros != 999999988 {
+		t.Fatalf("token amount used=%d balance=%d, want 12/999999988", storedToken.UsedAmountMicros, storedToken.BalanceAmountMicros)
 	}
 	var storedAccount domains.UserQuota
 	if err := db.Where("user_guid = ?", "user-1").First(&storedAccount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if storedAccount.UsedQuota != 12 {
-		t.Fatalf("user used quota = %d, want 12", storedAccount.UsedQuota)
+	if storedAccount.UsedAmountMicros != 12 || storedAccount.RemainAmountMicros != 999999988 {
+		t.Fatalf("user amount used=%d remain=%d, want 12/999999988", storedAccount.UsedAmountMicros, storedAccount.RemainAmountMicros)
+	}
+	var storedWallet domains.UserWallet
+	if err := db.Where("user_guid = ?", "user-1").First(&storedWallet).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedWallet.BalanceAmountMicros != 999999988 ||
+		storedWallet.PaidBalanceAmountMicros != 999999988 ||
+		storedWallet.TotalConsumedAmountMicros != 12 {
+		t.Fatalf("wallet amount = %+v, want balance=999999988 consumed=12", storedWallet)
 	}
 	var log domains.UsageLog
 	if err := db.First(&log).Error; err != nil {
 		t.Fatal(err)
 	}
-	if log.Status != "success" || log.Quota != 12 || log.PromptTokens != 8 || log.CompletionTokens != 4 {
+	if log.Status != "success" || log.Quota != 12 || math.Abs(log.Cost-0.000012) > 0.000000001 || log.PromptTokens != 8 || log.CompletionTokens != 4 {
 		t.Fatalf("usage log = %+v, want successful 12 quota log", log)
 	}
 	if log.ProviderGuid != provider.Guid || log.TokenGuid != token.Guid || log.UpstreamRequestID != "upstream-req-1" || log.RequestID != "client-req-1" {
@@ -278,19 +309,12 @@ func TestRelayHTTPForwardsOpenAIChatAndSettlesQuota(t *testing.T) {
 	if other["reasoningEffort"] != "medium" || other["cachedTokens"] != float64(2) || other["group"] != constants.DefaultGroup {
 		t.Fatalf("usage log other = %+v, want reasoning/cached/group metadata", other)
 	}
-	var wallet domains.UserWallet
-	if err := db.Where("user_guid = ?", "user-1").First(&wallet).Error; err != nil {
-		t.Fatal(err)
-	}
-	if wallet.BalanceQuota != 988 || wallet.PaidBalanceQuota != 988 || wallet.TotalConsumedQuota != 12 || wallet.TotalRequestCount != 1 || wallet.TotalRechargeQuota != 1000 {
-		t.Fatalf("wallet = %+v, want balance=988 consumed=12 requests=1", wallet)
-	}
 	var walletRecord domains.UserWalletRecord
 	if err := db.Where("user_guid = ? AND type = ?", "user-1", domains.WalletRecordTypeConsume).First(&walletRecord).Error; err != nil {
 		t.Fatal(err)
 	}
-	if walletRecord.QuotaDelta != -12 || walletRecord.BalanceAfter != 988 || walletRecord.TokenGuid != token.Guid {
-		t.Fatalf("wallet record = %+v, want consume delta -12 balance 988", walletRecord)
+	if walletRecord.AmountMicrosDelta != -12 || walletRecord.BalanceAmountMicrosAfter != 999999988 {
+		t.Fatalf("wallet amount record = %+v, want amount delta -12 balance 999999988", walletRecord)
 	}
 }
 
@@ -298,7 +322,7 @@ func TestRelayHTTPRejectsWhenUserConcurrencyLimitReached(t *testing.T) {
 	withRelayTestDB(t)
 
 	if _, err := UserSettingsServiceApp.Save("user-1", &domains.UserSettings{
-		QuotaReminderEnabled:        true,
+		BalanceReminderEnabled:      true,
 		PlatformAnnouncementEnabled: true,
 		MaxConcurrency:              1,
 		ExtraConfig:                 "{}",

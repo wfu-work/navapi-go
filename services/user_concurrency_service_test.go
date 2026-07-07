@@ -11,7 +11,7 @@ import (
 func TestUserConcurrencyServiceAcquireReleaseUsesUserSettings(t *testing.T) {
 	withUserSettingsTestDB(t)
 	if _, err := UserSettingsServiceApp.Save("user-001", &domains.UserSettings{
-		QuotaReminderEnabled:        true,
+		BalanceReminderEnabled:      true,
 		PlatformAnnouncementEnabled: true,
 		MaxConcurrency:              2,
 		ExtraConfig:                 "{}",

@@ -25,13 +25,13 @@ func TestTokenCreateRequiresUserGuid(t *testing.T) {
 func TestTokenUsageFiltersLogsByUserGuid(t *testing.T) {
 	db := withTokenTestDB(t)
 	token := domains.ApiToken{
-		UserGuid:       "user-a",
-		Name:           "client-token",
-		Key:            "sk-client",
-		Status:         constants.StatusEnabled,
-		Group:          constants.DefaultGroup,
-		RemainQuota:    100,
-		UnlimitedQuota: false,
+		UserGuid:            "user-a",
+		Name:                "client-token",
+		Key:                 "sk-client",
+		Status:              constants.StatusEnabled,
+		Group:               constants.DefaultGroup,
+		BalanceAmountMicros: 100,
+		UnlimitedBalance:    false,
 	}
 	token.Guid = "token-a"
 	if err := db.Create(&token).Error; err != nil {
@@ -68,13 +68,13 @@ func TestTokenListIncludesUserProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	token := domains.ApiToken{
-		UserGuid:       user.Guid,
-		Name:           "alice-token",
-		Key:            "sk-alice",
-		Status:         constants.StatusEnabled,
-		Group:          constants.DefaultGroup,
-		RemainQuota:    100,
-		UnlimitedQuota: false,
+		UserGuid:            user.Guid,
+		Name:                "alice-token",
+		Key:                 "sk-alice",
+		Status:              constants.StatusEnabled,
+		Group:               constants.DefaultGroup,
+		BalanceAmountMicros: 100,
+		UnlimitedBalance:    false,
 	}
 	token.Guid = "token-alice"
 	if err := db.Create(&token).Error; err != nil {

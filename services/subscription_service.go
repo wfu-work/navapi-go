@@ -67,8 +67,14 @@ func (s *SubscriptionService) SavePlan(plan *domains.SubscriptionPlan) error {
 	if plan.DurationDays <= 0 {
 		plan.DurationDays = 30
 	}
-	if plan.WeeklyQuota < 0 {
-		plan.WeeklyQuota = 0
+	if plan.WeeklyAmount < 0 {
+		plan.WeeklyAmount = 0
+	}
+	if plan.Amount < 0 {
+		plan.Amount = 0
+	}
+	if plan.Amount <= 0 {
+		return errors.New("plan amount must be greater than zero")
 	}
 	if plan.Currency == "" {
 		plan.Currency = "CNY"
@@ -206,27 +212,27 @@ func (s *SubscriptionService) Subscribe(userGuid string, req SubscribeRequest, p
 		if err != nil {
 			return err
 		}
-		if err := UserWalletServiceApp.ensureFromQuota(tx, userGuid); err != nil {
-			return err
-		}
-		if err := UserQuotaServiceApp.Recharge(tx, userGuid, req.TokenID, plan.Quota); err != nil {
-			return err
-		}
-		if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
-			UserGuid:         userGuid,
-			Type:             domains.WalletRecordTypeSubscription,
-			Source:           domains.WalletSourceSubscription,
-			Title:            "订阅开通",
-			Quota:            plan.Quota,
-			AmountCents:      plan.PriceCents,
-			Currency:         plan.Currency,
-			PaymentGuid:      paymentGuid,
-			SubscriptionGuid: created.Guid,
-			TokenID:          req.TokenID,
-			RelatedGuid:      plan.Guid,
-			Remark:           req.Remark,
-		}); err != nil {
-			return err
+		amountMicros := WholeAmountToMicros(plan.Amount)
+		if amountMicros > 0 {
+			if err := UserQuotaServiceApp.RechargeAmount(tx, userGuid, req.TokenID, amountMicros); err != nil {
+				return err
+			}
+			if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
+				UserGuid:         userGuid,
+				Type:             domains.WalletRecordTypeSubscription,
+				Source:           domains.WalletSourceSubscription,
+				Title:            "订阅开通",
+				AmountMicros:     amountMicros,
+				AmountCents:      plan.PriceCents,
+				Currency:         plan.Currency,
+				PaymentGuid:      paymentGuid,
+				SubscriptionGuid: created.Guid,
+				TokenID:          req.TokenID,
+				RelatedGuid:      plan.Guid,
+				Remark:           req.Remark,
+			}); err != nil {
+				return err
+			}
 		}
 		subscription = *created
 		return nil
@@ -240,17 +246,17 @@ func (s *SubscriptionService) Subscribe(userGuid string, req SubscribeRequest, p
 func (s *SubscriptionService) createSubscriptionWithTx(tx *gorm.DB, userGuid string, plan *domains.SubscriptionPlan, paymentGuid string, remark string) (*domains.UserSubscription, error) {
 	now := time.Now().Unix()
 	subscription := domains.UserSubscription{
-		UserGuid:    userGuid,
-		PlanGuid:    plan.Guid,
-		PlanCode:    plan.Code,
-		PlanName:    plan.Name,
-		Status:      "active",
-		WeeklyQuota: plan.WeeklyQuota,
-		Quota:       plan.Quota,
-		StartAt:     now,
-		EndAt:       now + int64(plan.DurationDays)*86400,
-		PaymentGuid: paymentGuid,
-		Remark:      remark,
+		UserGuid:     userGuid,
+		PlanGuid:     plan.Guid,
+		PlanCode:     plan.Code,
+		PlanName:     plan.Name,
+		Status:       "active",
+		WeeklyAmount: plan.WeeklyAmount,
+		Amount:       plan.Amount,
+		StartAt:      now,
+		EndAt:        now + int64(plan.DurationDays)*86400,
+		PaymentGuid:  paymentGuid,
+		Remark:       remark,
 	}
 	if err := subscription.BeforeCreate(nil); err != nil {
 		return nil, err

@@ -7,8 +7,8 @@ type SubscriptionPlan struct {
 	Name          string `json:"name" gorm:"column:name;size:100;index;comment:套餐名称"`
 	Code          string `json:"code" gorm:"column:code;size:80;uniqueIndex;comment:套餐编码"`
 	Status        int    `json:"status" gorm:"column:status;default:1;index;comment:状态"`
-	WeeklyQuota   int64  `json:"weeklyQuota" gorm:"column:weekly_quota;default:0;comment:周限额度"`
-	Quota         int64  `json:"quota" gorm:"column:quota;default:0;comment:订阅额度"`
+	WeeklyAmount  int64  `json:"weeklyAmount" gorm:"column:weekly_amount;default:0;comment:周限金额"`
+	Amount        int64  `json:"amount" gorm:"column:amount;default:0;comment:订阅入账金额"`
 	DurationDays  int    `json:"durationDays" gorm:"column:duration_days;default:30;comment:有效天数"`
 	PriceCents    int64  `json:"priceCents" gorm:"column:price_cents;default:0;comment:价格分"`
 	Currency      string `json:"currency" gorm:"column:currency;size:20;default:CNY;comment:币种"`
@@ -29,8 +29,8 @@ type UserSubscription struct {
 	PlanCode     string `json:"planCode" gorm:"column:plan_code;size:80;index;comment:套餐编码"`
 	PlanName     string `json:"planName" gorm:"column:plan_name;size:100;comment:套餐名称"`
 	Status       string `json:"status" gorm:"column:status;size:30;default:active;index;comment:状态"`
-	WeeklyQuota  int64  `json:"weeklyQuota" gorm:"column:weekly_quota;default:0;comment:周限额度"`
-	Quota        int64  `json:"quota" gorm:"column:quota;default:0;comment:本次授予额度"`
+	WeeklyAmount int64  `json:"weeklyAmount" gorm:"column:weekly_amount;default:0;comment:周限金额"`
+	Amount       int64  `json:"amount" gorm:"column:amount;default:0;comment:本次入账金额"`
 	StartAt      int64  `json:"startAt" gorm:"column:start_at;index;comment:开始时间秒"`
 	EndAt        int64  `json:"endAt" gorm:"column:end_at;index;comment:结束时间秒"`
 	PaymentGuid  string `json:"paymentGuid" gorm:"column:payment_guid;size:100;index;comment:支付订单 GUID"`

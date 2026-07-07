@@ -9,7 +9,7 @@ type Pricing struct {
 	PromptMultiplier float64 `json:"promptMultiplier" gorm:"column:prompt_multiplier;default:1;comment:输入倍率"`
 	OutputMultiplier float64 `json:"outputMultiplier" gorm:"column:output_multiplier;default:1;comment:输出倍率"`
 	CacheMultiplier  float64 `json:"cacheMultiplier" gorm:"column:cache_multiplier;default:1;comment:缓存命中倍率"`
-	QuotaMultiplier  float64 `json:"quotaMultiplier" gorm:"column:quota_multiplier;default:1;comment:总额度倍率"`
+	QuotaMultiplier  float64 `json:"quotaMultiplier" gorm:"column:quota_multiplier;default:1;comment:计费倍率"`
 	Enabled          bool    `json:"enabled" gorm:"column:enabled;default:true;index;comment:启用"`
 	Remark           string  `json:"remark" gorm:"column:remark;size:255;comment:备注"`
 }

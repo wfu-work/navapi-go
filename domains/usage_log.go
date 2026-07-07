@@ -11,7 +11,7 @@ type UsageLog struct {
 	ProviderGuid        string  `json:"providerGuid" gorm:"column:channel_guid;size:100;index;comment:上游服务商 GUID"`
 	ProviderName        string  `json:"providerName" gorm:"column:channel_name;size:100;comment:上游服务商名称"`
 	ModelName           string  `json:"modelName" gorm:"column:model_name;size:100;index;comment:模型名称"`
-	Quota               int64   `json:"quota" gorm:"column:quota;default:0;comment:消耗额度"`
+	Quota               int64   `json:"quota" gorm:"column:quota;default:0;comment:Token 用量"`
 	Cost                float64 `json:"cost" gorm:"column:cost;type:decimal(20,10);default:0;comment:消耗金额"`
 	PromptTokens        int64   `json:"promptTokens" gorm:"column:prompt_tokens;default:0;comment:输入 tokens"`
 	CompletionTokens    int64   `json:"completionTokens" gorm:"column:completion_tokens;default:0;comment:输出 tokens"`

@@ -12,7 +12,7 @@ type VendorMeta struct {
 	Key                  string  `json:"-" gorm:"column:key;type:text;comment:上游 API Key"`
 	Models               string  `json:"models" gorm:"column:models;type:text;comment:逗号分隔模型列表"`
 	ModelOverride        string  `json:"modelOverride" gorm:"column:model_override;size:120;comment:上游模型覆盖"`
-	QuotaModelWhitelist  string  `json:"quotaModelWhitelist" gorm:"column:quota_model_whitelist;type:text;comment:额度模型白名单"`
+	QuotaModelWhitelist  string  `json:"quotaModelWhitelist" gorm:"column:quota_model_whitelist;type:text;comment:余额模型白名单"`
 	ModelMapping         string  `json:"modelMapping" gorm:"column:model_mapping;type:text;comment:JSON 模型映射"`
 	HeaderOverride       string  `json:"headerOverride" gorm:"column:header_override;type:text;comment:JSON 请求头覆盖"`
 	ParamOverride        string  `json:"paramOverride" gorm:"column:param_override;type:text;comment:JSON 参数覆盖"`
@@ -28,11 +28,11 @@ type VendorMeta struct {
 	BalanceUserID        string  `json:"balanceUserId" gorm:"column:balance_user_id;size:120;comment:余额查询用户 ID"`
 	BalanceCustomPath    string  `json:"balanceCustomPath" gorm:"column:balance_custom_path;size:255;comment:自定义余额查询路径"`
 	BalanceAuthType      string  `json:"balanceAuthType" gorm:"column:balance_auth_type;size:40;comment:余额查询认证类型"`
-	BalanceRemainingPath string  `json:"balanceRemainingPath" gorm:"column:balance_remaining_path;size:255;comment:剩余额度 JSON 路径"`
+	BalanceRemainingPath string  `json:"balanceRemainingPath" gorm:"column:balance_remaining_path;size:255;comment:剩余余额 JSON 路径"`
 	BalanceMultiplier    float64 `json:"balanceMultiplier" gorm:"column:balance_multiplier;default:1;comment:余额倍率"`
 	BalanceUnit          string  `json:"balanceUnit" gorm:"column:balance_unit;size:40;comment:余额单位"`
-	BalanceTotalPath     string  `json:"balanceTotalPath" gorm:"column:balance_total_path;size:255;comment:总额度 JSON 路径"`
-	BalanceUsedPath      string  `json:"balanceUsedPath" gorm:"column:balance_used_path;size:255;comment:已用额度 JSON 路径"`
+	BalanceTotalPath     string  `json:"balanceTotalPath" gorm:"column:balance_total_path;size:255;comment:总余额 JSON 路径"`
+	BalanceUsedPath      string  `json:"balanceUsedPath" gorm:"column:balance_used_path;size:255;comment:已用余额 JSON 路径"`
 	BalancePlanPath      string  `json:"balancePlanPath" gorm:"column:balance_plan_path;size:255;comment:套餐 JSON 路径"`
 	BalanceValidPath     string  `json:"balanceValidPath" gorm:"column:balance_valid_path;size:255;comment:有效状态 JSON 路径"`
 	BalanceErrorPath     string  `json:"balanceErrorPath" gorm:"column:balance_error_path;size:255;comment:错误信息 JSON 路径"`

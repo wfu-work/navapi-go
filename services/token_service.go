@@ -26,21 +26,21 @@ func (s *TokenService) WithDB(db *gorm.DB) *TokenService {
 }
 
 type TokenUsage struct {
-	ID               uint   `json:"id"`
-	Guid             string `json:"guid"`
-	Name             string `json:"name"`
-	Status           int    `json:"status"`
-	Group            string `json:"group"`
-	RemainQuota      int64  `json:"remainQuota"`
-	UnlimitedQuota   bool   `json:"unlimitedQuota"`
-	UsedQuota        int64  `json:"usedQuota"`
-	AccessedTime     int64  `json:"accessedTime"`
-	TotalRequests    int64  `json:"totalRequests"`
-	SuccessRequests  int64  `json:"successRequests"`
-	ErrorRequests    int64  `json:"errorRequests"`
-	LogQuota         int64  `json:"logQuota"`
-	PromptTokens     int64  `json:"promptTokens"`
-	CompletionTokens int64  `json:"completionTokens"`
+	ID                  uint   `json:"id"`
+	Guid                string `json:"guid"`
+	Name                string `json:"name"`
+	Status              int    `json:"status"`
+	Group               string `json:"group"`
+	UnlimitedBalance    bool   `json:"unlimitedBalance"`
+	BalanceAmountMicros int64  `json:"balanceAmountMicros"`
+	UsedAmountMicros    int64  `json:"usedAmountMicros"`
+	AccessedTime        int64  `json:"accessedTime"`
+	TotalRequests       int64  `json:"totalRequests"`
+	SuccessRequests     int64  `json:"successRequests"`
+	ErrorRequests       int64  `json:"errorRequests"`
+	LogQuota            int64  `json:"logQuota"`
+	PromptTokens        int64  `json:"promptTokens"`
+	CompletionTokens    int64  `json:"completionTokens"`
 }
 
 func (s *TokenService) Create(token *domains.ApiToken) error {
@@ -61,6 +61,7 @@ func (s *TokenService) Create(token *domains.ApiToken) error {
 	if token.ExpiredTime == 0 {
 		token.ExpiredTime = -1
 	}
+	normalizeTokenAmounts(token)
 	return s.DB().Transaction(func(tx *gorm.DB) error {
 		quotaService := UserQuotaServiceApp.WithDB(tx)
 		if err := quotaService.Ensure(tx, token.UserGuid); err != nil {
@@ -95,6 +96,7 @@ func (s *TokenService) Update(token *domains.ApiToken) error {
 	token.Creater = existing.Creater
 	token.Updater = existing.Updater
 	token.UpdateTime = time.Now().UnixMilli()
+	normalizeTokenAmounts(token)
 	if err := s.DB().Save(token).Error; err != nil {
 		return err
 	}
@@ -220,8 +222,8 @@ func (s *TokenService) Validate(key string, clientIP string) (*domains.ApiToken,
 	if token.ExpiredTime > 0 && token.ExpiredTime < now {
 		return nil, errors.New("token is expired")
 	}
-	if !token.UnlimitedQuota && token.RemainQuota <= 0 {
-		return nil, errors.New("token quota is exhausted")
+	if !token.UnlimitedBalance && effectiveTokenBalanceAmountMicros(&token) <= 0 {
+		return nil, errors.New("token balance is exhausted")
 	}
 	if token.AllowIPs != "" && !containsString(splitCSV(token.AllowIPs), clientIP) {
 		return nil, errors.New("client ip is not allowed")
@@ -271,49 +273,49 @@ func (s *TokenService) CheckModel(token *domains.ApiToken, modelName string) err
 	return errors.New("model is not allowed by token")
 }
 
-func (s *TokenService) Consume(tx *gorm.DB, id uint, quota int64) error {
-	if quota <= 0 {
+func (s *TokenService) ConsumeAmount(tx *gorm.DB, id uint, amountMicros int64) error {
+	if amountMicros <= 0 {
 		return nil
 	}
 	var token domains.ApiToken
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&token, id).Error; err != nil {
 		return err
 	}
+	balance := effectiveTokenBalanceAmountMicros(&token)
+	used := effectiveTokenUsedAmountMicros(&token)
 	updates := map[string]any{
-		"used_quota": gorm.Expr("used_quota + ?", quota),
+		"used_amount_micros": used + amountMicros,
 	}
-	if !token.UnlimitedQuota {
-		if token.RemainQuota < quota {
-			return errors.New("token quota is exhausted")
+	if !token.UnlimitedBalance {
+		if balance < amountMicros {
+			return errors.New("token balance is exhausted")
 		}
-		updates["remain_quota"] = gorm.Expr("remain_quota - ?", quota)
+		updates["balance_amount_micros"] = balance - amountMicros
 	}
 	return tx.Model(&domains.ApiToken{}).Where("id = ?", id).Updates(updates).Error
 }
 
-// Refund reverses a previous quota reservation/charge. It is intentionally
-// bounded at zero for used_quota so repeated cleanup cannot drive counters
-// negative after retries or client disconnects.
-func (s *TokenService) Refund(tx *gorm.DB, id uint, quota int64) error {
-	if quota <= 0 {
+func (s *TokenService) RefundAmount(tx *gorm.DB, id uint, amountMicros int64) error {
+	if amountMicros <= 0 {
 		return nil
 	}
 	var token domains.ApiToken
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&token, id).Error; err != nil {
 		return err
 	}
+	balance := effectiveTokenBalanceAmountMicros(&token)
 	updates := map[string]any{
-		"used_quota": gorm.Expr("CASE WHEN used_quota >= ? THEN used_quota - ? ELSE 0 END", quota, quota),
+		"used_amount_micros": gorm.Expr("CASE WHEN used_amount_micros >= ? THEN used_amount_micros - ? ELSE 0 END", amountMicros, amountMicros),
 	}
-	if !token.UnlimitedQuota {
-		updates["remain_quota"] = gorm.Expr("remain_quota + ?", quota)
+	if !token.UnlimitedBalance {
+		updates["balance_amount_micros"] = balance + amountMicros
 	}
 	return tx.Model(&domains.ApiToken{}).Where("id = ?", id).Updates(updates).Error
 }
 
-func (s *TokenService) AddQuota(tx *gorm.DB, id uint, userGuid string, quota int64) error {
-	if quota <= 0 {
-		return errors.New("quota must be greater than zero")
+func (s *TokenService) AddAmount(tx *gorm.DB, id uint, userGuid string, amountMicros int64) error {
+	if amountMicros <= 0 {
+		return errors.New("amount must be greater than zero")
 	}
 	var token domains.ApiToken
 	db := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id)
@@ -323,11 +325,13 @@ func (s *TokenService) AddQuota(tx *gorm.DB, id uint, userGuid string, quota int
 	if err := db.First(&token).Error; err != nil {
 		return err
 	}
-	if err := UserQuotaServiceApp.AddQuota(tx, token.UserGuid, quota); err != nil {
+	if err := UserQuotaServiceApp.AddAmount(tx, token.UserGuid, amountMicros); err != nil {
 		return err
 	}
 	return tx.Model(&domains.ApiToken{}).Where("id = ?", token.Id).
-		UpdateColumn("remain_quota", gorm.Expr("remain_quota + ?", quota)).Error
+		Updates(map[string]any{
+			"balance_amount_micros": effectiveTokenBalanceAmountMicros(&token) + amountMicros,
+		}).Error
 }
 
 func (s *TokenService) Usage(userGuid string) ([]TokenUsage, error) {
@@ -377,9 +381,9 @@ func (s *TokenService) Usage(userGuid string) ([]TokenUsage, error) {
 		usage.Name = token.Name
 		usage.Status = token.Status
 		usage.Group = token.Group
-		usage.RemainQuota = token.RemainQuota
-		usage.UnlimitedQuota = token.UnlimitedQuota
-		usage.UsedQuota = token.UsedQuota
+		usage.UnlimitedBalance = token.UnlimitedBalance
+		usage.BalanceAmountMicros = effectiveTokenBalanceAmountMicros(&token)
+		usage.UsedAmountMicros = effectiveTokenUsedAmountMicros(&token)
 		usage.AccessedTime = token.AccessedTime
 		out = append(out, usage)
 	}
@@ -394,4 +398,26 @@ func (s *TokenService) Mask(key string) string {
 		return key[:2] + "****"
 	}
 	return key[:6] + "********" + key[len(key)-4:]
+}
+
+func normalizeTokenAmounts(token *domains.ApiToken) {
+	if token == nil {
+		return
+	}
+	token.BalanceAmountMicros = nonNegativeInt64(token.BalanceAmountMicros)
+	token.UsedAmountMicros = nonNegativeInt64(token.UsedAmountMicros)
+}
+
+func effectiveTokenBalanceAmountMicros(token *domains.ApiToken) int64 {
+	if token == nil {
+		return 0
+	}
+	return nonNegativeInt64(token.BalanceAmountMicros)
+}
+
+func effectiveTokenUsedAmountMicros(token *domains.ApiToken) int64 {
+	if token == nil {
+		return 0
+	}
+	return nonNegativeInt64(token.UsedAmountMicros)
 }

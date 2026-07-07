@@ -10,22 +10,22 @@ import (
 
 const (
 	settingRegisterEnabled        = "register.enabled"
-	settingRegisterDefaultQuota   = "register.default_quota"
+	settingRegisterDefaultAmount  = "register.default_amount"
 	settingRegisterDefaultGroup   = "register.default_group"
 	settingRegisterAllowedGroups  = "register.allowed_groups"
 	settingRegisterRequireInvite  = "register.require_invite"
 	settingRegisterRequireCaptcha = "register.require_captcha"
 	settingRegisterNotice         = "register.notice"
 
-	defaultRegisterQuota  = int64(10)
-	defaultRegisterNotice = "注册成功后将创建普通用户账号并发放默认额度。请使用真实邮箱接收验证码；如当前要求邀请码，请联系管理员获取。"
+	defaultRegisterAmount = int64(10)
+	defaultRegisterNotice = "注册成功后将创建普通用户账号并发放默认金额。请使用真实邮箱接收验证码；如当前要求邀请码，请联系管理员获取。"
 
 	registerDisabledMessage = "注册入口已关闭，请联系管理员"
 )
 
 type RegisterSettings struct {
 	Enabled        bool   `json:"enabled"`
-	DefaultQuota   int64  `json:"defaultQuota"`
+	DefaultAmount  int64  `json:"defaultAmount"`
 	DefaultGroup   string `json:"defaultGroup"`
 	AllowedGroups  string `json:"allowedGroups"`
 	RequireInvite  bool   `json:"requireInvite"`
@@ -41,7 +41,7 @@ func (s RegisterSettingService) Get() RegisterSettings {
 	settings := defaultRegisterSettings()
 	values := s.values()
 	settings.Enabled = settingBool(values[settingRegisterEnabled], settings.Enabled)
-	settings.DefaultQuota = settingInt64(values[settingRegisterDefaultQuota], settings.DefaultQuota)
+	settings.DefaultAmount = settingInt64(values[settingRegisterDefaultAmount], settings.DefaultAmount)
 	settings.DefaultGroup = settingText(values[settingRegisterDefaultGroup], settings.DefaultGroup)
 	settings.AllowedGroups = settingText(values[settingRegisterAllowedGroups], settings.AllowedGroups)
 	settings.RequireInvite = settingBool(values[settingRegisterRequireInvite], settings.RequireInvite)
@@ -53,7 +53,7 @@ func (s RegisterSettingService) Get() RegisterSettings {
 func defaultRegisterSettings() RegisterSettings {
 	return RegisterSettings{
 		Enabled:        true,
-		DefaultQuota:   defaultRegisterQuota,
+		DefaultAmount:  defaultRegisterAmount,
 		DefaultGroup:   constants.DefaultGroup,
 		AllowedGroups:  "",
 		RequireInvite:  false,
@@ -68,7 +68,7 @@ func (s RegisterSettingService) Set(settings RegisterSettings) error {
 	settings = normalizeRegisterSettings(settings)
 	items := []domains.Setting{
 		{Key: settingRegisterEnabled, Value: boolSetting(settings.Enabled), Description: "注册设置：是否开放注册"},
-		{Key: settingRegisterDefaultQuota, Value: strconv.FormatInt(settings.DefaultQuota, 10), Description: "注册设置：默认额度"},
+		{Key: settingRegisterDefaultAmount, Value: strconv.FormatInt(settings.DefaultAmount, 10), Description: "注册设置：默认金额"},
 		{Key: settingRegisterDefaultGroup, Value: settings.DefaultGroup, Description: "注册设置：默认模型分组"},
 		{Key: settingRegisterAllowedGroups, Value: settings.AllowedGroups, Description: "注册设置：可用模型分组"},
 		{Key: settingRegisterRequireInvite, Value: boolSetting(settings.RequireInvite), Description: "注册设置：是否必须邀请码"},
@@ -90,7 +90,7 @@ func (s RegisterSettingService) values() map[string]string {
 	}
 	keys := []string{
 		settingRegisterEnabled,
-		settingRegisterDefaultQuota,
+		settingRegisterDefaultAmount,
 		settingRegisterDefaultGroup,
 		settingRegisterAllowedGroups,
 		settingRegisterRequireInvite,
@@ -113,8 +113,8 @@ func normalizeRegisterSettings(settings RegisterSettings) RegisterSettings {
 	if settings.DefaultGroup == "" {
 		settings.DefaultGroup = constants.DefaultGroup
 	}
-	if settings.DefaultQuota < 0 {
-		settings.DefaultQuota = 0
+	if settings.DefaultAmount < 0 {
+		settings.DefaultAmount = 0
 	}
 	settings.AllowedGroups = normalizeRegisterGroups(settings.AllowedGroups)
 	settings.Notice = strings.TrimSpace(settings.Notice)

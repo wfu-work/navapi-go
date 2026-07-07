@@ -327,7 +327,7 @@ func isWechatPaymentProvider(value string) bool {
 }
 
 func wechatPayDescription(settings WechatPaySettings, order *domains.PaymentOrder) string {
-	subject := "额度充值"
+	subject := "余额充值"
 	if order.Type == "subscription" {
 		subject = "订阅购买"
 	}

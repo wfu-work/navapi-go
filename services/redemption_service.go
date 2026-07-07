@@ -27,19 +27,19 @@ func (s *RedemptionService) WithDB(db *gorm.DB) *RedemptionService {
 
 type RedemptionBatchRequest struct {
 	Count     int    `json:"count"`
-	Quota     int64  `json:"quota"`
+	Amount    int64  `json:"amount"`
 	ExpiredAt int64  `json:"expiredAt"`
 	Prefix    string `json:"prefix"`
 	Remark    string `json:"remark"`
 }
 
 type RedemptionStats struct {
-	Total      int64 `json:"total"`
-	Enabled    int64 `json:"enabled"`
-	Used       int64 `json:"used"`
-	Expired    int64 `json:"expired"`
-	TotalQuota int64 `json:"totalQuota"`
-	UsedQuota  int64 `json:"usedQuota"`
+	Total       int64 `json:"total"`
+	Enabled     int64 `json:"enabled"`
+	Used        int64 `json:"used"`
+	Expired     int64 `json:"expired"`
+	TotalAmount int64 `json:"totalAmount"`
+	UsedAmount  int64 `json:"usedAmount"`
 }
 
 func (s *RedemptionService) Create(redemption *domains.Redemption) error {
@@ -121,8 +121,8 @@ func (s *RedemptionService) BatchCreate(req RedemptionBatchRequest) ([]domains.R
 	if req.Count > 1000 {
 		return nil, errors.New("count cannot exceed 1000")
 	}
-	if req.Quota <= 0 {
-		return nil, errors.New("quota must be greater than zero")
+	if req.Amount <= 0 {
+		return nil, errors.New("amount must be greater than zero")
 	}
 	cards := make([]domains.Redemption, 0, req.Count)
 	for i := 0; i < req.Count; i++ {
@@ -132,7 +132,7 @@ func (s *RedemptionService) BatchCreate(req RedemptionBatchRequest) ([]domains.R
 		}
 		cards = append(cards, domains.Redemption{
 			Code:      code,
-			Quota:     req.Quota,
+			Amount:    req.Amount,
 			Status:    constants.StatusEnabled,
 			ExpiredAt: req.ExpiredAt,
 			Remark:    req.Remark,
@@ -160,16 +160,16 @@ func (s *RedemptionService) Stats() (RedemptionStats, error) {
 		return stats, err
 	}
 	var sums struct {
-		TotalQuota int64
-		UsedQuota  int64
+		TotalAmount int64
+		UsedAmount  int64
 	}
 	if err := s.DB().Model(&domains.Redemption{}).
-		Select("COALESCE(SUM(quota),0) AS total_quota, COALESCE(SUM(CASE WHEN used_at > 0 OR used_by <> '' THEN quota ELSE 0 END),0) AS used_quota").
+		Select("COALESCE(SUM(amount),0) AS total_amount, COALESCE(SUM(CASE WHEN used_at > 0 OR used_by <> '' THEN amount ELSE 0 END),0) AS used_amount").
 		Scan(&sums).Error; err != nil {
 		return stats, err
 	}
-	stats.TotalQuota = sums.TotalQuota
-	stats.UsedQuota = sums.UsedQuota
+	stats.TotalAmount = sums.TotalAmount
+	stats.UsedAmount = sums.UsedAmount
 	return stats, nil
 }
 
@@ -193,10 +193,10 @@ func (s *RedemptionService) Redeem(code string, userGuid string, tokenID uint) (
 		if redemption.ExpiredAt > 0 && redemption.ExpiredAt < now {
 			return errors.New("redemption is expired")
 		}
-		if redemption.Quota <= 0 {
-			return errors.New("redemption quota must be greater than zero")
+		if redemption.Amount <= 0 {
+			return errors.New("redemption amount must be greater than zero")
 		}
-		if err := TokenServiceApp.AddQuota(tx, tokenID, userGuid, redemption.Quota); err != nil {
+		if err := TokenServiceApp.AddAmount(tx, tokenID, userGuid, WholeAmountToMicros(redemption.Amount)); err != nil {
 			return err
 		}
 		redemption.Status = constants.StatusDisabled

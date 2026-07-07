@@ -33,11 +33,11 @@ func (s *UserQuotaService) Ensure(tx *gorm.DB, userGuid string) error {
 		group = constants.DefaultGroup
 	}
 	account := domains.UserQuota{
-		UserGuid:      userGuid,
-		RemainQuota:   settings.DefaultQuota,
-		TotalQuota:    settings.DefaultQuota,
-		Group:         group,
-		AllowedGroups: settings.AllowedGroups,
+		UserGuid:           userGuid,
+		RemainAmountMicros: WholeAmountToMicros(settings.DefaultAmount),
+		TotalAmountMicros:  WholeAmountToMicros(settings.DefaultAmount),
+		Group:              group,
+		AllowedGroups:      settings.AllowedGroups,
 	}
 	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error
 }
@@ -86,69 +86,85 @@ func (s *UserQuotaService) Update(account *domains.UserQuota) error {
 	if account.Group == "" {
 		account.Group = constants.DefaultGroup
 	}
+	normalizeUserQuotaAmounts(account)
 	return s.DB().Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_guid"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"remain_quota",
-			"used_quota",
-			"total_quota",
+			"remain_amount_micros",
+			"used_amount_micros",
+			"total_amount_micros",
 			"group_name",
 			"allowed_groups",
 		}),
 	}).Create(account).Error
 }
 
-func (s *UserQuotaService) AddQuota(tx *gorm.DB, userGuid string, quota int64) error {
-	if userGuid == "" || quota <= 0 {
+func (s *UserQuotaService) AddAmount(tx *gorm.DB, userGuid string, amountMicros int64) error {
+	if userGuid == "" || amountMicros <= 0 {
 		return nil
 	}
 	if err := s.Ensure(tx, userGuid); err != nil {
 		return err
 	}
+	var account domains.UserQuota
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_guid = ?", userGuid).First(&account).Error; err != nil {
+		return err
+	}
 	return tx.Model(&domains.UserQuota{}).Where("user_guid = ?", userGuid).
 		Updates(map[string]any{
-			"remain_quota": gorm.Expr("remain_quota + ?", quota),
-			"total_quota":  gorm.Expr("total_quota + ?", quota),
+			"remain_amount_micros": effectiveUserQuotaRemainAmountMicros(&account) + amountMicros,
+			"total_amount_micros":  effectiveUserQuotaTotalAmountMicros(&account) + amountMicros,
 		}).Error
 }
 
-// Recharge adds quota to the user account and optionally to one API token.
-// Payments and subscriptions both use this path so recharge accounting stays
-// consistent regardless of the source.
-func (s *UserQuotaService) Recharge(tx *gorm.DB, userGuid string, tokenID uint, quota int64) error {
-	if quota <= 0 {
-		return errors.New("quota must be greater than zero")
+func (s *UserQuotaService) RechargeAmount(tx *gorm.DB, userGuid string, tokenID uint, amountMicros int64) error {
+	if amountMicros <= 0 {
+		return errors.New("amount must be greater than zero")
 	}
 	if tokenID > 0 {
-		return TokenServiceApp.AddQuota(tx, tokenID, userGuid, quota)
+		return TokenServiceApp.AddAmount(tx, tokenID, userGuid, amountMicros)
 	}
-	return s.AddQuota(tx, userGuid, quota)
+	return s.AddAmount(tx, userGuid, amountMicros)
 }
 
-func (s *UserQuotaService) Consume(tx *gorm.DB, userGuid string, quota int64) error {
-	if userGuid == "" || quota <= 0 {
+func (s *UserQuotaService) ConsumeAmount(tx *gorm.DB, userGuid string, amountMicros int64) error {
+	if userGuid == "" || amountMicros <= 0 {
 		return nil
 	}
 	if err := s.Ensure(tx, userGuid); err != nil {
+		return err
+	}
+	var account domains.UserQuota
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_guid = ?", userGuid).First(&account).Error; err != nil {
+		return err
+	}
+	remain := effectiveUserQuotaRemainAmountMicros(&account)
+	if remain < amountMicros {
+		return errors.New("user balance is exhausted")
+	}
+	return tx.Model(&domains.UserQuota{}).Where("user_guid = ?", userGuid).
+		Updates(map[string]any{
+			"remain_amount_micros": remain - amountMicros,
+			"used_amount_micros":   effectiveUserQuotaUsedAmountMicros(&account) + amountMicros,
+		}).Error
+}
+
+func (s *UserQuotaService) RefundAmount(tx *gorm.DB, userGuid string, amountMicros int64) error {
+	if userGuid == "" || amountMicros <= 0 {
+		return nil
+	}
+	if err := s.Ensure(tx, userGuid); err != nil {
+		return err
+	}
+	var account domains.UserQuota
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_guid = ?", userGuid).First(&account).Error; err != nil {
 		return err
 	}
 	return tx.Model(&domains.UserQuota{}).Where("user_guid = ?", userGuid).
 		Updates(map[string]any{
-			"used_quota": gorm.Expr("used_quota + ?", quota),
+			"remain_amount_micros": effectiveUserQuotaRemainAmountMicros(&account) + amountMicros,
+			"used_amount_micros":   gorm.Expr("CASE WHEN used_amount_micros >= ? THEN used_amount_micros - ? ELSE 0 END", amountMicros, amountMicros),
 		}).Error
-}
-
-// Refund only rolls back used_quota because user quota currently acts as an
-// aggregate account; token quota is the balance that is actually decremented.
-func (s *UserQuotaService) Refund(tx *gorm.DB, userGuid string, quota int64) error {
-	if userGuid == "" || quota <= 0 {
-		return nil
-	}
-	if err := s.Ensure(tx, userGuid); err != nil {
-		return err
-	}
-	return tx.Model(&domains.UserQuota{}).Where("user_guid = ?", userGuid).
-		Update("used_quota", gorm.Expr("CASE WHEN used_quota >= ? THEN used_quota - ? ELSE 0 END", quota, quota)).Error
 }
 
 func (s *UserQuotaService) CheckGroup(userGuid string, group string) error {
@@ -166,4 +182,31 @@ func (s *UserQuotaService) CheckGroup(userGuid string, group string) error {
 		return nil
 	}
 	return errors.New("group is not allowed for user")
+}
+
+func normalizeUserQuotaAmounts(account *domains.UserQuota) {
+	account.RemainAmountMicros = nonNegativeInt64(account.RemainAmountMicros)
+	account.UsedAmountMicros = nonNegativeInt64(account.UsedAmountMicros)
+	account.TotalAmountMicros = nonNegativeInt64(account.TotalAmountMicros)
+}
+
+func effectiveUserQuotaRemainAmountMicros(account *domains.UserQuota) int64 {
+	if account == nil {
+		return 0
+	}
+	return nonNegativeInt64(account.RemainAmountMicros)
+}
+
+func effectiveUserQuotaUsedAmountMicros(account *domains.UserQuota) int64 {
+	if account == nil {
+		return 0
+	}
+	return nonNegativeInt64(account.UsedAmountMicros)
+}
+
+func effectiveUserQuotaTotalAmountMicros(account *domains.UserQuota) int64 {
+	if account == nil {
+		return 0
+	}
+	return nonNegativeInt64(account.TotalAmountMicros)
 }

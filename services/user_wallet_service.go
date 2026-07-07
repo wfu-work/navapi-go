@@ -25,7 +25,7 @@ type WalletRecordInput struct {
 	Type             string
 	Source           string
 	Title            string
-	Quota            int64
+	AmountMicros     int64
 	RequestCount     int64
 	AmountCents      int64
 	Currency         string
@@ -59,24 +59,18 @@ func (s *UserWalletService) Ensure(tx *gorm.DB, userGuid string) error {
 	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&wallet).Error
 }
 
-func (s *UserWalletService) ensureFromQuota(tx *gorm.DB, userGuid string) error {
+func (s *UserWalletService) EnsureWithInitialAmount(tx *gorm.DB, userGuid string, amountMicros int64) error {
 	userGuid = strings.TrimSpace(userGuid)
 	if userGuid == "" {
 		return nil
 	}
+	amountMicros = nonNegativeInt64(amountMicros)
 	wallet := domains.UserWallet{
-		UserGuid: userGuid,
-		Currency: "CNY",
-	}
-	var quota domains.UserQuota
-	err := tx.Where("user_guid = ?", userGuid).First(&quota).Error
-	if err == nil {
-		wallet.BalanceQuota = nonNegativeInt64(quota.RemainQuota)
-		wallet.PaidBalanceQuota = wallet.BalanceQuota
-		wallet.TotalRechargeQuota = nonNegativeInt64(quota.TotalQuota)
-		wallet.TotalConsumedQuota = nonNegativeInt64(quota.UsedQuota)
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
+		UserGuid:                  userGuid,
+		BalanceAmountMicros:       amountMicros,
+		PaidBalanceAmountMicros:   amountMicros,
+		TotalRechargeAmountMicros: amountMicros,
+		Currency:                  "CNY",
 	}
 	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&wallet).Error
 }
@@ -87,7 +81,7 @@ func (s *UserWalletService) Get(userGuid string) (*domains.UserWallet, error) {
 		return nil, errors.New("user guid is required")
 	}
 	if err := s.DB().Transaction(func(tx *gorm.DB) error {
-		return s.ensureFromQuota(tx, userGuid)
+		return s.Ensure(tx, userGuid)
 	}); err != nil {
 		return nil, err
 	}
@@ -126,7 +120,7 @@ func (s *UserWalletService) RecordIncome(tx *gorm.DB, input WalletRecordInput) e
 	if input.UserGuid == "" {
 		return nil
 	}
-	if input.Quota <= 0 && input.AmountCents <= 0 {
+	if input.AmountMicros <= 0 && input.AmountCents <= 0 {
 		return nil
 	}
 	if err := s.Ensure(tx, input.UserGuid); err != nil {
@@ -140,7 +134,7 @@ func (s *UserWalletService) RecordIncome(tx *gorm.DB, input WalletRecordInput) e
 	if err := s.saveWallet(tx, wallet); err != nil {
 		return err
 	}
-	return s.createRecord(tx, wallet, input, domains.WalletRecordDirectionIncome, input.Quota)
+	return s.createRecord(tx, wallet, input, domains.WalletRecordDirectionIncome, input.AmountMicros)
 }
 
 func (s *UserWalletService) RecordConsume(tx *gorm.DB, input WalletRecordInput) error {
@@ -148,7 +142,7 @@ func (s *UserWalletService) RecordConsume(tx *gorm.DB, input WalletRecordInput) 
 	if input.UserGuid == "" {
 		return nil
 	}
-	if input.Quota <= 0 && input.RequestCount <= 0 {
+	if input.AmountMicros <= 0 && input.RequestCount <= 0 {
 		return nil
 	}
 	if err := s.Ensure(tx, input.UserGuid); err != nil {
@@ -158,10 +152,13 @@ func (s *UserWalletService) RecordConsume(tx *gorm.DB, input WalletRecordInput) 
 	if err != nil {
 		return err
 	}
-	quota := nonNegativeInt64(input.Quota)
+	amountMicros := nonNegativeInt64(input.AmountMicros)
 	requestCount := nonNegativeInt64(input.RequestCount)
-	deductWalletQuota(wallet, quota)
-	wallet.TotalConsumedQuota += quota
+	if wallet.BalanceAmountMicros < amountMicros {
+		return errors.New("wallet balance is insufficient")
+	}
+	deductWalletAmount(wallet, amountMicros)
+	wallet.TotalConsumedAmountMicros += amountMicros
 	wallet.TotalRequestCount += requestCount
 	if err := s.saveWallet(tx, wallet); err != nil {
 		return err
@@ -169,7 +166,7 @@ func (s *UserWalletService) RecordConsume(tx *gorm.DB, input WalletRecordInput) 
 	input.Type = domains.WalletRecordTypeConsume
 	input.Source = defaultString(input.Source, domains.WalletSourceRelay)
 	input.RequestCount = requestCount
-	return s.createRecord(tx, wallet, input, domains.WalletRecordDirectionOutcome, -quota)
+	return s.createRecord(tx, wallet, input, domains.WalletRecordDirectionOutcome, -amountMicros)
 }
 
 func (s *UserWalletService) lockWallet(tx *gorm.DB, userGuid string) (*domains.UserWallet, error) {
@@ -184,46 +181,46 @@ func (s *UserWalletService) lockWallet(tx *gorm.DB, userGuid string) (*domains.U
 func (s *UserWalletService) saveWallet(tx *gorm.DB, wallet *domains.UserWallet) error {
 	normalizeWallet(wallet)
 	return tx.Model(&domains.UserWallet{}).Where("id = ?", wallet.Id).Updates(map[string]any{
-		"balance_quota":                   wallet.BalanceQuota,
-		"paid_balance_quota":              wallet.PaidBalanceQuota,
-		"reward_balance_quota":            wallet.RewardBalanceQuota,
-		"commission_balance_quota":        wallet.CommissionBalanceQuota,
-		"total_consumed_quota":            wallet.TotalConsumedQuota,
-		"total_request_count":             wallet.TotalRequestCount,
-		"total_recharge_quota":            wallet.TotalRechargeQuota,
-		"total_subscription_quota":        wallet.TotalSubscriptionQuota,
-		"total_reward_quota":              wallet.TotalRewardQuota,
-		"total_commission_quota":          wallet.TotalCommissionQuota,
-		"total_recharge_amount_cents":     wallet.TotalRechargeAmountCents,
-		"total_subscription_amount_cents": wallet.TotalSubscriptionAmountCents,
-		"currency":                        wallet.Currency,
+		"balance_amount_micros":            wallet.BalanceAmountMicros,
+		"paid_balance_amount_micros":       wallet.PaidBalanceAmountMicros,
+		"reward_balance_amount_micros":     wallet.RewardBalanceAmountMicros,
+		"commission_balance_amount_micros": wallet.CommissionBalanceAmountMicros,
+		"total_consumed_amount_micros":     wallet.TotalConsumedAmountMicros,
+		"total_request_count":              wallet.TotalRequestCount,
+		"total_recharge_amount_micros":     wallet.TotalRechargeAmountMicros,
+		"total_subscription_amount_micros": wallet.TotalSubscriptionAmountMicros,
+		"total_reward_amount_micros":       wallet.TotalRewardAmountMicros,
+		"total_commission_amount_micros":   wallet.TotalCommissionAmountMicros,
+		"total_recharge_amount_cents":      wallet.TotalRechargeAmountCents,
+		"total_subscription_amount_cents":  wallet.TotalSubscriptionAmountCents,
+		"currency":                         wallet.Currency,
 	}).Error
 }
 
-func (s *UserWalletService) createRecord(tx *gorm.DB, wallet *domains.UserWallet, input WalletRecordInput, direction string, quotaDelta int64) error {
+func (s *UserWalletService) createRecord(tx *gorm.DB, wallet *domains.UserWallet, input WalletRecordInput, direction string, amountMicrosDelta int64) error {
 	record := domains.UserWalletRecord{
-		UserGuid:               input.UserGuid,
-		Type:                   input.Type,
-		Direction:              direction,
-		Source:                 input.Source,
-		Title:                  input.Title,
-		QuotaDelta:             quotaDelta,
-		RequestCountDelta:      input.RequestCount,
-		BalanceAfter:           wallet.BalanceQuota,
-		PaidBalanceAfter:       wallet.PaidBalanceQuota,
-		RewardBalanceAfter:     wallet.RewardBalanceQuota,
-		CommissionBalanceAfter: wallet.CommissionBalanceQuota,
-		AmountCents:            input.AmountCents,
-		Currency:               input.Currency,
-		OrderNo:                input.OrderNo,
-		PaymentGuid:            input.PaymentGuid,
-		SubscriptionGuid:       input.SubscriptionGuid,
-		TokenID:                input.TokenID,
-		TokenGuid:              input.TokenGuid,
-		RelatedGuid:            input.RelatedGuid,
-		OccurredAt:             input.OccurredAt,
-		Remark:                 input.Remark,
-		Meta:                   input.Meta,
+		UserGuid:                           input.UserGuid,
+		Type:                               input.Type,
+		Direction:                          direction,
+		Source:                             input.Source,
+		Title:                              input.Title,
+		RequestCountDelta:                  input.RequestCount,
+		AmountMicrosDelta:                  amountMicrosDelta,
+		BalanceAmountMicrosAfter:           wallet.BalanceAmountMicros,
+		PaidBalanceAmountMicrosAfter:       wallet.PaidBalanceAmountMicros,
+		RewardBalanceAmountMicrosAfter:     wallet.RewardBalanceAmountMicros,
+		CommissionBalanceAmountMicrosAfter: wallet.CommissionBalanceAmountMicros,
+		AmountCents:                        input.AmountCents,
+		Currency:                           input.Currency,
+		OrderNo:                            input.OrderNo,
+		PaymentGuid:                        input.PaymentGuid,
+		SubscriptionGuid:                   input.SubscriptionGuid,
+		TokenID:                            input.TokenID,
+		TokenGuid:                          input.TokenGuid,
+		RelatedGuid:                        input.RelatedGuid,
+		OccurredAt:                         input.OccurredAt,
+		Remark:                             input.Remark,
+		Meta:                               input.Meta,
 	}
 	if record.OccurredAt == 0 {
 		record.OccurredAt = time.Now().Unix()
@@ -235,53 +232,47 @@ func (s *UserWalletService) createRecord(tx *gorm.DB, wallet *domains.UserWallet
 }
 
 func applyWalletIncome(wallet *domains.UserWallet, input WalletRecordInput) {
-	quota := nonNegativeInt64(input.Quota)
-	wallet.BalanceQuota += quota
+	amountMicros := nonNegativeInt64(input.AmountMicros)
+	wallet.BalanceAmountMicros += amountMicros
 	switch input.Type {
 	case domains.WalletRecordTypeSubscription:
-		wallet.PaidBalanceQuota += quota
-		wallet.TotalSubscriptionQuota += quota
+		wallet.PaidBalanceAmountMicros += amountMicros
+		wallet.TotalSubscriptionAmountMicros += amountMicros
 		wallet.TotalSubscriptionAmountCents += nonNegativeInt64(input.AmountCents)
 	case domains.WalletRecordTypeReward:
-		wallet.RewardBalanceQuota += quota
-		wallet.TotalRewardQuota += quota
+		wallet.RewardBalanceAmountMicros += amountMicros
+		wallet.TotalRewardAmountMicros += amountMicros
 	case domains.WalletRecordTypeCommission:
-		wallet.CommissionBalanceQuota += quota
-		wallet.TotalCommissionQuota += quota
+		wallet.CommissionBalanceAmountMicros += amountMicros
+		wallet.TotalCommissionAmountMicros += amountMicros
 	default:
-		wallet.PaidBalanceQuota += quota
-		wallet.TotalRechargeQuota += quota
+		wallet.PaidBalanceAmountMicros += amountMicros
+		wallet.TotalRechargeAmountMicros += amountMicros
 		wallet.TotalRechargeAmountCents += nonNegativeInt64(input.AmountCents)
 	}
 }
 
-func deductWalletQuota(wallet *domains.UserWallet, quota int64) {
-	remaining := nonNegativeInt64(quota)
-	take := int64Min(wallet.RewardBalanceQuota, remaining)
-	wallet.RewardBalanceQuota -= take
+func deductWalletAmount(wallet *domains.UserWallet, amountMicros int64) {
+	remaining := nonNegativeInt64(amountMicros)
+	take := int64Min(wallet.RewardBalanceAmountMicros, remaining)
+	wallet.RewardBalanceAmountMicros -= take
 	remaining -= take
-	take = int64Min(wallet.CommissionBalanceQuota, remaining)
-	wallet.CommissionBalanceQuota -= take
+	take = int64Min(wallet.CommissionBalanceAmountMicros, remaining)
+	wallet.CommissionBalanceAmountMicros -= take
 	remaining -= take
-	take = int64Min(wallet.PaidBalanceQuota, remaining)
-	wallet.PaidBalanceQuota -= take
-	wallet.BalanceQuota = wallet.PaidBalanceQuota + wallet.RewardBalanceQuota + wallet.CommissionBalanceQuota
+	if remaining > wallet.PaidBalanceAmountMicros {
+		return
+	}
+	wallet.PaidBalanceAmountMicros -= remaining
+	wallet.BalanceAmountMicros = wallet.PaidBalanceAmountMicros + wallet.RewardBalanceAmountMicros + wallet.CommissionBalanceAmountMicros
 }
 
 func normalizeWallet(wallet *domains.UserWallet) {
 	wallet.UserGuid = strings.TrimSpace(wallet.UserGuid)
-	wallet.PaidBalanceQuota = nonNegativeInt64(wallet.PaidBalanceQuota)
-	wallet.RewardBalanceQuota = nonNegativeInt64(wallet.RewardBalanceQuota)
-	wallet.CommissionBalanceQuota = nonNegativeInt64(wallet.CommissionBalanceQuota)
-	wallet.BalanceQuota = wallet.PaidBalanceQuota + wallet.RewardBalanceQuota + wallet.CommissionBalanceQuota
-	wallet.TotalConsumedQuota = nonNegativeInt64(wallet.TotalConsumedQuota)
 	wallet.TotalRequestCount = nonNegativeInt64(wallet.TotalRequestCount)
-	wallet.TotalRechargeQuota = nonNegativeInt64(wallet.TotalRechargeQuota)
-	wallet.TotalSubscriptionQuota = nonNegativeInt64(wallet.TotalSubscriptionQuota)
-	wallet.TotalRewardQuota = nonNegativeInt64(wallet.TotalRewardQuota)
-	wallet.TotalCommissionQuota = nonNegativeInt64(wallet.TotalCommissionQuota)
 	wallet.TotalRechargeAmountCents = nonNegativeInt64(wallet.TotalRechargeAmountCents)
 	wallet.TotalSubscriptionAmountCents = nonNegativeInt64(wallet.TotalSubscriptionAmountCents)
+	normalizeWalletAmounts(wallet)
 	wallet.Currency = defaultString(strings.TrimSpace(wallet.Currency), "CNY")
 }
 
@@ -298,6 +289,11 @@ func normalizeWalletRecordInput(input WalletRecordInput) WalletRecordInput {
 	input.RelatedGuid = strings.TrimSpace(input.RelatedGuid)
 	input.Remark = strings.TrimSpace(input.Remark)
 	input.Meta = strings.TrimSpace(input.Meta)
+	input.AmountCents = nonNegativeInt64(input.AmountCents)
+	input.AmountMicros = nonNegativeInt64(input.AmountMicros)
+	if input.AmountMicros <= 0 && input.AmountCents > 0 {
+		input.AmountMicros = AmountCentsToMicros(input.AmountCents)
+	}
 	if input.Type == "" {
 		input.Type = domains.WalletRecordTypeRecharge
 	}
@@ -305,6 +301,24 @@ func normalizeWalletRecordInput(input WalletRecordInput) WalletRecordInput {
 		input.Source = domains.WalletSourceManual
 	}
 	return input
+}
+
+func normalizeWalletAmounts(wallet *domains.UserWallet) {
+	wallet.PaidBalanceAmountMicros = nonNegativeInt64(wallet.PaidBalanceAmountMicros)
+	wallet.RewardBalanceAmountMicros = nonNegativeInt64(wallet.RewardBalanceAmountMicros)
+	wallet.CommissionBalanceAmountMicros = nonNegativeInt64(wallet.CommissionBalanceAmountMicros)
+	wallet.TotalConsumedAmountMicros = nonNegativeInt64(wallet.TotalConsumedAmountMicros)
+	wallet.TotalRechargeAmountMicros = nonNegativeInt64(wallet.TotalRechargeAmountMicros)
+	wallet.TotalSubscriptionAmountMicros = nonNegativeInt64(wallet.TotalSubscriptionAmountMicros)
+	wallet.TotalRewardAmountMicros = nonNegativeInt64(wallet.TotalRewardAmountMicros)
+	wallet.TotalCommissionAmountMicros = nonNegativeInt64(wallet.TotalCommissionAmountMicros)
+	if wallet.TotalRechargeAmountMicros <= 0 && wallet.TotalRechargeAmountCents > 0 {
+		wallet.TotalRechargeAmountMicros = AmountCentsToMicros(wallet.TotalRechargeAmountCents)
+	}
+	if wallet.TotalSubscriptionAmountMicros <= 0 && wallet.TotalSubscriptionAmountCents > 0 {
+		wallet.TotalSubscriptionAmountMicros = AmountCentsToMicros(wallet.TotalSubscriptionAmountCents)
+	}
+	wallet.BalanceAmountMicros = wallet.PaidBalanceAmountMicros + wallet.RewardBalanceAmountMicros + wallet.CommissionBalanceAmountMicros
 }
 
 func int64Min(a, b int64) int64 {

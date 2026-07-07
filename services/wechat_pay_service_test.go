@@ -15,7 +15,7 @@ import (
 
 func TestConfirmWechatTransactionRechargesWallet(t *testing.T) {
 	db := withWechatPaymentTestDB(t)
-	order := createWechatPaymentOrder(t, 500, 200)
+	order := createWechatPaymentOrder(t, 500)
 	transaction := &payments.Transaction{
 		Appid:         core.String("wx-app"),
 		Mchid:         core.String("mch-001"),
@@ -41,30 +41,34 @@ func TestConfirmWechatTransactionRechargesWallet(t *testing.T) {
 	if err := db.Where("user_guid = ?", "user-wechat").First(&quota).Error; err != nil {
 		t.Fatal(err)
 	}
-	if quota.RemainQuota != defaultRegisterQuota+200 || quota.TotalQuota != defaultRegisterQuota+200 {
-		t.Fatalf("quota = %+v, want default quota plus recharge quota", quota)
+	if quota.RemainAmountMicros != WholeAmountToMicros(defaultRegisterAmount)+AmountCentsToMicros(500) ||
+		quota.TotalAmountMicros != WholeAmountToMicros(defaultRegisterAmount)+AmountCentsToMicros(500) {
+		t.Fatalf("quota = %+v, want default amount plus recharge amount", quota)
 	}
 
 	var wallet domains.UserWallet
 	if err := db.Where("user_guid = ?", "user-wechat").First(&wallet).Error; err != nil {
 		t.Fatal(err)
 	}
-	if wallet.BalanceQuota != 200 || wallet.TotalRechargeQuota != 200 {
-		t.Fatalf("wallet = %+v, want recharge totals", wallet)
+	if wallet.BalanceAmountMicros != AmountCentsToMicros(500) ||
+		wallet.TotalRechargeAmountMicros != AmountCentsToMicros(500) {
+		t.Fatalf("wallet = %+v, want recharge amount totals", wallet)
 	}
 
 	var record domains.UserWalletRecord
 	if err := db.Where("payment_guid = ?", paid.Guid).First(&record).Error; err != nil {
 		t.Fatal(err)
 	}
-	if record.OrderNo != order.OrderNo || record.AmountCents != 500 || record.QuotaDelta != 200 {
-		t.Fatalf("wallet record = %+v, want payment income record", record)
+	if record.OrderNo != order.OrderNo ||
+		record.AmountCents != 500 ||
+		record.AmountMicrosDelta != AmountCentsToMicros(500) {
+		t.Fatalf("wallet record = %+v, want payment income amount record", record)
 	}
 }
 
 func TestConfirmWechatTransactionRejectsAmountMismatch(t *testing.T) {
 	db := withWechatPaymentTestDB(t)
-	order := createWechatPaymentOrder(t, 500, 200)
+	order := createWechatPaymentOrder(t, 500)
 	transaction := &payments.Transaction{
 		OutTradeNo:    core.String(order.OrderNo),
 		TradeState:    core.String("SUCCESS"),
@@ -118,18 +122,17 @@ func TestSetWechatPaySettingsPreservesMaskedSecrets(t *testing.T) {
 	}
 }
 
-func createWechatPaymentOrder(t *testing.T, amountCents int64, quota int64) domains.PaymentOrder {
+func createWechatPaymentOrder(t *testing.T, amountCents int64) domains.PaymentOrder {
 	t.Helper()
 	order := domains.PaymentOrder{
 		OrderNo:     newOrderNo(),
 		UserGuid:    "user-wechat",
-		Type:        "quota",
+		Type:        "recharge",
 		Status:      "pending",
 		Provider:    paymentProviderWechat,
 		TradeType:   wechatTradeTypeNative,
 		AmountCents: amountCents,
 		Currency:    "CNY",
-		Quota:       quota,
 	}
 	if err := createWithCrud(&PaymentServiceApp.CrudService, &order); err != nil {
 		t.Fatal(err)

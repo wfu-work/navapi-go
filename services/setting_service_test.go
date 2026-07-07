@@ -47,7 +47,7 @@ func TestRegisterSettingsDefaultAndSaveUseSetting(t *testing.T) {
 
 	defaults := RegisterSettingServiceApp.Get()
 	if !defaults.Enabled || !defaults.RequireCaptcha || defaults.RequireInvite ||
-		defaults.DefaultQuota != defaultRegisterQuota ||
+		defaults.DefaultAmount != defaultRegisterAmount ||
 		defaults.DefaultGroup != "default" ||
 		defaults.Notice != defaultRegisterNotice {
 		t.Fatalf("defaults = %+v, want open registration, captcha and quota defaults", defaults)
@@ -55,7 +55,7 @@ func TestRegisterSettingsDefaultAndSaveUseSetting(t *testing.T) {
 
 	err := RegisterSettingServiceApp.Set(RegisterSettings{
 		Enabled:        false,
-		DefaultQuota:   25,
+		DefaultAmount:  25,
 		DefaultGroup:   " vip ",
 		AllowedGroups:  " default, vip ,, enterprise ",
 		RequireInvite:  true,
@@ -67,7 +67,7 @@ func TestRegisterSettingsDefaultAndSaveUseSetting(t *testing.T) {
 	}
 	saved := RegisterSettingServiceApp.Get()
 	if saved.Enabled ||
-		saved.DefaultQuota != 25 ||
+		saved.DefaultAmount != 25 ||
 		saved.DefaultGroup != "vip" ||
 		saved.AllowedGroups != "default,vip,enterprise" ||
 		!saved.RequireInvite ||
@@ -76,7 +76,7 @@ func TestRegisterSettingsDefaultAndSaveUseSetting(t *testing.T) {
 		t.Fatalf("saved = %+v, want normalized setting values", saved)
 	}
 	var row domains.Setting
-	if err := db.Where("key = ?", settingRegisterDefaultQuota).First(&row).Error; err != nil {
+	if err := db.Where("key = ?", settingRegisterDefaultAmount).First(&row).Error; err != nil {
 		t.Fatal(err)
 	}
 	if row.Value != "25" {

@@ -50,11 +50,10 @@ type RelayResult struct {
 }
 
 type preparedRelay struct {
-	Body          []byte
-	ModelName     string
-	Candidates    []domains.VendorMeta
-	IsStream      bool
-	ReservedQuota int64
+	Body       []byte
+	ModelName  string
+	Candidates []domains.VendorMeta
+	IsStream   bool
 }
 
 type RelayHTTPError struct {
@@ -67,8 +66,8 @@ func (e *RelayHTTPError) Error() string {
 }
 
 // RelayHTTP is the single entry point used by handlers. It prepares the request
-// once, reserves quota before touching upstream, then chooses buffered or live
-// streaming delivery based on the original client payload.
+// once, then chooses buffered or live streaming delivery based on the original
+// client payload.
 func (s RelayService) RelayHTTP(c *gin.Context, token *domains.ApiToken, endpoint RelayEndpoint) (*RelayResult, bool, error) {
 	if token == nil {
 		return nil, false, &RelayHTTPError{StatusCode: http.StatusUnauthorized, Message: "token is invalid"}
@@ -123,19 +122,16 @@ func (s RelayService) prepareRelay(c *gin.Context, token *domains.ApiToken, endp
 		return nil, fmt.Errorf("no available provider for model %s", modelName)
 	}
 	candidates = ProviderServiceApp.ApplyAffinity(token.Guid, modelName, candidates)
-	reservedQuota := int64(0)
 	if !endpoint.NoBilling {
-		reservedQuota = PricingServiceApp.CalculateQuota(modelName, token.Group, vos.Usage{}, estimateQuotaFromBody(body))
-		if err := s.reserveQuota(token, reservedQuota); err != nil {
+		if err := s.ensureBillableBalance(token); err != nil {
 			return nil, err
 		}
 	}
 	return &preparedRelay{
-		Body:          body,
-		ModelName:     modelName,
-		Candidates:    candidates,
-		IsStream:      isStreamRequest(body),
-		ReservedQuota: reservedQuota,
+		Body:       body,
+		ModelName:  modelName,
+		Candidates: candidates,
+		IsStream:   isStreamRequest(body),
 	}, nil
 }
 
@@ -164,7 +160,6 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	if err != nil {
 		status = "error"
 		content = err.Error()
-		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, prepared.IsStream, status, content, prepared.Body, ""))
 		return nil, err
 	}
@@ -172,16 +167,16 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 		status = "error"
 		content = string(result.Body)
 		maybeAutoDisableProvider(provider, result)
-		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result)))
 		return result, nil
 	}
 	if provider != nil {
 		ProviderServiceApp.RememberAffinity(token.Guid, prepared.ModelName, provider.Guid)
 	}
-	quota := calculateFinalQuota(prepared.ModelName, token.Group, result.Usage, prepared.Body, prepared.ReservedQuota)
+	quota := calculateFinalQuota(prepared.ModelName, token.Group, result.Usage, prepared.Body, 0)
 	if !endpoint.NoBilling {
-		if err := s.settleReservedQuota(token, prepared.ReservedQuota, quota); err != nil {
+		detail := PricingServiceApp.CalculateQuotaDetail(prepared.ModelName, token.Group, result.Usage, estimateQuotaFromBody(prepared.Body))
+		if err := s.settleCost(token, CostToAmountMicros(detail.FinalCost), detail); err != nil {
 			status = "error"
 			content = err.Error()
 			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result)))
@@ -216,33 +211,33 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 
 	useTime := time.Since(start).Milliseconds()
 	if err != nil {
-		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, prepared.IsStream, "error", err.Error(), prepared.Body, ""))
 		return err
 	}
 	if result == nil {
 		err = errors.New("upstream response is empty")
-		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, prepared.IsStream, "error", err.Error(), prepared.Body, ""))
 		return err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
 		maybeAutoDisableProvider(provider, result)
-		_ = s.refundReservedQuota(token, prepared.ReservedQuota)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), prepared.IsStream, "error", string(result.Body), prepared.Body, extractUpstreamRequestID(result)))
 		return nil
 	}
 	if provider != nil {
 		ProviderServiceApp.RememberAffinity(token.Guid, prepared.ModelName, provider.Guid)
 	}
-	quota := calculateFinalQuota(prepared.ModelName, token.Group, result.Usage, prepared.Body, prepared.ReservedQuota)
+	quota := calculateFinalQuota(prepared.ModelName, token.Group, result.Usage, prepared.Body, 0)
 	if endpoint.NoBilling {
 		quota = 0
-	} else if err := s.settleReservedQuota(token, prepared.ReservedQuota, quota); err != nil {
-		// The stream may already be on the wire, so settlement failures are
-		// recorded in logs instead of trying to replace the response body.
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), prepared.IsStream, "error", err.Error(), prepared.Body, extractUpstreamRequestID(result)))
-		return nil
+	} else {
+		detail := PricingServiceApp.CalculateQuotaDetail(prepared.ModelName, token.Group, result.Usage, estimateQuotaFromBody(prepared.Body))
+		if err := s.settleCost(token, CostToAmountMicros(detail.FinalCost), detail); err != nil {
+			// The stream may already be on the wire, so settlement failures are
+			// recorded in logs instead of trying to replace the response body.
+			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), prepared.IsStream, "error", err.Error(), prepared.Body, extractUpstreamRequestID(result)))
+			return nil
+		}
 	}
 	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, firstResponseTime(result), prepared.IsStream, "success", "", prepared.Body, extractUpstreamRequestID(result)))
 	return nil
@@ -495,52 +490,36 @@ func applyParamOverride(targetURL string, raw string) string {
 	return u.String()
 }
 
-func (s RelayService) reserveQuota(token *domains.ApiToken, quota int64) error {
-	if quota <= 0 {
+func (s RelayService) ensureBillableBalance(token *domains.ApiToken) error {
+	if token == nil {
+		return errors.New("token is required")
+	}
+	if token.UnlimitedBalance {
 		return nil
 	}
-	return TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
-		if err := UserWalletServiceApp.ensureFromQuota(tx, token.UserGuid); err != nil {
-			return err
-		}
-		if err := TokenServiceApp.Consume(tx, token.Id, quota); err != nil {
-			return err
-		}
-		return UserQuotaServiceApp.Consume(tx, token.UserGuid, quota)
-	})
-}
-
-func (s RelayService) refundReservedQuota(token *domains.ApiToken, quota int64) error {
-	if quota <= 0 {
-		return nil
+	if effectiveTokenBalanceAmountMicros(token) <= 0 {
+		return errors.New("token balance is exhausted")
 	}
-	return TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
-		if err := TokenServiceApp.Refund(tx, token.Id, quota); err != nil {
-			return err
-		}
-		return UserQuotaServiceApp.Refund(tx, token.UserGuid, quota)
-	})
+	if err := UserWalletServiceApp.Ensure(TokenServiceApp.DB(), token.UserGuid); err != nil {
+		return err
+	}
+	wallet, err := UserWalletServiceApp.Get(token.UserGuid)
+	if err != nil {
+		return err
+	}
+	if wallet.BalanceAmountMicros <= 0 {
+		return errors.New("wallet balance is insufficient")
+	}
+	return nil
 }
 
-// settleReservedQuota converts the reservation into the final charge. Only the
-// delta touches token/user counters because reserveQuota already moved them.
-func (s RelayService) settleReservedQuota(token *domains.ApiToken, reservedQuota int64, finalQuota int64) error {
+func (s RelayService) settleCost(token *domains.ApiToken, amountMicros int64, detail QuotaCalculationDetail) error {
 	return TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
-		delta := finalQuota - reservedQuota
-		switch {
-		case delta > 0:
-			if err := TokenServiceApp.Consume(tx, token.Id, delta); err != nil {
+		if amountMicros > 0 {
+			if err := TokenServiceApp.ConsumeAmount(tx, token.Id, amountMicros); err != nil {
 				return err
 			}
-			if err := UserQuotaServiceApp.Consume(tx, token.UserGuid, delta); err != nil {
-				return err
-			}
-		case delta < 0:
-			refund := -delta
-			if err := TokenServiceApp.Refund(tx, token.Id, refund); err != nil {
-				return err
-			}
-			if err := UserQuotaServiceApp.Refund(tx, token.UserGuid, refund); err != nil {
+			if err := UserQuotaServiceApp.ConsumeAmount(tx, token.UserGuid, amountMicros); err != nil {
 				return err
 			}
 		}
@@ -549,10 +528,11 @@ func (s RelayService) settleReservedQuota(token *domains.ApiToken, reservedQuota
 			Type:         domains.WalletRecordTypeConsume,
 			Source:       domains.WalletSourceRelay,
 			Title:        "API 消费",
-			Quota:        finalQuota,
+			AmountMicros: amountMicros,
 			RequestCount: 1,
 			TokenID:      token.Id,
 			TokenGuid:    token.Guid,
+			Meta:         marshalBillingMeta(detail, amountMicros),
 		})
 	})
 }
@@ -854,12 +834,12 @@ func calculateQuota(usage vos.Usage) int64 {
 func calculateFinalQuota(modelName string, group string, usage vos.Usage, body []byte, reservedQuota int64) int64 {
 	quota := calculateQuota(usage)
 	if quota > 0 {
-		return PricingServiceApp.CalculateQuota(modelName, group, usage, quota)
+		return quota
 	}
 	if reservedQuota > 0 {
 		return reservedQuota
 	}
-	return PricingServiceApp.CalculateQuota(modelName, group, usage, estimateQuotaFromBody(body))
+	return estimateQuotaFromBody(body)
 }
 
 func estimateQuotaFromBody(body []byte) int64 {
@@ -959,6 +939,7 @@ func buildUsageLogOther(token *domains.ApiToken, body []byte, detail QuotaCalcul
 		"completionTokens":    detail.CompletionTokens,
 		"fallbackQuota":       detail.FallbackQuota,
 		"quota":               detail.Quota,
+		"amountMicros":        CostToAmountMicros(detail.FinalCost),
 	}
 	if detail.OfficialPricing {
 		values["officialProvider"] = detail.OfficialProvider
@@ -978,6 +959,38 @@ func buildUsageLogOther(token *domains.ApiToken, body []byte, detail QuotaCalcul
 	}
 	if reasoningEffort := extractReasoningEffort(body); reasoningEffort != "" {
 		values["reasoningEffort"] = reasoningEffort
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func marshalBillingMeta(detail QuotaCalculationDetail, amountMicros int64) string {
+	values := map[string]any{
+		"billingMode":      detail.BillingMode,
+		"pricingMatched":   detail.PricingMatched,
+		"officialPricing":  detail.OfficialPricing,
+		"rawCost":          detail.RawCost,
+		"finalCost":        detail.FinalCost,
+		"amountMicros":     amountMicros,
+		"groupMultiplier":  detail.GroupMultiplier,
+		"promptTokens":     detail.RegularPromptTokens + detail.CachedTokens,
+		"cachedTokens":     detail.CachedTokens,
+		"completionTokens": detail.CompletionTokens,
+	}
+	if detail.PricingModel != "" {
+		values["pricingModel"] = detail.PricingModel
+	}
+	if detail.PricingGroup != "" {
+		values["pricingGroup"] = detail.PricingGroup
+	}
+	if detail.OfficialProvider != "" {
+		values["officialProvider"] = detail.OfficialProvider
+	}
+	if detail.OfficialPriceUnit != "" {
+		values["officialPriceUnit"] = detail.OfficialPriceUnit
 	}
 	data, err := json.Marshal(values)
 	if err != nil {

@@ -105,7 +105,7 @@ func (s ClientRegisterService) Register(req ClientRegisterRequest) (*ClientRegis
 		if err := UserSettingsServiceApp.WithDB(tx).Ensure(tx, created.Guid); err != nil {
 			return err
 		}
-		if err := UserWalletServiceApp.WithDB(tx).ensureFromQuota(tx, created.Guid); err != nil {
+		if err := UserWalletServiceApp.WithDB(tx).EnsureWithInitialAmount(tx, created.Guid, WholeAmountToMicros(settings.DefaultAmount)); err != nil {
 			return err
 		}
 		if req.InviteCode != "" {

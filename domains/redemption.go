@@ -5,7 +5,7 @@ import commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 type Redemption struct {
 	commonDomains.BaseDataEntity
 	Code      string `json:"code" gorm:"column:code;size:80;uniqueIndex;comment:兑换码"`
-	Quota     int64  `json:"quota" gorm:"column:quota;default:0;comment:兑换额度"`
+	Amount    int64  `json:"amount" gorm:"column:amount;default:0;comment:兑换金额"`
 	Status    int    `json:"status" gorm:"column:status;default:1;index;comment:状态"`
 	UsedBy    string `json:"usedBy" gorm:"column:used_by;size:100;index;comment:使用用户 GUID"`
 	UsedAt    int64  `json:"usedAt" gorm:"column:used_at;default:0;comment:使用时间"`

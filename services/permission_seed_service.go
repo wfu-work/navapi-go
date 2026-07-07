@@ -143,9 +143,9 @@ var navapiAPIPermissionSeeds = []apiPermissionSeed{
 	{Guid: "navapi-api-usage-stat", Name: "用量统计", Code: "navapi.usage.stat", Path: "/usage/stat", Verb: "GET", Sort: 406, Group: "用量"},
 	{Guid: "navapi-api-usage-summary", Name: "用量汇总", Code: "navapi.usage.summary", Path: "/usage/summary", Verb: "GET", Sort: 407, Group: "用量"},
 
-	{Guid: "navapi-api-quota-self", Name: "当前用户额度", Code: "navapi.quota.self", Path: "/quota/self", Verb: "GET", User: true, Sort: 500, Group: "客户"},
-	{Guid: "navapi-api-quota-list", Name: "客户额度列表", Code: "navapi.quota.list", Path: "/quota/list", Verb: "GET", Sort: 501, Group: "客户"},
-	{Guid: "navapi-api-quota-update", Name: "更新客户额度", Code: "navapi.quota.update", Path: "/quota/", Verb: "PUT", Sort: 502, Group: "客户"},
+	{Guid: "navapi-api-balance-self", Name: "当前用户余额", Code: "navapi.balance.self", Path: "/balance/self", Verb: "GET", User: true, Sort: 500, Group: "客户"},
+	{Guid: "navapi-api-balance-list", Name: "客户余额列表", Code: "navapi.balance.list", Path: "/balance/list", Verb: "GET", Sort: 501, Group: "客户"},
+	{Guid: "navapi-api-balance-update", Name: "更新客户余额", Code: "navapi.balance.update", Path: "/balance/", Verb: "PUT", Sort: 502, Group: "客户"},
 	{Guid: "navapi-api-user-settings-self", Name: "当前用户设置", Code: "navapi.user.settings.self", Path: "/user-settings/self", Verb: "GET", User: true, Sort: 520, Group: "客户"},
 	{Guid: "navapi-api-user-settings-save", Name: "保存当前用户设置", Code: "navapi.user.settings.save", Path: "/user-settings/self", Verb: "PUT", User: true, Sort: 521, Group: "客户"},
 

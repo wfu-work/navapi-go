@@ -30,12 +30,12 @@ func (s *InvitationService) WithDB(db *gorm.DB) *InvitationService {
 }
 
 type InviteSettings struct {
-	Enabled            bool  `json:"enabled"`
-	RequireInvite      bool  `json:"requireInvite"`
-	RewardQuota        int64 `json:"rewardQuota"`
-	InviteeRewardQuota int64 `json:"inviteeRewardQuota"`
-	DefaultMaxUses     int   `json:"defaultMaxUses"`
-	DefaultExpireDays  int   `json:"defaultExpireDays"`
+	Enabled             bool  `json:"enabled"`
+	RequireInvite       bool  `json:"requireInvite"`
+	RewardAmount        int64 `json:"rewardAmount"`
+	InviteeRewardAmount int64 `json:"inviteeRewardAmount"`
+	DefaultMaxUses      int   `json:"defaultMaxUses"`
+	DefaultExpireDays   int   `json:"defaultExpireDays"`
 }
 
 type AcceptInviteRequest struct {
@@ -45,21 +45,21 @@ type AcceptInviteRequest struct {
 
 func (s *InvitationService) Settings() InviteSettings {
 	return InviteSettings{
-		Enabled:            OptionServiceApp.Int64("invite.enabled", 1) > 0,
-		RequireInvite:      OptionServiceApp.Int64("register.require_invite", 0) > 0,
-		RewardQuota:        OptionServiceApp.Int64("invite.reward_quota", 0),
-		InviteeRewardQuota: OptionServiceApp.Int64("invite.invitee_reward_quota", 0),
-		DefaultMaxUses:     int(OptionServiceApp.Int64("invite.default_max_uses", 0)),
-		DefaultExpireDays:  int(OptionServiceApp.Int64("invite.default_expire_days", 0)),
+		Enabled:             OptionServiceApp.Int64("invite.enabled", 1) > 0,
+		RequireInvite:       OptionServiceApp.Int64("register.require_invite", 0) > 0,
+		RewardAmount:        OptionServiceApp.Int64("invite.reward_amount", 0),
+		InviteeRewardAmount: OptionServiceApp.Int64("invite.invitee_reward_amount", 0),
+		DefaultMaxUses:      int(OptionServiceApp.Int64("invite.default_max_uses", 0)),
+		DefaultExpireDays:   int(OptionServiceApp.Int64("invite.default_expire_days", 0)),
 	}
 }
 
 func (s *InvitationService) SetSettings(settings InviteSettings) error {
 	values := map[string]string{
-		"invite.reward_quota":         fmt.Sprint(settings.RewardQuota),
-		"invite.invitee_reward_quota": fmt.Sprint(settings.InviteeRewardQuota),
-		"invite.default_max_uses":     fmt.Sprint(settings.DefaultMaxUses),
-		"invite.default_expire_days":  fmt.Sprint(settings.DefaultExpireDays),
+		"invite.reward_amount":         fmt.Sprint(settings.RewardAmount),
+		"invite.invitee_reward_amount": fmt.Sprint(settings.InviteeRewardAmount),
+		"invite.default_max_uses":      fmt.Sprint(settings.DefaultMaxUses),
+		"invite.default_expire_days":   fmt.Sprint(settings.DefaultExpireDays),
 	}
 	if settings.Enabled {
 		values["invite.enabled"] = "1"
@@ -137,11 +137,11 @@ func (s *InvitationService) SaveCode(code *domains.InvitationCode) error {
 	if code.MaxUses == 0 {
 		code.MaxUses = settings.DefaultMaxUses
 	}
-	if code.RewardQuota == 0 {
-		code.RewardQuota = settings.RewardQuota
+	if code.RewardAmount == 0 {
+		code.RewardAmount = settings.RewardAmount
 	}
-	if code.InviteeRewardQuota == 0 {
-		code.InviteeRewardQuota = settings.InviteeRewardQuota
+	if code.InviteeRewardAmount == 0 {
+		code.InviteeRewardAmount = settings.InviteeRewardAmount
 	}
 	if code.ExpiredAt == 0 && settings.DefaultExpireDays > 0 {
 		code.ExpiredAt = time.Now().AddDate(0, 0, settings.DefaultExpireDays).Unix()
@@ -245,13 +245,13 @@ func (s *InvitationService) AcceptInvite(userGuid string, req AcceptInviteReques
 			return errors.New("cannot accept your own invite code")
 		}
 		relation = domains.InvitationRelation{
-			Code:               code.Code,
-			InviterUserGuid:    code.OwnerUserGuid,
-			InviteeUserGuid:    userGuid,
-			RewardQuota:        code.RewardQuota,
-			InviteeRewardQuota: code.InviteeRewardQuota,
-			Rewarded:           true,
-			RewardedAt:         time.Now().Unix(),
+			Code:                code.Code,
+			InviterUserGuid:     code.OwnerUserGuid,
+			InviteeUserGuid:     userGuid,
+			RewardAmount:        code.RewardAmount,
+			InviteeRewardAmount: code.InviteeRewardAmount,
+			Rewarded:            true,
+			RewardedAt:          time.Now().Unix(),
 		}
 		if err := relation.BeforeCreate(nil); err != nil {
 			return err
@@ -260,41 +260,37 @@ func (s *InvitationService) AcceptInvite(userGuid string, req AcceptInviteReques
 		if err := relationCrud.Create(relation); err != nil {
 			return err
 		}
-		if code.OwnerUserGuid != "" && code.RewardQuota > 0 {
-			if err := UserWalletServiceApp.ensureFromQuota(tx, code.OwnerUserGuid); err != nil {
-				return err
-			}
-			if err := UserQuotaServiceApp.Recharge(tx, code.OwnerUserGuid, 0, code.RewardQuota); err != nil {
+		if code.OwnerUserGuid != "" && code.RewardAmount > 0 {
+			amountMicros := WholeAmountToMicros(code.RewardAmount)
+			if err := UserQuotaServiceApp.RechargeAmount(tx, code.OwnerUserGuid, 0, amountMicros); err != nil {
 				return err
 			}
 			if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
-				UserGuid:    code.OwnerUserGuid,
-				Type:        domains.WalletRecordTypeCommission,
-				Source:      domains.WalletSourceInvitation,
-				Title:       "邀请分佣",
-				Quota:       code.RewardQuota,
-				RelatedGuid: relation.Guid,
-				Remark:      code.Code,
+				UserGuid:     code.OwnerUserGuid,
+				Type:         domains.WalletRecordTypeCommission,
+				Source:       domains.WalletSourceInvitation,
+				Title:        "邀请分佣",
+				AmountMicros: amountMicros,
+				RelatedGuid:  relation.Guid,
+				Remark:       code.Code,
 			}); err != nil {
 				return err
 			}
 		}
-		if code.InviteeRewardQuota > 0 {
-			if err := UserWalletServiceApp.ensureFromQuota(tx, userGuid); err != nil {
-				return err
-			}
-			if err := UserQuotaServiceApp.Recharge(tx, userGuid, req.TokenID, code.InviteeRewardQuota); err != nil {
+		if code.InviteeRewardAmount > 0 {
+			amountMicros := WholeAmountToMicros(code.InviteeRewardAmount)
+			if err := UserQuotaServiceApp.RechargeAmount(tx, userGuid, req.TokenID, amountMicros); err != nil {
 				return err
 			}
 			if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
-				UserGuid:    userGuid,
-				Type:        domains.WalletRecordTypeReward,
-				Source:      domains.WalletSourceInvitation,
-				Title:       "邀请注册奖励",
-				Quota:       code.InviteeRewardQuota,
-				TokenID:     req.TokenID,
-				RelatedGuid: relation.Guid,
-				Remark:      code.Code,
+				UserGuid:     userGuid,
+				Type:         domains.WalletRecordTypeReward,
+				Source:       domains.WalletSourceInvitation,
+				Title:        "邀请注册奖励",
+				AmountMicros: amountMicros,
+				TokenID:      req.TokenID,
+				RelatedGuid:  relation.Guid,
+				Remark:       code.Code,
 			}); err != nil {
 				return err
 			}
@@ -324,16 +320,16 @@ func (s *InvitationService) Stats(userGuid string) (map[string]any, error) {
 		return nil, err
 	}
 	var sums struct {
-		RewardQuota        int64
-		InviteeRewardQuota int64
+		RewardAmount        int64
+		InviteeRewardAmount int64
 	}
-	if err := relDB.Select("COALESCE(SUM(reward_quota),0) AS reward_quota, COALESCE(SUM(invitee_reward_quota),0) AS invitee_reward_quota").Scan(&sums).Error; err != nil {
+	if err := relDB.Select("COALESCE(SUM(reward_amount),0) AS reward_amount, COALESCE(SUM(invitee_reward_amount),0) AS invitee_reward_amount").Scan(&sums).Error; err != nil {
 		return nil, err
 	}
 	result["totalCodes"] = totalCodes
 	result["totalInvites"] = totalRelations
-	result["rewardQuota"] = sums.RewardQuota
-	result["inviteeRewardQuota"] = sums.InviteeRewardQuota
+	result["rewardAmount"] = sums.RewardAmount
+	result["inviteeRewardAmount"] = sums.InviteeRewardAmount
 	return result, nil
 }
 

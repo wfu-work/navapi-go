@@ -27,14 +27,14 @@ func (s *PaymentService) WithDB(db *gorm.DB) *PaymentService {
 }
 
 type CreatePaymentRequest struct {
-	Type        string `json:"type"`
-	TokenID     uint   `json:"tokenId"`
-	AmountCents int64  `json:"amountCents"`
-	Currency    string `json:"currency"`
-	Quota       int64  `json:"quota"`
-	PlanID      uint   `json:"planId"`
-	Provider    string `json:"provider"`
-	Remark      string `json:"remark"`
+	Type         string `json:"type"`
+	TokenID      uint   `json:"tokenId"`
+	AmountCents  int64  `json:"amountCents"`
+	AmountMicros int64  `json:"amountMicros"`
+	Currency     string `json:"currency"`
+	PlanID       uint   `json:"planId"`
+	Provider     string `json:"provider"`
+	Remark       string `json:"remark"`
 }
 
 type ConfirmPaymentRequest struct {
@@ -72,16 +72,16 @@ func (s *PaymentService) CreateWithContext(ctx context.Context, userGuid string,
 		return nil, errors.New("user is required")
 	}
 	order := domains.PaymentOrder{
-		OrderNo:     newOrderNo(),
-		UserGuid:    userGuid,
-		TokenID:     req.TokenID,
-		Type:        normalizePaymentType(req.Type),
-		Status:      "pending",
-		Provider:    normalizePaymentProvider(req.Provider),
-		AmountCents: req.AmountCents,
-		Currency:    req.Currency,
-		Quota:       req.Quota,
-		Remark:      req.Remark,
+		OrderNo:      newOrderNo(),
+		UserGuid:     userGuid,
+		TokenID:      req.TokenID,
+		Type:         normalizePaymentType(req.Type),
+		Status:       "pending",
+		Provider:     normalizePaymentProvider(req.Provider),
+		AmountCents:  req.AmountCents,
+		AmountMicros: req.AmountMicros,
+		Currency:     req.Currency,
+		Remark:       req.Remark,
 	}
 	if order.Currency == "" {
 		order.Currency = "CNY"
@@ -92,12 +92,17 @@ func (s *PaymentService) CreateWithContext(ctx context.Context, userGuid string,
 			return nil, err
 		}
 		order.AmountCents = plan.PriceCents
-		order.Quota = plan.Quota
+		order.AmountMicros = WholeAmountToMicros(plan.Amount)
 		order.PlanGuid = plan.Guid
 		order.PlanCode = plan.Code
 		order.Currency = plan.Currency
-	} else if order.Quota <= 0 {
-		return nil, errors.New("quota must be greater than zero")
+	} else {
+		if order.AmountMicros <= 0 {
+			order.AmountMicros = AmountCentsToMicros(order.AmountCents)
+		}
+		if order.AmountMicros <= 0 {
+			return nil, errors.New("amount must be greater than zero")
+		}
 	}
 	if req.TokenID > 0 {
 		token, err := TokenServiceApp.GetByID(req.TokenID, userGuid)
@@ -122,7 +127,7 @@ func (s *PaymentService) CreateWithContext(ctx context.Context, userGuid string,
 	return &order, nil
 }
 
-// Confirm marks an order paid and applies the purchased quota/subscription.
+// Confirm marks an order paid and applies the purchased balance/subscription.
 // External payment callbacks should verify signatures before calling this.
 func (s *PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrder, error) {
 	if strings.TrimSpace(req.OrderNo) == "" {
@@ -147,6 +152,12 @@ func (s *PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrd
 		order.PaidAt = now
 		order.TransactionID = req.TransactionID
 		order.NotifyData = req.NotifyData
+		if order.AmountMicros <= 0 {
+			order.AmountMicros = AmountCentsToMicros(order.AmountCents)
+		}
+		if order.AmountMicros <= 0 {
+			return errors.New("amount must be greater than zero")
+		}
 		updating := order
 		updating.Id = 0
 		orderCrud := s.CrudService.WithDB(tx)
@@ -163,10 +174,7 @@ func (s *PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrd
 				return err
 			}
 		}
-		if err := UserWalletServiceApp.ensureFromQuota(tx, order.UserGuid); err != nil {
-			return err
-		}
-		if err := UserQuotaServiceApp.Recharge(tx, order.UserGuid, order.TokenID, order.Quota); err != nil {
+		if err := UserQuotaServiceApp.RechargeAmount(tx, order.UserGuid, order.TokenID, order.AmountMicros); err != nil {
 			return err
 		}
 		recordType := domains.WalletRecordTypeRecharge
@@ -188,7 +196,7 @@ func (s *PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrd
 			Type:             recordType,
 			Source:           source,
 			Title:            title,
-			Quota:            order.Quota,
+			AmountMicros:     order.AmountMicros,
 			AmountCents:      order.AmountCents,
 			Currency:         order.Currency,
 			OrderNo:          order.OrderNo,
@@ -253,7 +261,7 @@ func normalizePaymentType(value string) string {
 	if value == "subscription" {
 		return value
 	}
-	return "quota"
+	return "recharge"
 }
 
 func normalizePaymentProvider(value string) string {
