@@ -113,6 +113,17 @@ func (s *ModelService) ListMeta() ([]domains.ModelMeta, error) {
 	return metas, nil
 }
 
+func (s *ModelService) PublicListMeta() ([]domains.ModelMeta, error) {
+	var metas []domains.ModelMeta
+	if err := s.DB().Where("enabled = ?", true).Order("sort desc, id desc").Find(&metas).Error; err != nil {
+		return nil, err
+	}
+	for i := range metas {
+		fillModelMetaGroups(&metas[i])
+	}
+	return metas, nil
+}
+
 func (s *ModelService) DeleteMeta(guid string) error {
 	guid = strings.TrimSpace(guid)
 	if guid == "" {

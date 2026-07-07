@@ -6,6 +6,8 @@ type ModelRouter struct{}
 
 func (r ModelRouter) InitModelRouter(privateGroup *gin.RouterGroup, publicGroup *gin.RouterGroup) {
 	publicGroup.GET("models", relayApi.Models)
+	publicGroup.GET("models/meta", modelApi.PublicList)
+	publicGroup.GET("models/group-options", modelApi.PublicGroups)
 	publicGroup.GET("vendors", modelApi.PublicVendors)
 
 	group := privateGroup.Group("models")

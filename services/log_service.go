@@ -26,13 +26,14 @@ func (s *LogService) WithDB(db *gorm.DB) *LogService {
 }
 
 type DailyUsageData struct {
-	Date     string `json:"date"`
-	Requests int64  `json:"requests"`
-	Quota    int64  `json:"quota"`
-	Tokens   int64  `json:"tokens"`
-	Success  int64  `json:"success"`
-	Errors   int64  `json:"errors"`
-	UserGuid string `json:"userGuid,omitempty"`
+	Date     string  `json:"date"`
+	Requests int64   `json:"requests"`
+	Quota    int64   `json:"quota"`
+	Cost     float64 `json:"cost"`
+	Tokens   int64   `json:"tokens"`
+	Success  int64   `json:"success"`
+	Errors   int64   `json:"errors"`
+	UserGuid string  `json:"userGuid,omitempty"`
 }
 
 type UsageNamedSeries struct {
@@ -42,21 +43,22 @@ type UsageNamedSeries struct {
 }
 
 type UsageDimensionStat struct {
-	Name             string `json:"name"`
-	UserGuid         string `json:"userGuid,omitempty"`
-	Username         string `json:"username,omitempty"`
-	Email            string `json:"email,omitempty"`
-	TokenGuid        string `json:"tokenGuid,omitempty"`
-	ProviderGuid     string `json:"providerGuid,omitempty"`
-	ModelName        string `json:"modelName,omitempty"`
-	Requests         int64  `json:"requests"`
-	Success          int64  `json:"success"`
-	Errors           int64  `json:"errors"`
-	Quota            int64  `json:"quota"`
-	PromptTokens     int64  `json:"promptTokens"`
-	CompletionTokens int64  `json:"completionTokens"`
-	Tokens           int64  `json:"tokens"`
-	AvgUseTimeMs     int64  `json:"avgUseTimeMs"`
+	Name             string  `json:"name"`
+	UserGuid         string  `json:"userGuid,omitempty"`
+	Username         string  `json:"username,omitempty"`
+	Email            string  `json:"email,omitempty"`
+	TokenGuid        string  `json:"tokenGuid,omitempty"`
+	ProviderGuid     string  `json:"providerGuid,omitempty"`
+	ModelName        string  `json:"modelName,omitempty"`
+	Requests         int64   `json:"requests"`
+	Success          int64   `json:"success"`
+	Errors           int64   `json:"errors"`
+	Quota            int64   `json:"quota"`
+	Cost             float64 `json:"cost"`
+	PromptTokens     int64   `json:"promptTokens"`
+	CompletionTokens int64   `json:"completionTokens"`
+	Tokens           int64   `json:"tokens"`
+	AvgUseTimeMs     int64   `json:"avgUseTimeMs"`
 }
 
 type UsageSummary struct {
@@ -67,6 +69,7 @@ type UsageSummary struct {
 	SuccessRequests  int64                `json:"successRequests"`
 	ErrorRequests    int64                `json:"errorRequests"`
 	Quota            int64                `json:"quota"`
+	Cost             float64              `json:"cost"`
 	PromptTokens     int64                `json:"promptTokens"`
 	CompletionTokens int64                `json:"completionTokens"`
 	Tokens           int64                `json:"tokens"`
@@ -297,10 +300,11 @@ func (s *LogService) dailyDataInRange(userGuid string, startTime int64, endTime 
 		db = db.Where("user_guid = ?", userGuid)
 	}
 	var logs []domains.UsageLog
-	if err := db.Select("create_time", "quota", "prompt_tokens", "completion_tokens", "status").
+	if err := db.Select("create_time", "model_name", "quota", "prompt_tokens", "completion_tokens", "status", "other").
 		Find(&logs).Error; err != nil {
 		return nil, err
 	}
+	s.enrichOfficialCosts(logs)
 	byDate := map[string]DailyUsageData{}
 	for _, log := range logs {
 		date := time.UnixMilli(log.CreateTime).Format("2006-01-02")
@@ -309,6 +313,7 @@ func (s *LogService) dailyDataInRange(userGuid string, startTime int64, endTime 
 		item.UserGuid = userGuid
 		item.Requests++
 		item.Quota += log.Quota
+		item.Cost += usageLogCost(log)
 		item.Tokens += log.PromptTokens + log.CompletionTokens
 		if log.Status == "success" {
 			item.Success++
@@ -346,10 +351,11 @@ func (s *LogService) UsageSummaryByQuery(userGuid string, query UsageSummaryQuer
 		db = db.Where("user_guid = ?", userGuid)
 	}
 	var logs []domains.UsageLog
-	if err := db.Select("create_time", "user_guid", "username", "token_guid", "token_name", "channel_guid", "channel_name", "model_name", "quota", "prompt_tokens", "completion_tokens", "use_time_ms", "is_stream", "status").
+	if err := db.Select("create_time", "user_guid", "username", "token_guid", "token_name", "channel_guid", "channel_name", "model_name", "quota", "prompt_tokens", "completion_tokens", "use_time_ms", "is_stream", "status", "other").
 		Find(&logs).Error; err != nil {
 		return UsageSummary{}, err
 	}
+	s.enrichOfficialCosts(logs)
 	summary := UsageSummary{Days: normalized.Days, StartTime: normalized.StartTime, EndTime: normalized.EndTime, Series: series}
 	byModel := map[string]*UsageDimensionStat{}
 	byProvider := map[string]*UsageDimensionStat{}
@@ -483,6 +489,7 @@ func applyUsageStat(summary *UsageSummary, log domains.UsageLog) {
 		summary.StreamRequests++
 	}
 	summary.Quota += log.Quota
+	summary.Cost += usageLogCost(log)
 	summary.PromptTokens += log.PromptTokens
 	summary.CompletionTokens += log.CompletionTokens
 	summary.Tokens += log.PromptTokens + log.CompletionTokens
@@ -507,6 +514,7 @@ func applyDimensionStat(items map[string]*UsageDimensionStat, key string, name s
 		item.Errors++
 	}
 	item.Quota += log.Quota
+	item.Cost += usageLogCost(log)
 	item.PromptTokens += log.PromptTokens
 	item.CompletionTokens += log.CompletionTokens
 	item.Tokens += log.PromptTokens + log.CompletionTokens
@@ -528,6 +536,7 @@ func applyModelSeriesStat(items map[string]map[string]*DailyUsageData, key strin
 	}
 	item.Requests++
 	item.Quota += log.Quota
+	item.Cost += usageLogCost(log)
 	item.Tokens += log.PromptTokens + log.CompletionTokens
 	if log.Status == "success" {
 		item.Success++
@@ -552,6 +561,7 @@ func buildModelSeries(seriesByModel map[string]map[string]*DailyUsageData, ranke
 					Date:     date,
 					Requests: point.Requests,
 					Quota:    point.Quota,
+					Cost:     point.Cost,
 					Tokens:   point.Tokens,
 					Success:  point.Success,
 					Errors:   point.Errors,
@@ -584,6 +594,9 @@ func topUsageStats(items map[string]*UsageDimensionStat, limit int) []UsageDimen
 		out = append(out, *item)
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].Cost != out[j].Cost {
+			return out[i].Cost > out[j].Cost
+		}
 		if out[i].Quota == out[j].Quota {
 			return out[i].Requests > out[j].Requests
 		}
@@ -593,6 +606,15 @@ func topUsageStats(items map[string]*UsageDimensionStat, limit int) []UsageDimen
 		return out[:limit]
 	}
 	return out
+}
+
+func usageLogCost(log domains.UsageLog) float64 {
+	extra := usageLogExtraMap(log.Other)
+	cost := extraNumber(extra["finalCost"])
+	if cost > 0 {
+		return cost
+	}
+	return 0
 }
 
 func fallbackName(primary string, fallback string) string {

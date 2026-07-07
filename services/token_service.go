@@ -231,6 +231,30 @@ func (s *TokenService) Validate(key string, clientIP string) (*domains.ApiToken,
 	return &token, nil
 }
 
+func (s *TokenService) ResolveForBalance(key string, clientIP string) (*domains.ApiToken, error) {
+	key = strings.TrimSpace(strings.TrimPrefix(key, "Bearer "))
+	if key == "" {
+		return nil, errors.New("token is required")
+	}
+	var token domains.ApiToken
+	if err := s.DB().Where("key = ?", key).First(&token).Error; err != nil {
+		return nil, err
+	}
+	if token.Status != constants.StatusEnabled {
+		return nil, errors.New("token is disabled")
+	}
+	now := time.Now().Unix()
+	if token.ExpiredTime > 0 && token.ExpiredTime < now {
+		return nil, errors.New("token is expired")
+	}
+	if token.AllowIPs != "" && !containsString(splitCSV(token.AllowIPs), clientIP) {
+		return nil, errors.New("client ip is not allowed")
+	}
+	token.AccessedTime = now
+	_ = s.DB().Model(&domains.ApiToken{}).Where("id = ?", token.Id).Update("accessed_time", now).Error
+	return &token, nil
+}
+
 func (s *TokenService) CheckModel(token *domains.ApiToken, modelName string) error {
 	if token == nil {
 		return errors.New("token is required")

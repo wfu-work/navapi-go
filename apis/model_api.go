@@ -28,6 +28,23 @@ func (a ModelApi) List(c *gin.Context) {
 	response.Ok(models, c)
 }
 
+// PublicList 公开模型元数据列表
+// @Summary 公开模型元数据列表
+// @Description 公开模型元数据列表
+// @Tags Navapi模块
+// @Accept json
+// @Produce json
+// @Success 200 {object} response.Response{data=[]domains.ModelMeta,msg=string}
+// @Router /models/meta [get]
+func (a ModelApi) PublicList(c *gin.Context) {
+	models, err := services.ModelServiceApp.PublicListMeta()
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(models, c)
+}
+
 // Upsert 保存模型
 // @Summary 保存模型
 // @Description 保存模型
@@ -81,6 +98,23 @@ func (a ModelApi) Delete(c *gin.Context) {
 // @Router /models/groups [get]
 func (a ModelApi) Groups(c *gin.Context) {
 	groups, err := services.ModelServiceApp.ListGroups(true)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(groups, c)
+}
+
+// PublicGroups 公开模型分组列表
+// @Summary 公开模型分组列表
+// @Description 公开模型分组列表
+// @Tags Navapi模块
+// @Accept json
+// @Produce json
+// @Success 200 {object} response.Response{data=[]domains.ModelGroup,msg=string}
+// @Router /models/group-options [get]
+func (a ModelApi) PublicGroups(c *gin.Context) {
+	groups, err := services.ModelServiceApp.ListGroups(false)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

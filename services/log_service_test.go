@@ -1,6 +1,7 @@
 package services
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -185,6 +186,33 @@ func TestUsageSummaryIncludesModelSeriesScopedByUser(t *testing.T) {
 	}
 	if gpt55.Data[0].Quota != 12 || gpt55.Data[1].Quota != 18 {
 		t.Fatalf("gpt-5.5 series = %+v, want user-a daily quota only", gpt55.Data)
+	}
+}
+
+func TestUsageSummaryAggregatesFinalCost(t *testing.T) {
+	db := withLogTestDB(t)
+	now := time.Now().UnixMilli()
+	logs := []domains.UsageLog{
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: now}, UserGuid: "user-a", ModelName: "gpt-5.5", Quota: 12, PromptTokens: 4, CompletionTokens: 8, Status: "success", Other: `{"finalCost":0.0012}`},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: now}, UserGuid: "user-a", ModelName: "gpt-5.5", Quota: 18, PromptTokens: 6, CompletionTokens: 12, Status: "success", Other: `{"finalCost":0.0018}`},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: now}, UserGuid: "user-b", ModelName: "gpt-5.5", Quota: 99, PromptTokens: 40, CompletionTokens: 59, Status: "success", Other: `{"finalCost":0.0099}`},
+	}
+	if err := db.Create(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := LogServiceApp.UsageSummary("user-a", 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(summary.Cost-0.003) > 0.0000001 {
+		t.Fatalf("summary cost = %v, want 0.003", summary.Cost)
+	}
+	if len(summary.ByModel) != 1 || math.Abs(summary.ByModel[0].Cost-0.003) > 0.0000001 {
+		t.Fatalf("byModel = %+v, want model cost 0.003", summary.ByModel)
+	}
+	if len(summary.Series) != 1 || math.Abs(summary.Series[0].Cost-0.003) > 0.0000001 {
+		t.Fatalf("series = %+v, want daily cost 0.003", summary.Series)
 	}
 }
 

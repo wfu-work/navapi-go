@@ -74,7 +74,7 @@ func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gi
 	r.InitAnnouncementRouter(privateGroup, publicGroup)
 	r.InitSubscriptionRouter(privateGroup, publicGroup)
 	r.InitPaymentRouter(privateGroup, publicGroup)
-	r.InitWalletRouter(privateGroup)
+	r.InitWalletRouter(privateGroup, publicGroup)
 	r.InitInvitationRouter(privateGroup)
 	r.InitCheckinRouter(privateGroup)
 	r.InitClientsRouter(privateGroup)
