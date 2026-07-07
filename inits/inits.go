@@ -22,6 +22,8 @@ import (
 //go:embed config.yaml
 var defaultConfig []byte
 
+const defaultUsageLogRetentionDays int64 = 90
+
 func Init() {
 	if err := utils.NewDefaultConfigManager(defaultConfig).Ensure(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "prepare config failed: %v\n", err)
@@ -44,6 +46,10 @@ func Init() {
 			global.NAV_LOG.Error("ensure default model group failed", zap.Error(err))
 			os.Exit(1)
 		}
+		if err := services.LogServiceApp.EnsureIndexes(); err != nil {
+			global.NAV_LOG.Error("ensure usage log indexes failed", zap.Error(err))
+			os.Exit(1)
+		}
 		if err := services.PermissionSeedServiceApp.Ensure(); err != nil {
 			global.NAV_LOG.Error("ensure navapi permissions failed", zap.Error(err))
 			os.Exit(1)
@@ -55,7 +61,20 @@ func Init() {
 		}, "refresh_navapi_options", options...)
 	})
 	sysInit.OnClearInit(func() []commonScheduleds.ClearDB {
-		return []commonScheduleds.ClearDB{}
+		retentionDays := services.OptionServiceApp.Int64("usage.log_retention_days", defaultUsageLogRetentionDays)
+		if retentionDays <= 0 {
+			return []commonScheduleds.ClearDB{}
+		}
+		if retentionDays > 3650 {
+			retentionDays = 3650
+		}
+		return []commonScheduleds.ClearDB{
+			{
+				TableName:    (domains.UsageLog{}).TableName(),
+				CompareField: "create_time",
+				Interval:     fmt.Sprintf("%dh", retentionDays*24),
+			},
+		}
 	})
 	sysInit.Init()
 }

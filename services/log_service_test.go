@@ -216,6 +216,79 @@ func TestUsageSummaryAggregatesFinalCost(t *testing.T) {
 	}
 }
 
+func TestLogListEnrichesMissingOfficialCost(t *testing.T) {
+	db := withLogTestDB(t)
+	group := domains.ModelGroup{
+		GroupName:       "vip",
+		QuotaMultiplier: 2,
+		Enabled:         true,
+	}
+	meta := domains.ModelMeta{
+		ModelName:           "gpt-cost",
+		Enabled:             true,
+		OfficialProvider:    "OpenAI",
+		OfficialInputPrice:  1,
+		OfficialOutputPrice: 2,
+		OfficialCachePrice:  0.2,
+		OfficialPriceUnit:   "1M tokens",
+	}
+	if err := db.Create(&group).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&meta).Error; err != nil {
+		t.Fatal(err)
+	}
+	logs := []domains.UsageLog{
+		{
+			BaseDataEntity:   commonDomains.BaseDataEntity{CreateTime: time.Now().UnixMilli()},
+			UserGuid:         "user-a",
+			ModelName:        "gpt-cost",
+			PromptTokens:     110,
+			CompletionTokens: 50,
+			Status:           "success",
+			Other:            `{"group":"vip","cachedTokens":10}`,
+		},
+		{
+			BaseDataEntity:   commonDomains.BaseDataEntity{CreateTime: time.Now().UnixMilli()},
+			UserGuid:         "user-a",
+			ModelName:        "gpt-cost",
+			PromptTokens:     20,
+			CompletionTokens: 10,
+			Status:           "success",
+			Other:            `{"group":"vip","finalCost":0.0001}`,
+		},
+	}
+	if err := db.Create(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := LogServiceApp.List("user-a", UsageLogQuery{PageQuery: vos.PageQuery{Page: 1, Size: 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := result.List.([]domains.UsageLog)
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2", len(items))
+	}
+	var enriched domains.UsageLog
+	for _, item := range items {
+		if item.Cost > 0.0002 {
+			enriched = item
+			break
+		}
+	}
+	extra := usageLogExtraMap(enriched.Other)
+	if math.Abs(enriched.Cost-0.000404) > 0.0000001 {
+		t.Fatalf("cost = %v, want 0.000404", enriched.Cost)
+	}
+	if math.Abs(extraNumber(extra["finalCost"])-0.000404) > 0.0000001 {
+		t.Fatalf("extra = %+v, want finalCost 0.000404", extra)
+	}
+	if extraText(extra["billingMode"]) != "official_price" || !extra["officialPricing"].(bool) {
+		t.Fatalf("extra = %+v, want official pricing detail", extra)
+	}
+}
+
 func TestUsageSummaryByQueryUsesCustomTimeRange(t *testing.T) {
 	db := withLogTestDB(t)
 	day1 := time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)
@@ -256,6 +329,8 @@ func TestUsageSummaryByQueryUsesCustomTimeRange(t *testing.T) {
 func withLogTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	previousDB := global.NAV_DB
+	resetGatewayStatusCache()
+	resetUsageSummaryCache()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -266,6 +341,8 @@ func withLogTestDB(t *testing.T) *gorm.DB {
 	global.NAV_DB = db
 	t.Cleanup(func() {
 		global.NAV_DB = previousDB
+		resetGatewayStatusCache()
+		resetUsageSummaryCache()
 	})
 	return db
 }

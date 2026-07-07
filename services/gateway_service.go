@@ -1,10 +1,12 @@
 package services
 
 import (
+	"fmt"
 	"math"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"navapi-go/domains"
@@ -17,6 +19,7 @@ const GatewayVersion = "v0.1.0"
 const (
 	serviceStatusSegmentCount        = 24
 	serviceStatusWindow              = 24 * time.Hour
+	serviceStatusCacheTTL            = 30 * time.Second
 	serviceStatusWarningLatencyMs    = int64(3000)
 	serviceStatusWarningSuccessRate  = 0.99
 	serviceStatusCriticalSuccessRate = 0.95
@@ -24,6 +27,12 @@ const (
 
 var gatewayStartedAt = time.Now()
 var GatewayServiceApp = GatewayService{}
+var gatewayStatusCache = struct {
+	sync.RWMutex
+	Mode      string
+	ExpiresAt time.Time
+	Status    PublicServiceStatus
+}{}
 
 type GatewayService struct{}
 
@@ -104,6 +113,16 @@ type serviceBucketAggregate struct {
 	latencyTotalMs int64
 }
 
+type serviceUsageBucketRow struct {
+	BucketIndex     int    `gorm:"column:bucket_index"`
+	ModelName       string `gorm:"column:model_name"`
+	Requests        int64  `gorm:"column:requests"`
+	SuccessRequests int64  `gorm:"column:success_requests"`
+	ErrorRequests   int64  `gorm:"column:error_requests"`
+	LatencyTotalMs  int64  `gorm:"column:latency_total_ms"`
+	LastCheckedAt   int64  `gorm:"column:last_checked_at"`
+}
+
 func (s GatewayService) Health(mode string) GatewayHealth {
 	databaseStatus := databaseHealthStatus()
 	status := "running"
@@ -128,6 +147,27 @@ func (s GatewayService) Health(mode string) GatewayHealth {
 
 func (s GatewayService) PublicStatus(mode string) (PublicServiceStatus, error) {
 	now := time.Now()
+	gatewayStatusCache.RLock()
+	if gatewayStatusCache.Mode == mode && now.Before(gatewayStatusCache.ExpiresAt) {
+		status := gatewayStatusCache.Status
+		gatewayStatusCache.RUnlock()
+		return status, nil
+	}
+	gatewayStatusCache.RUnlock()
+
+	status, err := s.publicStatus(mode, now)
+	if err != nil {
+		return PublicServiceStatus{}, err
+	}
+	gatewayStatusCache.Lock()
+	gatewayStatusCache.Mode = mode
+	gatewayStatusCache.ExpiresAt = now.Add(serviceStatusCacheTTL)
+	gatewayStatusCache.Status = status
+	gatewayStatusCache.Unlock()
+	return status, nil
+}
+
+func (s GatewayService) publicStatus(mode string, now time.Time) (PublicServiceStatus, error) {
 	start := now.Add(-serviceStatusWindow)
 	health := s.Health(mode)
 	status := PublicServiceStatus{
@@ -147,26 +187,76 @@ func (s GatewayService) PublicStatus(mode string) (PublicServiceStatus, error) {
 	if err != nil {
 		return PublicServiceStatus{}, err
 	}
-	logs, err := s.recentUsageLogs(start.UnixMilli(), now.UnixMilli())
+	rows, err := s.recentUsageBuckets(start, now)
 	if err != nil {
 		return PublicServiceStatus{}, err
 	}
 	status.Summary.EnabledModels = len(models)
-	status.Models = buildPublicModelStatuses(models, logs, start, now)
+	status.Models = buildPublicModelStatuses(models, rows, start, now)
 	status.Summary = summarizePublicServiceStatus(status.Summary, status.Models)
 	status.Status = publicServiceOverallTone(status.Health, status.Summary, status.Models)
 	status.StatusLabel = publicServiceStatusLabel(status.Status, true)
 	return status, nil
 }
 
-func (s GatewayService) recentUsageLogs(startTime int64, endTime int64) ([]domains.UsageLog, error) {
-	var logs []domains.UsageLog
+func resetGatewayStatusCache() {
+	gatewayStatusCache.Lock()
+	gatewayStatusCache.Mode = ""
+	gatewayStatusCache.ExpiresAt = time.Time{}
+	gatewayStatusCache.Status = PublicServiceStatus{}
+	gatewayStatusCache.Unlock()
+}
+
+func (s GatewayService) recentUsageBuckets(start time.Time, end time.Time) ([]serviceUsageBucketRow, error) {
+	if !end.After(start) {
+		return nil, nil
+	}
+	span := end.Sub(start) / time.Duration(serviceStatusSegmentCount)
+	if span <= 0 {
+		return nil, nil
+	}
+	startMS := start.UnixMilli()
+	endExclusive := end.UnixMilli() + 1
+	spanMS := int64(span / time.Millisecond)
+	if spanMS <= 0 {
+		spanMS = 1
+	}
+	bucketExpr := serviceStatusBucketExprSQL(global.NAV_DB.Dialector.Name(), startMS, spanMS)
+	selectSQL := fmt.Sprintf(`
+		%s as bucket_index,
+		model_name,
+		COUNT(*) as requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success_requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as error_requests,
+		COALESCE(SUM(use_time_ms), 0) as latency_total_ms,
+		COALESCE(MAX(create_time), 0) as last_checked_at
+	`, bucketExpr)
+	var rows []serviceUsageBucketRow
 	err := global.NAV_DB.
 		Model(&domains.UsageLog{}).
-		Select("create_time", "model_name", "status", "use_time_ms").
-		Where("create_time >= ? AND create_time <= ?", startTime, endTime).
-		Find(&logs).Error
-	return logs, err
+		Select(selectSQL).
+		Where("create_time >= ? AND create_time < ?", startMS, endExclusive).
+		Group(bucketExpr + ", model_name").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func serviceStatusBucketExprSQL(dialect string, startMS int64, spanMS int64) string {
+	if spanMS <= 0 {
+		spanMS = 1
+	}
+	lastBucket := serviceStatusSegmentCount - 1
+	switch dialect {
+	case "mysql":
+		return fmt.Sprintf("LEAST(FLOOR((create_time - %d) / %d), %d)", startMS, spanMS, lastBucket)
+	case "postgres":
+		return fmt.Sprintf("LEAST(FLOOR((create_time - %d)::numeric / %d), %d)", startMS, spanMS, lastBucket)
+	default:
+		return fmt.Sprintf("MIN(CAST((create_time - %d) / %d AS INTEGER), %d)", startMS, spanMS, lastBucket)
+	}
 }
 
 func databaseHealthStatus() string {
@@ -183,7 +273,7 @@ func databaseHealthStatus() string {
 	return "ok"
 }
 
-func buildPublicModelStatuses(models []domains.ModelMeta, logs []domains.UsageLog, start time.Time, end time.Time) []PublicModelStatus {
+func buildPublicModelStatuses(models []domains.ModelMeta, rows []serviceUsageBucketRow, start time.Time, end time.Time) []PublicModelStatus {
 	aggregates := make(map[string]*serviceModelAggregate, len(models))
 	order := make([]string, 0, len(models))
 	for _, model := range models {
@@ -197,8 +287,8 @@ func buildPublicModelStatuses(models []domains.ModelMeta, logs []domains.UsageLo
 		aggregates[modelName] = newServiceModelAggregate(modelName, strings.TrimSpace(model.DisplayName))
 		order = append(order, modelName)
 	}
-	for _, log := range logs {
-		modelName := strings.TrimSpace(log.ModelName)
+	for _, row := range rows {
+		modelName := strings.TrimSpace(row.ModelName)
 		if modelName == "" {
 			continue
 		}
@@ -208,7 +298,7 @@ func buildPublicModelStatuses(models []domains.ModelMeta, logs []domains.UsageLo
 			aggregates[modelName] = aggregate
 			order = append(order, modelName)
 		}
-		aggregate.apply(log, start, end)
+		aggregate.applyBucket(row)
 	}
 	out := make([]PublicModelStatus, 0, len(order))
 	for _, modelName := range order {
@@ -225,33 +315,22 @@ func newServiceModelAggregate(modelName string, displayName string) *serviceMode
 	}
 }
 
-func (a *serviceModelAggregate) apply(log domains.UsageLog, start time.Time, end time.Time) {
-	a.requests++
-	if strings.EqualFold(strings.TrimSpace(log.Status), "success") {
-		a.successRequests++
-	} else {
-		a.errorRequests++
+func (a *serviceModelAggregate) applyBucket(row serviceUsageBucketRow) {
+	a.requests += row.Requests
+	a.successRequests += row.SuccessRequests
+	a.errorRequests += row.ErrorRequests
+	a.latencyTotalMs += row.LatencyTotalMs
+	if row.LastCheckedAt > a.lastCheckedAt {
+		a.lastCheckedAt = row.LastCheckedAt
 	}
-	if log.UseTimeMs > 0 {
-		a.latencyTotalMs += log.UseTimeMs
-	}
-	if log.CreateTime > a.lastCheckedAt {
-		a.lastCheckedAt = log.CreateTime
-	}
-	index := serviceStatusBucketIndex(log.CreateTime, start, end)
-	if index < 0 || index >= len(a.buckets) {
+	if row.BucketIndex < 0 || row.BucketIndex >= len(a.buckets) {
 		return
 	}
-	bucket := &a.buckets[index]
-	bucket.requests++
-	if strings.EqualFold(strings.TrimSpace(log.Status), "success") {
-		bucket.success++
-	} else {
-		bucket.errors++
-	}
-	if log.UseTimeMs > 0 {
-		bucket.latencyTotalMs += log.UseTimeMs
-	}
+	bucket := &a.buckets[row.BucketIndex]
+	bucket.requests += row.Requests
+	bucket.success += row.SuccessRequests
+	bucket.errors += row.ErrorRequests
+	bucket.latencyTotalMs += row.LatencyTotalMs
 }
 
 func (a *serviceModelAggregate) toPublicStatus(start time.Time, end time.Time) PublicModelStatus {
@@ -293,25 +372,6 @@ func (a *serviceModelAggregate) segments(start time.Time, end time.Time) []Publi
 		})
 	}
 	return segments
-}
-
-func serviceStatusBucketIndex(createTime int64, start time.Time, end time.Time) int {
-	if createTime <= 0 || !end.After(start) {
-		return -1
-	}
-	offset := time.UnixMilli(createTime).Sub(start)
-	if offset < 0 {
-		return -1
-	}
-	span := end.Sub(start) / time.Duration(serviceStatusSegmentCount)
-	if span <= 0 {
-		return -1
-	}
-	index := int(offset / span)
-	if index >= serviceStatusSegmentCount {
-		index = serviceStatusSegmentCount - 1
-	}
-	return index
 }
 
 func summarizePublicServiceStatus(summary PublicServiceStatusSummary, models []PublicModelStatus) PublicServiceStatusSummary {

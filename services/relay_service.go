@@ -927,6 +927,7 @@ func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.Ve
 		ProviderName:        providerName,
 		ModelName:           modelName,
 		Quota:               quota,
+		Cost:                detail.FinalCost,
 		PromptTokens:        usage.PromptTokens,
 		CompletionTokens:    usage.CompletionTokens,
 		UseTimeMs:           useTimeMs,

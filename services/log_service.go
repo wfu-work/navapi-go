@@ -2,7 +2,7 @@ package services
 
 import (
 	"encoding/json"
-	"sort"
+	"fmt"
 	"time"
 
 	"navapi-go/domains"
@@ -97,8 +97,97 @@ type UsageLogQuery struct {
 	EndTime   int64  `form:"endTime" json:"endTime"`
 }
 
+type usageAggregateRow struct {
+	Requests         int64   `gorm:"column:requests"`
+	Success          int64   `gorm:"column:success"`
+	Errors           int64   `gorm:"column:errors"`
+	Quota            int64   `gorm:"column:quota"`
+	Cost             float64 `gorm:"column:cost"`
+	PromptTokens     int64   `gorm:"column:prompt_tokens"`
+	CompletionTokens int64   `gorm:"column:completion_tokens"`
+	UseTimeMs        int64   `gorm:"column:use_time_ms"`
+	StreamRequests   int64   `gorm:"column:stream_requests"`
+}
+
+type usageDimensionAggregateRow struct {
+	Key              string  `gorm:"column:stat_key"`
+	Name             string  `gorm:"column:name"`
+	UserGuid         string  `gorm:"column:user_guid"`
+	Username         string  `gorm:"column:username"`
+	TokenGuid        string  `gorm:"column:token_guid"`
+	ProviderGuid     string  `gorm:"column:provider_guid"`
+	ModelName        string  `gorm:"column:model_name"`
+	Requests         int64   `gorm:"column:requests"`
+	Success          int64   `gorm:"column:success"`
+	Errors           int64   `gorm:"column:errors"`
+	Quota            int64   `gorm:"column:quota"`
+	Cost             float64 `gorm:"column:cost"`
+	PromptTokens     int64   `gorm:"column:prompt_tokens"`
+	CompletionTokens int64   `gorm:"column:completion_tokens"`
+	UseTimeMs        int64   `gorm:"column:use_time_ms"`
+}
+
+type usageModelDailyAggregateRow struct {
+	Date             string  `gorm:"column:usage_date"`
+	ModelName        string  `gorm:"column:model_name"`
+	Requests         int64   `gorm:"column:requests"`
+	Success          int64   `gorm:"column:success"`
+	Errors           int64   `gorm:"column:errors"`
+	Quota            int64   `gorm:"column:quota"`
+	Cost             float64 `gorm:"column:cost"`
+	PromptTokens     int64   `gorm:"column:prompt_tokens"`
+	CompletionTokens int64   `gorm:"column:completion_tokens"`
+}
+
+type usageDailyAggregateRow struct {
+	Date             string  `gorm:"column:usage_date"`
+	Requests         int64   `gorm:"column:requests"`
+	Success          int64   `gorm:"column:success"`
+	Errors           int64   `gorm:"column:errors"`
+	Quota            int64   `gorm:"column:quota"`
+	Cost             float64 `gorm:"column:cost"`
+	PromptTokens     int64   `gorm:"column:prompt_tokens"`
+	CompletionTokens int64   `gorm:"column:completion_tokens"`
+	UseTimeMs        int64   `gorm:"column:use_time_ms"`
+	StreamRequests   int64   `gorm:"column:stream_requests"`
+}
+
+type usageDailyStatsResult struct {
+	ByDate    map[string]DailyUsageData
+	Aggregate usageAggregateRow
+}
+
+type usageDayWindow struct {
+	Date string
+}
+
 func (s *LogService) Create(log *domains.UsageLog) error {
 	return createWithCrud(&s.CrudService, log)
+}
+
+func (s *LogService) EnsureIndexes() error {
+	db := s.DB()
+	indexes := []struct {
+		name string
+		sql  string
+	}{
+		{name: "idx_nav_api_usage_logs_create_time", sql: "CREATE INDEX idx_nav_api_usage_logs_create_time ON nav_api_usage_logs(create_time)"},
+		{name: "idx_nav_api_usage_logs_user_time", sql: "CREATE INDEX idx_nav_api_usage_logs_user_time ON nav_api_usage_logs(user_guid, create_time)"},
+		{name: "idx_nav_api_usage_logs_model_time", sql: "CREATE INDEX idx_nav_api_usage_logs_model_time ON nav_api_usage_logs(model_name, create_time)"},
+		{name: "idx_nav_api_usage_logs_status_time", sql: "CREATE INDEX idx_nav_api_usage_logs_status_time ON nav_api_usage_logs(status, create_time)"},
+		{name: "idx_nav_api_usage_logs_user_status_time", sql: "CREATE INDEX idx_nav_api_usage_logs_user_status_time ON nav_api_usage_logs(user_guid, status, create_time)"},
+		{name: "idx_nav_api_usage_logs_time_token", sql: "CREATE INDEX idx_nav_api_usage_logs_time_token ON nav_api_usage_logs(create_time, token_guid)"},
+		{name: "idx_nav_api_usage_logs_time_channel", sql: "CREATE INDEX idx_nav_api_usage_logs_time_channel ON nav_api_usage_logs(create_time, channel_guid)"},
+	}
+	for _, index := range indexes {
+		if db.Migrator().HasIndex(&domains.UsageLog{}, index.name) {
+			continue
+		}
+		if err := db.Exec(index.sql).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *LogService) List(userGuid string, query UsageLogQuery) (vos.PageResult, error) {
@@ -147,8 +236,27 @@ func normalizeUsageQueryTime(value int64) int64 {
 }
 
 func (s *LogService) enrichOfficialCosts(logs []domains.UsageLog) {
+	extras := make([]map[string]any, len(logs))
+	modelNames := map[string]struct{}{}
+	groupNames := map[string]struct{}{}
 	for i := range logs {
 		extra := usageLogExtraMap(logs[i].Other)
+		extras[i] = extra
+		if _, ok := extra["finalCost"]; ok {
+			if logs[i].Cost <= 0 {
+				logs[i].Cost = extraNumber(extra["finalCost"])
+			}
+			continue
+		}
+		group := normalizeGroup(extraText(extra["group"]))
+		if logs[i].ModelName != "" && (logs[i].PromptTokens > 0 || logs[i].CompletionTokens > 0) {
+			modelNames[logs[i].ModelName] = struct{}{}
+			groupNames[group] = struct{}{}
+		}
+	}
+	lookup := s.usageCostLookup(modelNames, groupNames)
+	for i := range logs {
+		extra := extras[i]
 		if _, ok := extra["finalCost"]; ok {
 			continue
 		}
@@ -158,7 +266,7 @@ func (s *LogService) enrichOfficialCosts(logs []domains.UsageLog) {
 			CompletionTokens: logs[i].CompletionTokens,
 			CachedTokens:     int64(extraNumber(extra["cachedTokens"])),
 		}
-		detail := PricingServiceApp.WithDB(s.DB()).OfficialCostDetail(logs[i].ModelName, group, usage)
+		detail := lookup.officialCostDetail(logs[i].ModelName, group, usage)
 		if !detail.OfficialPricing {
 			continue
 		}
@@ -179,11 +287,123 @@ func (s *LogService) enrichOfficialCosts(logs []domains.UsageLog) {
 		extra["priceUnitTokens"] = detail.PriceUnitTokens
 		extra["rawCost"] = detail.RawCost
 		extra["finalCost"] = detail.FinalCost
+		logs[i].Cost = detail.FinalCost
 		data, err := json.Marshal(extra)
 		if err == nil {
 			logs[i].Other = string(data)
 		}
 	}
+}
+
+type usageCostLookup struct {
+	groupMultipliers map[string]float64
+	officialMetas    map[string]domains.ModelMeta
+}
+
+func (s *LogService) usageCostLookup(modelNames map[string]struct{}, groupNames map[string]struct{}) usageCostLookup {
+	lookup := usageCostLookup{
+		groupMultipliers: map[string]float64{},
+		officialMetas:    map[string]domains.ModelMeta{},
+	}
+	db := s.DB()
+	if db == nil {
+		return lookup
+	}
+	if len(groupNames) > 0 {
+		groups := make([]string, 0, len(groupNames))
+		for group := range groupNames {
+			groups = append(groups, group)
+		}
+		var rows []domains.ModelGroup
+		if err := db.Where("enabled = ? AND group_name IN ?", true, groups).Find(&rows).Error; err == nil {
+			for _, row := range rows {
+				multiplier := row.QuotaMultiplier
+				if multiplier <= 0 {
+					multiplier = 1
+				}
+				lookup.groupMultipliers[normalizeGroup(row.GroupName)] = multiplier
+			}
+		}
+	}
+	if len(modelNames) > 0 {
+		models := make([]string, 0, len(modelNames))
+		for model := range modelNames {
+			models = append(models, model)
+		}
+		var rows []domains.ModelMeta
+		if err := db.Where("enabled = ? AND model_name IN ?", true, models).Find(&rows).Error; err == nil {
+			for _, row := range rows {
+				if row.OfficialInputPrice <= 0 && row.OfficialOutputPrice <= 0 && row.OfficialCachePrice <= 0 {
+					continue
+				}
+				if row.OfficialPriceUnit == "" {
+					row.OfficialPriceUnit = "1M tokens"
+				}
+				lookup.officialMetas[row.ModelName] = row
+			}
+		}
+	}
+	return lookup
+}
+
+func (lookup usageCostLookup) groupMultiplier(group string) float64 {
+	multiplier := lookup.groupMultipliers[normalizeGroup(group)]
+	if multiplier <= 0 {
+		return 1
+	}
+	return multiplier
+}
+
+func (lookup usageCostLookup) officialCostDetail(modelName string, group string, usage vos.Usage) QuotaCalculationDetail {
+	groupMultiplier := lookup.groupMultiplier(group)
+	detail := QuotaCalculationDetail{
+		BillingMode:      "official_price",
+		PromptMultiplier: 1,
+		OutputMultiplier: 1,
+		CacheMultiplier:  1,
+		QuotaMultiplier:  1,
+		GroupMultiplier:  groupMultiplier,
+		CachedTokens:     usage.CachedTokens,
+		CompletionTokens: usage.CompletionTokens,
+	}
+	meta, ok := lookup.officialMetas[modelName]
+	if !ok || (usage.PromptTokens <= 0 && usage.CompletionTokens <= 0) {
+		return detail
+	}
+	unitTokens := officialPriceUnitTokens(meta.OfficialPriceUnit)
+	cachedTokens := usage.CachedTokens
+	if cachedTokens > usage.PromptTokens {
+		cachedTokens = usage.PromptTokens
+	}
+	if cachedTokens < 0 {
+		cachedTokens = 0
+	}
+	regularPromptTokens := usage.PromptTokens - cachedTokens
+	if regularPromptTokens < 0 {
+		regularPromptTokens = 0
+	}
+	rawCost := float64(regularPromptTokens)*meta.OfficialInputPrice/unitTokens +
+		float64(cachedTokens)*meta.OfficialCachePrice/unitTokens +
+		float64(usage.CompletionTokens)*meta.OfficialOutputPrice/unitTokens
+	if rawCost <= 0 {
+		return detail
+	}
+	detail.PricingMatched = true
+	detail.PricingModel = meta.ModelName
+	detail.PricingGroup = normalizeGroup(group)
+	detail.OfficialPricing = true
+	detail.OfficialProvider = meta.OfficialProvider
+	detail.OfficialPriceUnit = meta.OfficialPriceUnit
+	detail.OfficialInputPrice = meta.OfficialInputPrice
+	detail.OfficialOutputPrice = meta.OfficialOutputPrice
+	detail.OfficialCachePrice = meta.OfficialCachePrice
+	detail.PriceUnitTokens = unitTokens
+	detail.RegularPromptTokens = regularPromptTokens
+	detail.CachedTokens = cachedTokens
+	detail.CompletionTokens = usage.CompletionTokens
+	detail.RawCost = rawCost
+	detail.FinalCost = rawCost * detail.GroupMultiplier
+	return detail
 }
 
 func usageLogExtraMap(raw string) map[string]any {
@@ -227,35 +447,23 @@ func (s *LogService) Stats(userGuid string, filters ...UsageLogQuery) (map[strin
 	} else if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
-	var totalRequests int64
-	if err := db.Count(&totalRequests).Error; err != nil {
-		return nil, err
-	}
-	var sums struct {
-		Quota            int64
-		PromptTokens     int64
-		CompletionTokens int64
-		UseTimeMs        int64
-	}
-	if err := db.Select("COALESCE(SUM(quota),0) as quota, COALESCE(SUM(prompt_tokens),0) as prompt_tokens, COALESCE(SUM(completion_tokens),0) as completion_tokens, COALESCE(SUM(use_time_ms),0) as use_time_ms").Scan(&sums).Error; err != nil {
-		return nil, err
-	}
-	var successCount int64
-	if err := db.Session(&gorm.Session{}).Where("status = ?", "success").Count(&successCount).Error; err != nil {
+	aggregate, err := s.aggregateUsage(db)
+	if err != nil {
 		return nil, err
 	}
 	avgUseTimeMs := int64(0)
-	if totalRequests > 0 {
-		avgUseTimeMs = sums.UseTimeMs / totalRequests
+	if aggregate.Requests > 0 {
+		avgUseTimeMs = aggregate.UseTimeMs / aggregate.Requests
 	}
 	return map[string]any{
-		"totalRequests":    totalRequests,
-		"successRequests":  successCount,
-		"errorRequests":    totalRequests - successCount,
-		"quota":            sums.Quota,
-		"promptTokens":     sums.PromptTokens,
-		"completionTokens": sums.CompletionTokens,
-		"tokens":           sums.PromptTokens + sums.CompletionTokens,
+		"totalRequests":    aggregate.Requests,
+		"successRequests":  aggregate.Success,
+		"errorRequests":    aggregate.Errors,
+		"quota":            aggregate.Quota,
+		"cost":             aggregate.Cost,
+		"promptTokens":     aggregate.PromptTokens,
+		"completionTokens": aggregate.CompletionTokens,
+		"tokens":           aggregate.PromptTokens + aggregate.CompletionTokens,
 		"avgUseTimeMs":     avgUseTimeMs,
 	}, nil
 }
@@ -284,118 +492,257 @@ func (s *LogService) dailyDataInRange(userGuid string, startTime int64, endTime 
 	if startTime > endTime {
 		startTime, endTime = endTime, startTime
 	}
-	start := beginningOfDay(time.UnixMilli(startTime))
-	endDay := beginningOfDay(time.UnixMilli(endTime))
-	days := int(endDay.Sub(start).Hours()/24) + 1
-	if days <= 0 {
-		days = 1
-	}
-	if days > 366 {
-		days = 366
-		start = endDay.AddDate(0, 0, -(days - 1))
-		startTime = start.UnixMilli()
-	}
-	db := s.DB().Model(&domains.UsageLog{}).Where("create_time >= ? AND create_time <= ?", startTime, endTime)
-	if userGuid != "" {
-		db = db.Where("user_guid = ?", userGuid)
-	}
-	var logs []domains.UsageLog
-	if err := db.Select("create_time", "model_name", "quota", "prompt_tokens", "completion_tokens", "status", "other").
-		Find(&logs).Error; err != nil {
+	windows := buildUsageDayWindows(startTime, endTime)
+	stats, err := s.dailyUsageStats(userGuid, startTime, endTime)
+	if err != nil {
 		return nil, err
 	}
-	s.enrichOfficialCosts(logs)
-	byDate := map[string]DailyUsageData{}
-	for _, log := range logs {
-		date := time.UnixMilli(log.CreateTime).Format("2006-01-02")
-		item := byDate[date]
-		item.Date = date
-		item.UserGuid = userGuid
-		item.Requests++
-		item.Quota += log.Quota
-		item.Cost += usageLogCost(log)
-		item.Tokens += log.PromptTokens + log.CompletionTokens
-		if log.Status == "success" {
-			item.Success++
-		} else {
-			item.Errors++
-		}
-		byDate[date] = item
-	}
-	out := make([]DailyUsageData, 0, days)
-	for i := 0; i < days; i++ {
-		date := start.AddDate(0, 0, i).Format("2006-01-02")
-		if item, ok := byDate[date]; ok {
-			out = append(out, item)
-			continue
-		}
-		out = append(out, DailyUsageData{Date: date, UserGuid: userGuid})
-	}
-	return out, nil
+	return buildDailyUsageSeries(userGuid, windows, stats.ByDate), nil
 }
 
-// UsageSummary builds dashboard-ready aggregates without relying on
-// database-specific date functions, keeping the statistics portable.
+// UsageSummary builds dashboard-ready aggregates from database-side summaries.
 func (s *LogService) UsageSummary(userGuid string, days int, topN int) (UsageSummary, error) {
 	return s.UsageSummaryByQuery(userGuid, UsageSummaryQuery{Days: days, TopN: topN})
 }
 
 func (s *LogService) UsageSummaryByQuery(userGuid string, query UsageSummaryQuery) (UsageSummary, error) {
 	normalized := normalizeUsageSummaryQuery(query)
-	series, err := s.dailyDataInRange(userGuid, normalized.StartTime, normalized.EndTime)
+	now := time.Now()
+	cacheKey := usageSummaryCacheKey(userGuid, query, normalized)
+	if cached, ok := usageSummaryCacheGet(cacheKey, now); ok {
+		return cached, nil
+	}
+	dailyStats, err := s.dailyUsageStats(userGuid, normalized.StartTime, normalized.EndTime)
 	if err != nil {
 		return UsageSummary{}, err
 	}
-	db := s.DB().Model(&domains.UsageLog{}).Where("create_time >= ? AND create_time <= ?", normalized.StartTime, normalized.EndTime)
+	series := buildDailyUsageSeries(userGuid, buildUsageDayWindows(normalized.StartTime, normalized.EndTime), dailyStats.ByDate)
+	summary := UsageSummary{Days: normalized.Days, StartTime: normalized.StartTime, EndTime: normalized.EndTime, Series: series}
+	applyAggregateToSummary(&summary, dailyStats.Aggregate)
+	summary.ByModel, err = s.usageDimensionStats(userGuid, normalized, "COALESCE(NULLIF(model_name, ''), 'unknown')", "COALESCE(NULLIF(model_name, ''), 'unknown')", "MAX(model_name) as model_name")
+	if err != nil {
+		return UsageSummary{}, err
+	}
+	summary.SeriesByModel, err = s.usageModelSeries(userGuid, normalized, summary.ByModel, series)
+	if err != nil {
+		return UsageSummary{}, err
+	}
+	summary.ByProvider, err = s.usageDimensionStats(userGuid, normalized, "COALESCE(NULLIF(channel_guid, ''), NULLIF(channel_name, ''), 'unknown')", "COALESCE(NULLIF(channel_name, ''), NULLIF(channel_guid, ''), 'unknown')", "MAX(channel_guid) as provider_guid")
+	if err != nil {
+		return UsageSummary{}, err
+	}
+	summary.ByToken, err = s.usageDimensionStats(userGuid, normalized, "COALESCE(NULLIF(token_guid, ''), NULLIF(token_name, ''), 'unknown')", "COALESCE(NULLIF(token_name, ''), NULLIF(token_guid, ''), 'unknown')", "MAX(token_guid) as token_guid, MAX(user_guid) as user_guid")
+	if err != nil {
+		return UsageSummary{}, err
+	}
+	if userGuid == "" {
+		summary.ByUser, err = s.usageDimensionStats(userGuid, normalized, "COALESCE(NULLIF(user_guid, ''), NULLIF(username, ''), 'unknown')", "COALESCE(NULLIF(username, ''), NULLIF(user_guid, ''), 'unknown')", "MAX(user_guid) as user_guid, MAX(username) as username")
+		if err != nil {
+			return UsageSummary{}, err
+		}
+		s.enrichUsageUsers(summary.ByUser)
+	}
+	usageSummaryCacheSet(cacheKey, summary, now)
+	return summary, nil
+}
+
+func (s *LogService) usageRangeDB(userGuid string, startTime int64, endTime int64) *gorm.DB {
+	db := s.DB().Model(&domains.UsageLog{}).Where("create_time >= ? AND create_time <= ?", startTime, endTime)
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
-	var logs []domains.UsageLog
-	if err := db.Select("create_time", "user_guid", "username", "token_guid", "token_name", "channel_guid", "channel_name", "model_name", "quota", "prompt_tokens", "completion_tokens", "use_time_ms", "is_stream", "status", "other").
-		Find(&logs).Error; err != nil {
-		return UsageSummary{}, err
+	return db
+}
+
+func (s *LogService) dailyUsageStats(userGuid string, startTime int64, endTime int64) (usageDailyStatsResult, error) {
+	db := s.usageRangeDB(userGuid, startTime, endTime)
+	dateExpr := usageDateExprSQL(db)
+	selectSQL := fmt.Sprintf(`
+		%s as usage_date,
+		COUNT(*) as requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as errors,
+		COALESCE(SUM(quota), 0) as quota,
+		%s as cost,
+		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+		COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
+		COALESCE(SUM(CASE WHEN is_stream THEN 1 ELSE 0 END), 0) as stream_requests
+	`, dateExpr, usageCostSumSQL(db))
+	var rows []usageDailyAggregateRow
+	if err := db.Select(selectSQL).Group(dateExpr).Scan(&rows).Error; err != nil {
+		return usageDailyStatsResult{}, err
 	}
-	s.enrichOfficialCosts(logs)
-	summary := UsageSummary{Days: normalized.Days, StartTime: normalized.StartTime, EndTime: normalized.EndTime, Series: series}
-	byModel := map[string]*UsageDimensionStat{}
-	byProvider := map[string]*UsageDimensionStat{}
-	byToken := map[string]*UsageDimensionStat{}
-	byUser := map[string]*UsageDimensionStat{}
-	byModelSeries := map[string]map[string]*DailyUsageData{}
-	for _, log := range logs {
-		applyUsageStat(&summary, log)
-		modelKey := fallbackName(log.ModelName, "unknown")
-		modelName := fallbackName(log.ModelName, "unknown")
-		applyDimensionStat(byModel, modelKey, modelName, log, func(item *UsageDimensionStat, log domains.UsageLog) {
-			fillUsageDimensionText(&item.ModelName, log.ModelName)
-		})
-		applyModelSeriesStat(byModelSeries, modelKey, modelName, log)
-		applyDimensionStat(byProvider, fallbackName(log.ProviderGuid, log.ProviderName), fallbackName(log.ProviderName, log.ProviderGuid), log, func(item *UsageDimensionStat, log domains.UsageLog) {
-			fillUsageDimensionText(&item.ProviderGuid, log.ProviderGuid)
-		})
-		applyDimensionStat(byToken, fallbackName(log.TokenGuid, log.TokenName), fallbackName(log.TokenName, log.TokenGuid), log, func(item *UsageDimensionStat, log domains.UsageLog) {
-			fillUsageDimensionText(&item.TokenGuid, log.TokenGuid)
-			fillUsageDimensionText(&item.UserGuid, log.UserGuid)
-		})
-		if userGuid == "" {
-			applyDimensionStat(byUser, fallbackName(log.UserGuid, log.Username), fallbackName(log.Username, log.UserGuid), log, func(item *UsageDimensionStat, log domains.UsageLog) {
-				fillUsageDimensionText(&item.UserGuid, log.UserGuid)
-				fillUsageDimensionText(&item.Username, log.Username)
-			})
+	result := usageDailyStatsResult{ByDate: make(map[string]DailyUsageData, len(rows))}
+	for _, row := range rows {
+		if row.Date == "" {
+			continue
+		}
+		result.ByDate[row.Date] = DailyUsageData{
+			Date:     row.Date,
+			UserGuid: userGuid,
+			Requests: row.Requests,
+			Quota:    row.Quota,
+			Cost:     row.Cost,
+			Tokens:   row.PromptTokens + row.CompletionTokens,
+			Success:  row.Success,
+			Errors:   row.Errors,
+		}
+		result.Aggregate.Requests += row.Requests
+		result.Aggregate.Success += row.Success
+		result.Aggregate.Errors += row.Errors
+		result.Aggregate.Quota += row.Quota
+		result.Aggregate.Cost += row.Cost
+		result.Aggregate.PromptTokens += row.PromptTokens
+		result.Aggregate.CompletionTokens += row.CompletionTokens
+		result.Aggregate.UseTimeMs += row.UseTimeMs
+		result.Aggregate.StreamRequests += row.StreamRequests
+	}
+	return result, nil
+}
+
+func (s *LogService) aggregateUsage(db *gorm.DB) (usageAggregateRow, error) {
+	var row usageAggregateRow
+	selectSQL := fmt.Sprintf(`
+		COUNT(*) as requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as errors,
+		COALESCE(SUM(quota), 0) as quota,
+		%s as cost,
+		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+		COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
+		COALESCE(SUM(CASE WHEN is_stream THEN 1 ELSE 0 END), 0) as stream_requests
+	`, usageCostSumSQL(db))
+	return row, db.Select(selectSQL).Scan(&row).Error
+}
+
+func (s *LogService) usageDimensionStats(userGuid string, query UsageSummaryQuery, keyExpr string, nameExpr string, extraSelect string) ([]UsageDimensionStat, error) {
+	db := s.usageRangeDB(userGuid, query.StartTime, query.EndTime)
+	extra := ""
+	if extraSelect != "" {
+		extra = ", " + extraSelect
+	}
+	selectSQL := fmt.Sprintf(`
+		%s as stat_key,
+		%s as name%s,
+		COUNT(*) as requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as errors,
+		COALESCE(SUM(quota), 0) as quota,
+		%s as cost,
+		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+		COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+		COALESCE(SUM(use_time_ms), 0) as use_time_ms
+	`, keyExpr, nameExpr, extra, usageCostSumSQL(db))
+	var rows []usageDimensionAggregateRow
+	if err := db.Select(selectSQL).
+		Group(keyExpr + ", " + nameExpr).
+		Order(usageCostSumSQL(db) + " DESC").
+		Order("COALESCE(SUM(quota), 0) DESC").
+		Order("COUNT(*) DESC").
+		Limit(query.TopN).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]UsageDimensionStat, 0, len(rows))
+	for _, row := range rows {
+		stat := row.toUsageDimensionStat()
+		if stat.Requests > 0 {
+			stat.AvgUseTimeMs = stat.AvgUseTimeMs / stat.Requests
+		}
+		out = append(out, stat)
+	}
+	return out, nil
+}
+
+func (s *LogService) usageModelSeries(userGuid string, query UsageSummaryQuery, rankedModels []UsageDimensionStat, dates []DailyUsageData) ([]UsageNamedSeries, error) {
+	modelNames := make([]string, 0, len(rankedModels))
+	seen := map[string]bool{}
+	for _, model := range rankedModels {
+		modelName := fallbackName(model.ModelName, model.Name)
+		if modelName == "" || modelName == "unknown" || seen[modelName] {
+			continue
+		}
+		seen[modelName] = true
+		modelNames = append(modelNames, modelName)
+	}
+	if len(modelNames) == 0 {
+		return []UsageNamedSeries{}, nil
+	}
+	seriesByModel := map[string]map[string]*DailyUsageData{}
+	db := s.usageRangeDB(userGuid, query.StartTime, query.EndTime).Where("model_name IN ?", modelNames)
+	dateExpr := usageDateExprSQL(db)
+	selectSQL := fmt.Sprintf(`
+		%s as usage_date,
+		model_name,
+		COUNT(*) as requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as errors,
+		COALESCE(SUM(quota), 0) as quota,
+		%s as cost,
+		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+		COALESCE(SUM(completion_tokens), 0) as completion_tokens
+	`, dateExpr, usageCostSumSQL(db))
+	var rows []usageModelDailyAggregateRow
+	if err := db.Select(selectSQL).Group(dateExpr + ", model_name").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row.ModelName == "" || row.Date == "" {
+			continue
+		}
+		series := seriesByModel[row.ModelName]
+		if series == nil {
+			series = map[string]*DailyUsageData{}
+			seriesByModel[row.ModelName] = series
+		}
+		series[row.Date] = &DailyUsageData{
+			Date:     row.Date,
+			Requests: row.Requests,
+			Quota:    row.Quota,
+			Cost:     row.Cost,
+			Tokens:   row.PromptTokens + row.CompletionTokens,
+			Success:  row.Success,
+			Errors:   row.Errors,
 		}
 	}
-	if summary.TotalRequests > 0 {
-		summary.AvgUseTimeMs = summary.AvgUseTimeMs / summary.TotalRequests
+	return buildModelSeries(seriesByModel, rankedModels, dates), nil
+}
+
+func (row usageDimensionAggregateRow) toUsageDimensionStat() UsageDimensionStat {
+	return UsageDimensionStat{
+		Name:             fallbackName(row.Name, row.Key),
+		UserGuid:         row.UserGuid,
+		Username:         row.Username,
+		TokenGuid:        row.TokenGuid,
+		ProviderGuid:     row.ProviderGuid,
+		ModelName:        row.ModelName,
+		Requests:         row.Requests,
+		Success:          row.Success,
+		Errors:           row.Errors,
+		Quota:            row.Quota,
+		Cost:             row.Cost,
+		PromptTokens:     row.PromptTokens,
+		CompletionTokens: row.CompletionTokens,
+		Tokens:           row.PromptTokens + row.CompletionTokens,
+		AvgUseTimeMs:     row.UseTimeMs,
 	}
-	summary.ByModel = topUsageStats(byModel, normalized.TopN)
-	summary.SeriesByModel = buildModelSeries(byModelSeries, summary.ByModel, series)
-	summary.ByProvider = topUsageStats(byProvider, normalized.TopN)
-	summary.ByToken = topUsageStats(byToken, normalized.TopN)
-	if userGuid == "" {
-		summary.ByUser = topUsageStats(byUser, normalized.TopN)
-		s.enrichUsageUsers(summary.ByUser)
+}
+
+func applyAggregateToSummary(summary *UsageSummary, row usageAggregateRow) {
+	summary.TotalRequests = row.Requests
+	summary.SuccessRequests = row.Success
+	summary.ErrorRequests = row.Errors
+	summary.Quota = row.Quota
+	summary.Cost = row.Cost
+	summary.PromptTokens = row.PromptTokens
+	summary.CompletionTokens = row.CompletionTokens
+	summary.Tokens = row.PromptTokens + row.CompletionTokens
+	summary.StreamRequests = row.StreamRequests
+	if row.Requests > 0 {
+		summary.AvgUseTimeMs = row.UseTimeMs / row.Requests
 	}
-	return summary, nil
 }
 
 func (s *LogService) enrichUsageUsers(rows []UsageDimensionStat) {
@@ -478,70 +825,65 @@ func normalizeUsageSummaryQuery(query UsageSummaryQuery) UsageSummaryQuery {
 	return UsageSummaryQuery{Days: days, TopN: topN, StartTime: startTime, EndTime: endTime}
 }
 
-func applyUsageStat(summary *UsageSummary, log domains.UsageLog) {
-	summary.TotalRequests++
-	if log.Status == "success" {
-		summary.SuccessRequests++
-	} else {
-		summary.ErrorRequests++
+func buildUsageDayWindows(startTime int64, endTime int64) []usageDayWindow {
+	if startTime > endTime {
+		startTime, endTime = endTime, startTime
 	}
-	if log.IsStream {
-		summary.StreamRequests++
+	start := beginningOfDay(time.UnixMilli(startTime))
+	endDay := beginningOfDay(time.UnixMilli(endTime))
+	days := int(endDay.Sub(start).Hours()/24) + 1
+	if days <= 0 {
+		days = 1
 	}
-	summary.Quota += log.Quota
-	summary.Cost += usageLogCost(log)
-	summary.PromptTokens += log.PromptTokens
-	summary.CompletionTokens += log.CompletionTokens
-	summary.Tokens += log.PromptTokens + log.CompletionTokens
-	summary.AvgUseTimeMs += log.UseTimeMs
+	if days > 366 {
+		days = 366
+		start = endDay.AddDate(0, 0, -(days - 1))
+		startTime = start.UnixMilli()
+	}
+	windows := make([]usageDayWindow, 0, days)
+	for i := 0; i < days; i++ {
+		dayStart := start.AddDate(0, 0, i)
+		windows = append(windows, usageDayWindow{
+			Date: dayStart.Format("2006-01-02"),
+		})
+	}
+	return windows
 }
 
-func applyDimensionStat(items map[string]*UsageDimensionStat, key string, name string, log domains.UsageLog, decorate func(*UsageDimensionStat, domains.UsageLog)) {
-	key = fallbackName(key, name)
-	name = fallbackName(name, key)
-	item := items[key]
-	if item == nil {
-		item = &UsageDimensionStat{Name: name}
-		items[key] = item
+func buildDailyUsageSeries(userGuid string, windows []usageDayWindow, byDate map[string]DailyUsageData) []DailyUsageData {
+	out := make([]DailyUsageData, 0, len(windows))
+	for _, window := range windows {
+		if item, ok := byDate[window.Date]; ok {
+			item.UserGuid = userGuid
+			out = append(out, item)
+			continue
+		}
+		out = append(out, DailyUsageData{Date: window.Date, UserGuid: userGuid})
 	}
-	if decorate != nil {
-		decorate(item, log)
-	}
-	item.Requests++
-	if log.Status == "success" {
-		item.Success++
-	} else {
-		item.Errors++
-	}
-	item.Quota += log.Quota
-	item.Cost += usageLogCost(log)
-	item.PromptTokens += log.PromptTokens
-	item.CompletionTokens += log.CompletionTokens
-	item.Tokens += log.PromptTokens + log.CompletionTokens
-	item.AvgUseTimeMs += log.UseTimeMs
+	return out
 }
 
-func applyModelSeriesStat(items map[string]map[string]*DailyUsageData, key string, name string, log domains.UsageLog) {
-	key = fallbackName(key, name)
-	date := time.UnixMilli(log.CreateTime).Format("2006-01-02")
-	series := items[key]
-	if series == nil {
-		series = map[string]*DailyUsageData{}
-		items[key] = series
+func usageCostSumSQL(db *gorm.DB) string {
+	switch db.Dialector.Name() {
+	case "sqlite":
+		return "COALESCE(SUM(CASE WHEN COALESCE(cost, 0) > 0 THEN cost WHEN TRIM(COALESCE(other, '')) <> '' AND json_valid(other) THEN COALESCE(CAST(json_extract(other, '$.finalCost') AS REAL), 0) ELSE 0 END), 0)"
+	case "mysql":
+		return "COALESCE(SUM(CASE WHEN COALESCE(cost, 0) > 0 THEN cost WHEN TRIM(COALESCE(other, '')) <> '' AND JSON_VALID(other) THEN COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(other, '$.finalCost')) AS DECIMAL(20,10)), 0) ELSE 0 END), 0)"
+	case "postgres":
+		return "COALESCE(SUM(CASE WHEN COALESCE(cost, 0) > 0 THEN cost WHEN btrim(COALESCE(other, '')) <> '' THEN COALESCE((other::jsonb ->> 'finalCost')::double precision, 0) ELSE 0 END), 0)"
+	default:
+		return "COALESCE(SUM(cost), 0)"
 	}
-	item := series[date]
-	if item == nil {
-		item = &DailyUsageData{Date: date}
-		series[date] = item
-	}
-	item.Requests++
-	item.Quota += log.Quota
-	item.Cost += usageLogCost(log)
-	item.Tokens += log.PromptTokens + log.CompletionTokens
-	if log.Status == "success" {
-		item.Success++
-	} else {
-		item.Errors++
+}
+
+func usageDateExprSQL(db *gorm.DB) string {
+	switch db.Dialector.Name() {
+	case "mysql":
+		return "DATE_FORMAT(FROM_UNIXTIME(create_time / 1000), '%Y-%m-%d')"
+	case "postgres":
+		return "TO_CHAR(TO_TIMESTAMP(create_time / 1000.0), 'YYYY-MM-DD')"
+	default:
+		return "DATE(create_time / 1000, 'unixepoch', 'localtime')"
 	}
 }
 
@@ -577,44 +919,6 @@ func buildModelSeries(seriesByModel map[string]map[string]*DailyUsageData, ranke
 		})
 	}
 	return out
-}
-
-func fillUsageDimensionText(target *string, value string) {
-	if *target == "" && value != "" {
-		*target = value
-	}
-}
-
-func topUsageStats(items map[string]*UsageDimensionStat, limit int) []UsageDimensionStat {
-	out := make([]UsageDimensionStat, 0, len(items))
-	for _, item := range items {
-		if item.Requests > 0 {
-			item.AvgUseTimeMs = item.AvgUseTimeMs / item.Requests
-		}
-		out = append(out, *item)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Cost != out[j].Cost {
-			return out[i].Cost > out[j].Cost
-		}
-		if out[i].Quota == out[j].Quota {
-			return out[i].Requests > out[j].Requests
-		}
-		return out[i].Quota > out[j].Quota
-	})
-	if len(out) > limit {
-		return out[:limit]
-	}
-	return out
-}
-
-func usageLogCost(log domains.UsageLog) float64 {
-	extra := usageLogExtraMap(log.Other)
-	cost := extraNumber(extra["finalCost"])
-	if cost > 0 {
-		return cost
-	}
-	return 0
 }
 
 func fallbackName(primary string, fallback string) string {
