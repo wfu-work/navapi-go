@@ -38,6 +38,16 @@ func TestParseUsageNormalizesOpenAIAndResponsesShapes(t *testing.T) {
 	}
 }
 
+func TestParseUsageReadsNestedResponsesUsage(t *testing.T) {
+	body := []byte(`{"type":"response.completed","response":{"usage":{"input_tokens":26,"output_tokens":5,"total_tokens":31}}}`)
+
+	usage := parseUsage(body, "application/json")
+
+	if usage != (vos.Usage{PromptTokens: 26, CompletionTokens: 5, TotalTokens: 31, InputTokens: 26, OutputTokens: 5}) {
+		t.Fatalf("usage = %+v, want nested responses usage", usage)
+	}
+}
+
 func TestStreamUsageTrackerParsesSplitSSEChunks(t *testing.T) {
 	tracker := &streamUsageTracker{}
 
@@ -49,6 +59,20 @@ func TestStreamUsageTrackerParsesSplitSSEChunks(t *testing.T) {
 	usage := tracker.Finish()
 	if usage != (vos.Usage{PromptTokens: 4, CompletionTokens: 6, TotalTokens: 10}) {
 		t.Fatalf("usage = %+v, want prompt=4 completion=6 total=10", usage)
+	}
+}
+
+func TestStreamUsageTrackerParsesNestedResponsesUsage(t *testing.T) {
+	tracker := &streamUsageTracker{}
+
+	tracker.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+	tracker.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":26,"))
+	tracker.Write([]byte("\"output_tokens\":5,\"total_tokens\":31}}}\n\n"))
+	tracker.Write([]byte("data: [DONE]\n\n"))
+
+	usage := tracker.Finish()
+	if usage != (vos.Usage{PromptTokens: 26, CompletionTokens: 5, TotalTokens: 31, InputTokens: 26, OutputTokens: 5}) {
+		t.Fatalf("usage = %+v, want nested responses stream usage", usage)
 	}
 }
 

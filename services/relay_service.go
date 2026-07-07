@@ -742,12 +742,19 @@ func parseUsage(body []byte, contentType string) vos.Usage {
 		}
 	}
 	var payload struct {
-		Usage vos.Usage `json:"usage"`
+		Usage    vos.Usage `json:"usage"`
+		Response struct {
+			Usage vos.Usage `json:"usage"`
+		} `json:"response"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return vos.Usage{}
 	}
-	return normalizeUsage(payload.Usage)
+	usage := payload.Usage
+	if !hasUsageTokens(usage) {
+		usage = payload.Response.Usage
+	}
+	return normalizeUsage(usage)
 }
 
 func normalizeUsage(usage vos.Usage) vos.Usage {
@@ -764,6 +771,14 @@ func normalizeUsage(usage vos.Usage) vos.Usage {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 	return usage
+}
+
+func hasUsageTokens(usage vos.Usage) bool {
+	return usage.TotalTokens > 0 ||
+		usage.PromptTokens > 0 ||
+		usage.CompletionTokens > 0 ||
+		usage.InputTokens > 0 ||
+		usage.OutputTokens > 0
 }
 
 func parseStreamUsage(body []byte) vos.Usage {

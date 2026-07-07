@@ -126,6 +126,49 @@ func TestUsageSummaryKeepsUsersSeparateByGuid(t *testing.T) {
 	}
 }
 
+func TestUsageSummaryIncludesModelSeriesScopedByUser(t *testing.T) {
+	db := withLogTestDB(t)
+	now := time.Now()
+	today := now.UnixMilli()
+	yesterday := now.AddDate(0, 0, -1).UnixMilli()
+	logs := []domains.UsageLog{
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: yesterday}, UserGuid: "user-a", ModelName: "gpt-5.5", Quota: 12, PromptTokens: 4, CompletionTokens: 8, Status: "success"},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: today}, UserGuid: "user-a", ModelName: "gpt-5.5", Quota: 18, PromptTokens: 6, CompletionTokens: 12, Status: "success"},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: today}, UserGuid: "user-a", ModelName: "gpt-5.4", Quota: 7, PromptTokens: 3, CompletionTokens: 4, Status: "error"},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: today}, UserGuid: "user-b", ModelName: "gpt-5.5", Quota: 99, PromptTokens: 40, CompletionTokens: 59, Status: "success"},
+	}
+	if err := db.Create(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := LogServiceApp.UsageSummary("user-a", 2, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.TotalRequests != 3 || summary.Quota != 37 {
+		t.Fatalf("summary totals = %+v, want user-a model totals only", summary)
+	}
+	if len(summary.SeriesByModel) != 2 {
+		t.Fatalf("seriesByModel = %+v, want two user-a model series", summary.SeriesByModel)
+	}
+	var gpt55 *UsageNamedSeries
+	for i := range summary.SeriesByModel {
+		if summary.SeriesByModel[i].ModelName == "gpt-5.5" {
+			gpt55 = &summary.SeriesByModel[i]
+			break
+		}
+	}
+	if gpt55 == nil {
+		t.Fatalf("seriesByModel = %+v, want gpt-5.5 series", summary.SeriesByModel)
+	}
+	if len(gpt55.Data) != 2 {
+		t.Fatalf("gpt-5.5 series = %+v, want two date points", gpt55.Data)
+	}
+	if gpt55.Data[0].Quota != 12 || gpt55.Data[1].Quota != 18 {
+		t.Fatalf("gpt-5.5 series = %+v, want user-a daily quota only", gpt55.Data)
+	}
+}
+
 func withLogTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	previousDB := global.NAV_DB

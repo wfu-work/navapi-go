@@ -34,6 +34,12 @@ type DailyUsageData struct {
 	UserGuid string `json:"userGuid,omitempty"`
 }
 
+type UsageNamedSeries struct {
+	Name      string           `json:"name"`
+	ModelName string           `json:"modelName,omitempty"`
+	Data      []DailyUsageData `json:"data"`
+}
+
 type UsageDimensionStat struct {
 	Name             string `json:"name"`
 	UserGuid         string `json:"userGuid,omitempty"`
@@ -62,6 +68,7 @@ type UsageSummary struct {
 	AvgUseTimeMs     int64                `json:"avgUseTimeMs"`
 	StreamRequests   int64                `json:"streamRequests"`
 	Series           []DailyUsageData     `json:"series"`
+	SeriesByModel    []UsageNamedSeries   `json:"seriesByModel"`
 	ByModel          []UsageDimensionStat `json:"byModel"`
 	ByProvider       []UsageDimensionStat `json:"byProvider"`
 	ByToken          []UsageDimensionStat `json:"byToken"`
@@ -309,7 +316,7 @@ func (s *LogService) UsageSummary(userGuid string, days int, topN int) (UsageSum
 		db = db.Where("user_guid = ?", userGuid)
 	}
 	var logs []domains.UsageLog
-	if err := db.Select("user_guid", "username", "token_guid", "token_name", "channel_guid", "channel_name", "model_name", "quota", "prompt_tokens", "completion_tokens", "use_time_ms", "is_stream", "status").
+	if err := db.Select("create_time", "user_guid", "username", "token_guid", "token_name", "channel_guid", "channel_name", "model_name", "quota", "prompt_tokens", "completion_tokens", "use_time_ms", "is_stream", "status").
 		Find(&logs).Error; err != nil {
 		return UsageSummary{}, err
 	}
@@ -318,11 +325,15 @@ func (s *LogService) UsageSummary(userGuid string, days int, topN int) (UsageSum
 	byProvider := map[string]*UsageDimensionStat{}
 	byToken := map[string]*UsageDimensionStat{}
 	byUser := map[string]*UsageDimensionStat{}
+	byModelSeries := map[string]map[string]*DailyUsageData{}
 	for _, log := range logs {
 		applyUsageStat(&summary, log)
-		applyDimensionStat(byModel, fallbackName(log.ModelName, "unknown"), fallbackName(log.ModelName, "unknown"), log, func(item *UsageDimensionStat, log domains.UsageLog) {
+		modelKey := fallbackName(log.ModelName, "unknown")
+		modelName := fallbackName(log.ModelName, "unknown")
+		applyDimensionStat(byModel, modelKey, modelName, log, func(item *UsageDimensionStat, log domains.UsageLog) {
 			fillUsageDimensionText(&item.ModelName, log.ModelName)
 		})
+		applyModelSeriesStat(byModelSeries, modelKey, modelName, log)
 		applyDimensionStat(byProvider, fallbackName(log.ProviderGuid, log.ProviderName), fallbackName(log.ProviderName, log.ProviderGuid), log, func(item *UsageDimensionStat, log domains.UsageLog) {
 			fillUsageDimensionText(&item.ProviderGuid, log.ProviderGuid)
 		})
@@ -340,6 +351,7 @@ func (s *LogService) UsageSummary(userGuid string, days int, topN int) (UsageSum
 		summary.AvgUseTimeMs = summary.AvgUseTimeMs / summary.TotalRequests
 	}
 	summary.ByModel = topUsageStats(byModel, topN)
+	summary.SeriesByModel = buildModelSeries(byModelSeries, summary.ByModel, series)
 	summary.ByProvider = topUsageStats(byProvider, topN)
 	summary.ByToken = topUsageStats(byToken, topN)
 	if userGuid == "" {
@@ -387,6 +399,62 @@ func applyDimensionStat(items map[string]*UsageDimensionStat, key string, name s
 	item.CompletionTokens += log.CompletionTokens
 	item.Tokens += log.PromptTokens + log.CompletionTokens
 	item.AvgUseTimeMs += log.UseTimeMs
+}
+
+func applyModelSeriesStat(items map[string]map[string]*DailyUsageData, key string, name string, log domains.UsageLog) {
+	key = fallbackName(key, name)
+	date := time.UnixMilli(log.CreateTime).Format("2006-01-02")
+	series := items[key]
+	if series == nil {
+		series = map[string]*DailyUsageData{}
+		items[key] = series
+	}
+	item := series[date]
+	if item == nil {
+		item = &DailyUsageData{Date: date}
+		series[date] = item
+	}
+	item.Requests++
+	item.Quota += log.Quota
+	item.Tokens += log.PromptTokens + log.CompletionTokens
+	if log.Status == "success" {
+		item.Success++
+	} else {
+		item.Errors++
+	}
+}
+
+func buildModelSeries(seriesByModel map[string]map[string]*DailyUsageData, rankedModels []UsageDimensionStat, dates []DailyUsageData) []UsageNamedSeries {
+	out := make([]UsageNamedSeries, 0, len(rankedModels))
+	for _, model := range rankedModels {
+		key := fallbackName(model.ModelName, model.Name)
+		series := seriesByModel[key]
+		if series == nil {
+			series = seriesByModel[model.Name]
+		}
+		points := make([]DailyUsageData, 0, len(dates))
+		for _, dateItem := range dates {
+			date := dateItem.Date
+			if point, ok := series[date]; ok {
+				points = append(points, DailyUsageData{
+					Date:     date,
+					Requests: point.Requests,
+					Quota:    point.Quota,
+					Tokens:   point.Tokens,
+					Success:  point.Success,
+					Errors:   point.Errors,
+				})
+				continue
+			}
+			points = append(points, DailyUsageData{Date: date})
+		}
+		out = append(out, UsageNamedSeries{
+			Name:      fallbackName(model.Name, key),
+			ModelName: fallbackName(model.ModelName, model.Name),
+			Data:      points,
+		})
+	}
+	return out
 }
 
 func fillUsageDimensionText(target *string, value string) {
