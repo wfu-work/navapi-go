@@ -22,6 +22,22 @@ func TestScopedUserGuidReturnsAllScopeForAdminUsername(t *testing.T) {
 	}
 }
 
+func TestScopedUserGuidReturnsAllScopeForSuperAdminRole(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	c.Set("claims", &configs.CustomClaims{
+		BaseClaims: configs.BaseClaims{
+			UserGuid:  "admin-guid",
+			Username:  "demo",
+			RoleCodes: "USER;SUPER_ADMIN",
+		},
+	})
+
+	if userGuid := ScopedUserGuid(c); userGuid != "" {
+		t.Fatalf("ScopedUserGuid() = %q, want empty admin scope", userGuid)
+	}
+}
+
 func TestScopedUserGuidReturnsCurrentUserForCommonUsername(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(nil)
