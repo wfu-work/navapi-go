@@ -61,7 +61,7 @@ var (
 
 func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gin.RouterGroup) {
 	r.InitRelayRouter(publicGroup)
-	r.InitGatewayRouter(privateGroup)
+	r.InitGatewayRouter(privateGroup, publicGroup)
 	r.InitTokenRouter(privateGroup)
 	r.InitLogRouter(privateGroup)
 	r.InitModelRouter(privateGroup, publicGroup)

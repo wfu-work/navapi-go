@@ -21,3 +21,20 @@ type GatewayApi struct{}
 func (a GatewayApi) Health(c *gin.Context) {
 	response.Ok(services.GatewayServiceApp.Health(gin.Mode()), c)
 }
+
+// PublicStatus 公开服务状态
+// @Summary 公开服务状态
+// @Description 公开服务状态
+// @Tags 网关模块
+// @Accept json
+// @Produce json
+// @Success 200 {object} response.Response{data=services.PublicServiceStatus,msg=string}
+// @Router /service/status [get]
+func (a GatewayApi) PublicStatus(c *gin.Context) {
+	status, err := services.GatewayServiceApp.PublicStatus(gin.Mode())
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(status, c)
+}
