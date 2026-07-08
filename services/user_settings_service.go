@@ -117,6 +117,31 @@ func (s *UserSettingsService) SavePreferences(userGuid string, settings *domains
 	return s.Get(userGuid)
 }
 
+func (s *UserSettingsService) SetMaxConcurrency(userGuid string, maxConcurrency int) (*domains.UserSettings, error) {
+	userGuid = strings.TrimSpace(userGuid)
+	if userGuid == "" {
+		return nil, errors.New("user guid is required")
+	}
+	if maxConcurrency <= 0 {
+		return nil, errors.New("max concurrency must be greater than 0")
+	}
+	if maxConcurrency > 1000 {
+		return nil, errors.New("max concurrency must be less than or equal to 1000")
+	}
+	if err := s.DB().Transaction(func(tx *gorm.DB) error {
+		if err := s.Ensure(tx, userGuid); err != nil {
+			return err
+		}
+		// 管理端只调整并发限制，不覆盖用户通知偏好和扩展配置。
+		return tx.Model(&domains.UserSettings{}).
+			Where("user_guid = ?", userGuid).
+			Update("max_concurrency", maxConcurrency).Error
+	}); err != nil {
+		return nil, err
+	}
+	return s.Get(userGuid)
+}
+
 func defaultUserSettings(userGuid string) domains.UserSettings {
 	return domains.UserSettings{
 		UserGuid:                    userGuid,

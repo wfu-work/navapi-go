@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -32,6 +33,19 @@ type RedemptionBatchRequest struct {
 	ExpiredAt int64  `json:"expiredAt"`
 	Prefix    string `json:"prefix"`
 	Remark    string `json:"remark"`
+}
+
+type RedemptionListQuery struct {
+	vos.PageQuery
+	UsageStatus string `form:"usageStatus" json:"usageStatus"`
+}
+
+func (q *RedemptionListQuery) Normalize() {
+	q.PageQuery.Normalize()
+	q.UsageStatus = strings.ToLower(strings.TrimSpace(q.UsageStatus))
+	if q.UsageStatus != "used" && q.UsageStatus != "unused" {
+		q.UsageStatus = ""
+	}
 }
 
 type RedemptionStats struct {
@@ -68,6 +82,9 @@ func (s *RedemptionService) Update(redemption *domains.Redemption) error {
 	}
 	if existing == nil {
 		return errors.New("redemption not found")
+	}
+	if redemptionIsUsed(*existing) {
+		return errors.New("已兑换卡密只能查看，不能编辑")
 	}
 	// 管理端编辑只用业务 GUID 定位，避免对外暴露数据库自增 ID。
 	redemption.Guid = existing.Guid
@@ -109,10 +126,13 @@ func (s *RedemptionService) Get(guid string) (*domains.Redemption, error) {
 	if redemption == nil {
 		return nil, errors.New("redemption not found")
 	}
+	redemptions := []domains.Redemption{*redemption}
+	s.enrichRedemptionUsers(redemptions)
+	*redemption = redemptions[0]
 	return redemption, nil
 }
 
-func (s *RedemptionService) List(query vos.PageQuery) (vos.PageResult, error) {
+func (s *RedemptionService) List(query RedemptionListQuery) (vos.PageResult, error) {
 	query.Normalize()
 	var redemptions []domains.Redemption
 	var total int64
@@ -120,13 +140,57 @@ func (s *RedemptionService) List(query vos.PageQuery) (vos.PageResult, error) {
 	if query.Q != "" {
 		db = db.Where("code LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
+	switch query.UsageStatus {
+	case "used":
+		db = db.Where("used_at > 0 OR used_by <> ''")
+	case "unused":
+		db = db.Where("(used_at = 0 OR used_at IS NULL) AND (used_by = '' OR used_by IS NULL)")
+	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err
 	}
 	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&redemptions).Error; err != nil {
 		return vos.PageResult{}, err
 	}
+	s.enrichRedemptionUsers(redemptions)
 	return vos.PageResult{List: redemptions, Total: total, Page: query.Page, Size: query.Size}, nil
+}
+
+func (s *RedemptionService) enrichRedemptionUsers(redemptions []domains.Redemption) {
+	userGuids := make([]string, 0, len(redemptions))
+	seen := map[string]bool{}
+	for _, redemption := range redemptions {
+		userGuid := strings.TrimSpace(redemption.UsedBy)
+		if userGuid == "" || seen[userGuid] {
+			continue
+		}
+		seen[userGuid] = true
+		userGuids = append(userGuids, userGuid)
+	}
+	if len(userGuids) == 0 {
+		return
+	}
+	var users []commonDomains.SysUser
+	if err := s.DB().Where("guid IN ?", userGuids).Find(&users).Error; err != nil {
+		return
+	}
+	userByGuid := make(map[string]commonDomains.SysUser, len(users))
+	for _, user := range users {
+		userByGuid[user.Guid] = user
+	}
+	for i := range redemptions {
+		user, ok := userByGuid[strings.TrimSpace(redemptions[i].UsedBy)]
+		if !ok {
+			continue
+		}
+		redemptions[i].Username = user.Username
+		redemptions[i].NickName = user.NickName
+		redemptions[i].Email = user.Email
+	}
+}
+
+func redemptionIsUsed(redemption domains.Redemption) bool {
+	return strings.TrimSpace(redemption.UsedBy) != "" || redemption.UsedAt > 0
 }
 
 func (s *RedemptionService) BatchCreate(req RedemptionBatchRequest) ([]domains.Redemption, error) {

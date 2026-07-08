@@ -5,7 +5,6 @@ import (
 
 	"navapi-go/domains"
 	"navapi-go/services"
-	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
@@ -28,11 +27,12 @@ type redeemRequest struct {
 // @Param page query int false "页码"
 // @Param size query int false "每页数量"
 // @Param q query string false "关键词"
+// @Param usageStatus query string false "使用状态 all/unused/used"
 // @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
 // @Router /redemption/list [get]
 // @Router /card/list [get]
 func (a RedemptionApi) List(c *gin.Context) {
-	var query vos.PageQuery
+	var query services.RedemptionListQuery
 	_ = c.ShouldBindQuery(&query)
 	result, err := redemptionService.List(query)
 	if err != nil {

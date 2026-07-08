@@ -158,6 +158,8 @@ var navapiAPIPermissionSeeds = []apiPermissionSeed{
 	{Guid: "navapi-api-balance-update", Name: "更新客户余额", Code: "navapi.balance.update", Path: "/balance/", Verb: "PUT", Sort: 502, Group: "客户"},
 	{Guid: "navapi-api-user-settings-self", Name: "当前用户设置", Code: "navapi.user.settings.self", Path: "/user-settings/self", Verb: "GET", User: true, Sort: 520, Group: "客户"},
 	{Guid: "navapi-api-user-settings-save", Name: "保存当前用户设置", Code: "navapi.user.settings.save", Path: "/user-settings/self", Verb: "PUT", User: true, Sort: 521, Group: "客户"},
+	{Guid: "navapi-api-user-settings-get", Name: "用户配置详情", Code: "navapi.user.settings.get", Path: "/user-settings/admin/:userGuid", Verb: "GET", Sort: 522, Group: "客户"},
+	{Guid: "navapi-api-user-settings-max-concurrency", Name: "更新用户最大并发", Code: "navapi.user.settings.maxConcurrency", Path: "/user-settings/admin/:userGuid/max-concurrency", Verb: "PUT", Sort: 523, Group: "客户"},
 
 	{Guid: "navapi-api-client-register-settings", Name: "注册设置", Code: "navapi.client.register.settings", Path: "/clients/register/settings", Verb: "GET", Sort: 540, Group: "客户"},
 	{Guid: "navapi-api-client-register-save", Name: "保存注册设置", Code: "navapi.client.register.save", Path: "/clients/register/settings", Verb: "PUT", Sort: 541, Group: "客户"},
