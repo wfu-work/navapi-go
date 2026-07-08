@@ -14,7 +14,6 @@ func RegisterTables() {
 	}
 	if err := db.AutoMigrate(
 		ApiToken{},
-		UserQuota{},
 		UserWallet{},
 		UserWalletRecord{},
 		UserSettings{},

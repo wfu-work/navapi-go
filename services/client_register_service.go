@@ -99,9 +99,6 @@ func (s ClientRegisterService) Register(req ClientRegisterRequest) (*ClientRegis
 		if err := assignCommonUserRole(tx, created.Guid); err != nil {
 			return err
 		}
-		if err := UserQuotaServiceApp.WithDB(tx).Ensure(tx, created.Guid); err != nil {
-			return err
-		}
 		if err := UserSettingsServiceApp.WithDB(tx).Ensure(tx, created.Guid); err != nil {
 			return err
 		}

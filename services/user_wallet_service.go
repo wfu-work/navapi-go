@@ -8,6 +8,7 @@ import (
 	"navapi-go/domains"
 	"navapi-go/vos"
 
+	commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -38,6 +39,30 @@ type WalletRecordInput struct {
 	Remark           string
 	Meta             string
 	OccurredAt       int64
+}
+
+type WalletBalanceAccount struct {
+	commonDomains.BaseDataEntity
+	UserGuid                      string `json:"userGuid"`
+	BalanceAmountMicros           int64  `json:"balanceAmountMicros"`
+	PaidBalanceAmountMicros       int64  `json:"paidBalanceAmountMicros"`
+	RewardBalanceAmountMicros     int64  `json:"rewardBalanceAmountMicros"`
+	CommissionBalanceAmountMicros int64  `json:"commissionBalanceAmountMicros"`
+	TotalConsumedAmountMicros     int64  `json:"totalConsumedAmountMicros"`
+	TotalRequestCount             int64  `json:"totalRequestCount"`
+	TotalRechargeAmountMicros     int64  `json:"totalRechargeAmountMicros"`
+	TotalSubscriptionAmountMicros int64  `json:"totalSubscriptionAmountMicros"`
+	TotalRewardAmountMicros       int64  `json:"totalRewardAmountMicros"`
+	TotalCommissionAmountMicros   int64  `json:"totalCommissionAmountMicros"`
+	TotalRechargeAmountCents      int64  `json:"totalRechargeAmountCents"`
+	TotalSubscriptionAmountCents  int64  `json:"totalSubscriptionAmountCents"`
+	Currency                      string `json:"currency"`
+
+	RemainAmountMicros int64  `json:"remainAmountMicros"`
+	UsedAmountMicros   int64  `json:"usedAmountMicros"`
+	TotalAmountMicros  int64  `json:"totalAmountMicros"`
+	Group              string `json:"group"`
+	AllowedGroups      string `json:"allowedGroups"`
 }
 
 func (s *UserWalletService) WithDB(db *gorm.DB) *UserWalletService {
@@ -91,6 +116,69 @@ func (s *UserWalletService) Get(userGuid string) (*domains.UserWallet, error) {
 	}
 	normalizeWallet(&wallet)
 	return &wallet, nil
+}
+
+// GetBalanceAccount exposes the wallet through the admin balance view model.
+// The legacy remain/used/total fields are calculated from wallet columns only.
+func (s *UserWalletService) GetBalanceAccount(userGuid string) (*WalletBalanceAccount, error) {
+	wallet, err := s.Get(userGuid)
+	if err != nil {
+		return nil, err
+	}
+	account := walletToBalanceAccount(wallet)
+	return &account, nil
+}
+
+// ListBalanceAccounts is the admin balance list backed by user wallets.
+func (s *UserWalletService) ListBalanceAccounts(query vos.PageQuery) (vos.PageResult, error) {
+	query.Normalize()
+	var wallets []domains.UserWallet
+	var total int64
+	db := s.DB().Model(&domains.UserWallet{})
+	if query.Q != "" {
+		keyword := "%" + strings.TrimSpace(query.Q) + "%"
+		db = db.Where("user_guid LIKE ? OR currency LIKE ?", keyword, keyword)
+	}
+	if err := db.Count(&total).Error; err != nil {
+		return vos.PageResult{}, err
+	}
+	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&wallets).Error; err != nil {
+		return vos.PageResult{}, err
+	}
+	accounts := make([]WalletBalanceAccount, 0, len(wallets))
+	for i := range wallets {
+		accounts = append(accounts, walletToBalanceAccount(&wallets[i]))
+	}
+	return vos.PageResult{List: accounts, Total: total, Page: query.Page, Size: query.Size}, nil
+}
+
+// UpdateBalanceAccount calibrates an admin balance account directly on wallet data.
+// It intentionally does not read or sync any removed legacy quota account model.
+func (s *UserWalletService) UpdateBalanceAccount(input WalletBalanceAccount) (*WalletBalanceAccount, error) {
+	input.UserGuid = strings.TrimSpace(input.UserGuid)
+	if input.UserGuid == "" {
+		return nil, errors.New("user guid is required")
+	}
+	var account WalletBalanceAccount
+	err := s.DB().Transaction(func(tx *gorm.DB) error {
+		if err := s.Ensure(tx, input.UserGuid); err != nil {
+			return err
+		}
+		wallet, err := s.lockWallet(tx, input.UserGuid)
+		if err != nil {
+			return err
+		}
+		applyBalanceAccountUpdate(wallet, input)
+		if err := s.saveWallet(tx, wallet); err != nil {
+			return err
+		}
+		account = walletToBalanceAccount(wallet)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &account, nil
 }
 
 func (s *UserWalletService) ListRecords(userGuid string, query vos.PageQuery) (vos.PageResult, error) {
@@ -319,6 +407,74 @@ func normalizeWalletAmounts(wallet *domains.UserWallet) {
 		wallet.TotalSubscriptionAmountMicros = AmountCentsToMicros(wallet.TotalSubscriptionAmountCents)
 	}
 	wallet.BalanceAmountMicros = wallet.PaidBalanceAmountMicros + wallet.RewardBalanceAmountMicros + wallet.CommissionBalanceAmountMicros
+}
+
+func walletToBalanceAccount(wallet *domains.UserWallet) WalletBalanceAccount {
+	normalizeWallet(wallet)
+	totalAmountMicros := walletTotalIncomeAmountMicros(wallet)
+	if totalAmountMicros <= 0 && wallet.BalanceAmountMicros+wallet.TotalConsumedAmountMicros > 0 {
+		totalAmountMicros = wallet.BalanceAmountMicros + wallet.TotalConsumedAmountMicros
+	}
+	return WalletBalanceAccount{
+		BaseDataEntity:                wallet.BaseDataEntity,
+		UserGuid:                      wallet.UserGuid,
+		BalanceAmountMicros:           wallet.BalanceAmountMicros,
+		PaidBalanceAmountMicros:       wallet.PaidBalanceAmountMicros,
+		RewardBalanceAmountMicros:     wallet.RewardBalanceAmountMicros,
+		CommissionBalanceAmountMicros: wallet.CommissionBalanceAmountMicros,
+		TotalConsumedAmountMicros:     wallet.TotalConsumedAmountMicros,
+		TotalRequestCount:             wallet.TotalRequestCount,
+		TotalRechargeAmountMicros:     wallet.TotalRechargeAmountMicros,
+		TotalSubscriptionAmountMicros: wallet.TotalSubscriptionAmountMicros,
+		TotalRewardAmountMicros:       wallet.TotalRewardAmountMicros,
+		TotalCommissionAmountMicros:   wallet.TotalCommissionAmountMicros,
+		TotalRechargeAmountCents:      wallet.TotalRechargeAmountCents,
+		TotalSubscriptionAmountCents:  wallet.TotalSubscriptionAmountCents,
+		Currency:                      wallet.Currency,
+		RemainAmountMicros:            wallet.BalanceAmountMicros,
+		UsedAmountMicros:              wallet.TotalConsumedAmountMicros,
+		TotalAmountMicros:             totalAmountMicros,
+		Group:                         "default",
+		AllowedGroups:                 "",
+	}
+}
+
+func applyBalanceAccountUpdate(wallet *domains.UserWallet, input WalletBalanceAccount) {
+	paidBalance := input.PaidBalanceAmountMicros
+	rewardBalance := input.RewardBalanceAmountMicros
+	commissionBalance := input.CommissionBalanceAmountMicros
+	if paidBalance <= 0 && rewardBalance <= 0 && commissionBalance <= 0 {
+		paidBalance = firstPositiveInt64(input.BalanceAmountMicros, input.RemainAmountMicros)
+	}
+	wallet.PaidBalanceAmountMicros = paidBalance
+	wallet.RewardBalanceAmountMicros = rewardBalance
+	wallet.CommissionBalanceAmountMicros = commissionBalance
+	wallet.TotalConsumedAmountMicros = firstPositiveInt64(input.TotalConsumedAmountMicros, input.UsedAmountMicros)
+	wallet.TotalRequestCount = input.TotalRequestCount
+	wallet.TotalRechargeAmountMicros = firstPositiveInt64(input.TotalRechargeAmountMicros, input.TotalAmountMicros)
+	wallet.TotalSubscriptionAmountMicros = input.TotalSubscriptionAmountMicros
+	wallet.TotalRewardAmountMicros = input.TotalRewardAmountMicros
+	wallet.TotalCommissionAmountMicros = input.TotalCommissionAmountMicros
+	wallet.TotalRechargeAmountCents = input.TotalRechargeAmountCents
+	wallet.TotalSubscriptionAmountCents = input.TotalSubscriptionAmountCents
+	wallet.Currency = input.Currency
+	normalizeWallet(wallet)
+}
+
+func walletTotalIncomeAmountMicros(wallet *domains.UserWallet) int64 {
+	return nonNegativeInt64(wallet.TotalRechargeAmountMicros) +
+		nonNegativeInt64(wallet.TotalSubscriptionAmountMicros) +
+		nonNegativeInt64(wallet.TotalRewardAmountMicros) +
+		nonNegativeInt64(wallet.TotalCommissionAmountMicros)
+}
+
+func firstPositiveInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func int64Min(a, b int64) int64 {

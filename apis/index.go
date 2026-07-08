@@ -30,6 +30,7 @@ type ApiGroup struct {
 	MessageTemplateApi
 	MessageSendRecordApi
 	RegisterApi
+	ClientUserApi
 	UserSettingsApi
 	SettingApi
 	SystemMonitorApi
@@ -42,6 +43,7 @@ var (
 	registerSettingService    = services.ServiceGroupApp.RegisterSettingService
 	emailService              = services.ServiceGroupApp.EmailService
 	clientRegisterService     = services.ServiceGroupApp.ClientRegisterService
+	clientUserService         = services.ServiceGroupApp.ClientUserService
 	tokenService              = services.ServiceGroupApp.TokenService
 	logService                = services.ServiceGroupApp.LogService
 	modelService              = services.ServiceGroupApp.ModelService
@@ -52,7 +54,6 @@ var (
 	redemptionService         = services.ServiceGroupApp.RedemptionService
 	subscriptionService       = services.ServiceGroupApp.SubscriptionService
 	paymentService            = services.ServiceGroupApp.PaymentService
-	userQuotaService          = services.ServiceGroupApp.UserQuotaService
 	userWalletService         = services.ServiceGroupApp.UserWalletService
 	userSettingsService       = services.ServiceGroupApp.UserSettingsService
 	announcementService       = services.ServiceGroupApp.AnnouncementService

@@ -160,8 +160,10 @@ func (s *CheckinService) Checkin(userGuid string, req CheckinRequest) (*domains.
 		}
 		if reward > 0 {
 			amountMicros := WholeAmountToMicros(reward)
-			if err := UserQuotaServiceApp.RechargeAmount(tx, userGuid, req.TokenID, amountMicros); err != nil {
-				return err
+			if req.TokenID > 0 {
+				if err := TokenServiceApp.AddAmount(tx, req.TokenID, userGuid, amountMicros); err != nil {
+					return err
+				}
 			}
 			if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
 				UserGuid:     userGuid,

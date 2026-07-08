@@ -111,6 +111,12 @@ func (s *PaymentService) CreateWithContext(ctx context.Context, userGuid string,
 		}
 		order.TokenGuid = token.Guid
 	}
+	if isWechatPaymentProvider(order.Provider) {
+		// 支付渠道未开放或配置不完整时直接拒绝创建，避免产生无效的失败订单记录。
+		if err := s.validateWechatPaymentReady(); err != nil {
+			return nil, err
+		}
+	}
 	if err := createWithCrud(&s.CrudService, &order); err != nil {
 		return nil, err
 	}
@@ -174,8 +180,10 @@ func (s *PaymentService) Confirm(req ConfirmPaymentRequest) (*domains.PaymentOrd
 				return err
 			}
 		}
-		if err := UserQuotaServiceApp.RechargeAmount(tx, order.UserGuid, order.TokenID, order.AmountMicros); err != nil {
-			return err
+		if order.TokenID > 0 {
+			if err := TokenServiceApp.AddAmount(tx, order.TokenID, order.UserGuid, order.AmountMicros); err != nil {
+				return err
+			}
 		}
 		recordType := domains.WalletRecordTypeRecharge
 		source := domains.WalletSourcePayment

@@ -36,5 +36,10 @@ func (r ClientsRouter) InitClientsRouter(router *gin.RouterGroup) {
 			checkin.PUT("/settings", checkinApi.SetSettings)
 			checkin.GET("/list", checkinApi.List)
 		}
+
+		users := clients.Group("users")
+		{
+			users.GET("/list", clientUserApi.List)
+		}
 	}
 }

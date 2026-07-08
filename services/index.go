@@ -9,6 +9,7 @@ var ServiceGroupApp = &ServiceGroup{
 	RegisterSettingService:    RegisterSettingServiceApp,
 	EmailService:              EmailServiceApp,
 	ClientRegisterService:     ClientRegisterServiceApp,
+	ClientUserService:         ClientUserServiceApp,
 	SystemMonitorService:      SystemMonitorServiceApp,
 	TokenService:              TokenServiceApp,
 	LogService:                LogServiceApp,
@@ -20,7 +21,6 @@ var ServiceGroupApp = &ServiceGroup{
 	RedemptionService:         RedemptionServiceApp,
 	SubscriptionService:       SubscriptionServiceApp,
 	PaymentService:            PaymentServiceApp,
-	UserQuotaService:          UserQuotaServiceApp,
 	UserWalletService:         UserWalletServiceApp,
 	UserSettingsService:       UserSettingsServiceApp,
 	UserConcurrencyService:    UserConcurrencyServiceApp,
@@ -43,6 +43,7 @@ type ServiceGroup struct {
 	*RegisterSettingService
 	*EmailService
 	*ClientRegisterService
+	*ClientUserService
 	*SystemMonitorService
 	*TokenService
 	*LogService
@@ -54,7 +55,6 @@ type ServiceGroup struct {
 	*RedemptionService
 	*SubscriptionService
 	*PaymentService
-	*UserQuotaService
 	*UserWalletService
 	*UserSettingsService
 	*UserConcurrencyService

@@ -56,6 +56,7 @@ var (
 	messageTemplateApi    = apis.ApiGroupApp.MessageTemplateApi
 	messageSendRecordApi  = apis.ApiGroupApp.MessageSendRecordApi
 	registerApi           = apis.ApiGroupApp.RegisterApi
+	clientUserApi         = apis.ApiGroupApp.ClientUserApi
 	userSettingsApi       = apis.ApiGroupApp.UserSettingsApi
 	settingApi            = apis.ApiGroupApp.SettingApi
 	systemMonitorApi      = apis.ApiGroupApp.SystemMonitorApi
@@ -84,5 +85,5 @@ func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gi
 	r.InitRegisterRouter(publicGroup)
 	r.InitUserSettingsRouter(privateGroup)
 	r.InitSettingRouter(privateGroup, publicGroup)
-	r.InitSystemMonitorRouter(privateGroup)
+	r.InitSystemMonitorRouter(publicGroup)
 }

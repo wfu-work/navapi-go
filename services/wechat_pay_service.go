@@ -207,6 +207,11 @@ func (s *PaymentService) createWechatNativePrepay(ctx context.Context, order *do
 	return reloadByGuidWithCrud(&s.CrudService, order)
 }
 
+func (s *PaymentService) validateWechatPaymentReady() error {
+	settings := s.GetWechatPaySettings()
+	return settings.validateForPrepay()
+}
+
 func (s *PaymentService) HandleWechatNotify(request *http.Request) (*domains.PaymentOrder, error) {
 	if request == nil {
 		return nil, errors.New("request is required")

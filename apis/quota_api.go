@@ -1,7 +1,7 @@
 package apis
 
 import (
-	"navapi-go/domains"
+	"navapi-go/services"
 	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
@@ -18,10 +18,10 @@ type QuotaApi struct{}
 // @Security ApiKeyAuth
 // @Accept json
 // @Produce json
-// @Success 200 {object} response.Response{data=domains.UserQuota,msg=string}
+// @Success 200 {object} response.Response{data=services.WalletBalanceAccount,msg=string}
 // @Router /balance/self [get]
 func (a QuotaApi) Self(c *gin.Context) {
-	account, err := userQuotaService.Get(utils.GetUserGuid(c))
+	account, err := userWalletService.GetBalanceAccount(utils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -44,7 +44,7 @@ func (a QuotaApi) Self(c *gin.Context) {
 func (a QuotaApi) List(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := userQuotaService.List(query)
+	result, err := userWalletService.ListBalanceAccounts(query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -59,18 +59,19 @@ func (a QuotaApi) List(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Accept json
 // @Produce json
-// @Param data body domains.UserQuota true "用户余额账户对象"
-// @Success 200 {object} response.Response{data=domains.UserQuota,msg=string}
+// @Param data body services.WalletBalanceAccount true "用户余额账户对象"
+// @Success 200 {object} response.Response{data=services.WalletBalanceAccount,msg=string}
 // @Router /balance [put]
 func (a QuotaApi) Update(c *gin.Context) {
-	var account domains.UserQuota
+	var account services.WalletBalanceAccount
 	if err := c.ShouldBindJSON(&account); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := userQuotaService.Update(&account); err != nil {
+	updated, err := userWalletService.UpdateBalanceAccount(account)
+	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	response.Ok(account, c)
+	response.Ok(updated, c)
 }

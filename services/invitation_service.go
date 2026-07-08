@@ -262,9 +262,6 @@ func (s *InvitationService) AcceptInvite(userGuid string, req AcceptInviteReques
 		}
 		if code.OwnerUserGuid != "" && code.RewardAmount > 0 {
 			amountMicros := WholeAmountToMicros(code.RewardAmount)
-			if err := UserQuotaServiceApp.RechargeAmount(tx, code.OwnerUserGuid, 0, amountMicros); err != nil {
-				return err
-			}
 			if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
 				UserGuid:     code.OwnerUserGuid,
 				Type:         domains.WalletRecordTypeCommission,
@@ -279,8 +276,10 @@ func (s *InvitationService) AcceptInvite(userGuid string, req AcceptInviteReques
 		}
 		if code.InviteeRewardAmount > 0 {
 			amountMicros := WholeAmountToMicros(code.InviteeRewardAmount)
-			if err := UserQuotaServiceApp.RechargeAmount(tx, userGuid, req.TokenID, amountMicros); err != nil {
-				return err
+			if req.TokenID > 0 {
+				if err := TokenServiceApp.AddAmount(tx, req.TokenID, userGuid, amountMicros); err != nil {
+					return err
+				}
 			}
 			if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
 				UserGuid:     userGuid,

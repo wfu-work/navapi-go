@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	commonServices "github.com/wfu-work/nav-common-go-lib/services"
@@ -173,12 +174,13 @@ func (s *RedemptionService) Stats() (RedemptionStats, error) {
 	return stats, nil
 }
 
-func (s *RedemptionService) Redeem(code string, userGuid string, tokenID uint) (*domains.Redemption, error) {
+func (s *RedemptionService) Redeem(code string, userGuid string) (*domains.Redemption, error) {
+	code = strings.TrimSpace(code)
 	if userGuid == "" {
 		return nil, errors.New("user is required")
 	}
-	if tokenID == 0 {
-		return nil, errors.New("token id is required")
+	if code == "" {
+		return nil, errors.New("redemption code is required")
 	}
 	var redeemed domains.Redemption
 	err := s.DB().Transaction(func(tx *gorm.DB) error {
@@ -196,16 +198,31 @@ func (s *RedemptionService) Redeem(code string, userGuid string, tokenID uint) (
 		if redemption.Amount <= 0 {
 			return errors.New("redemption amount must be greater than zero")
 		}
-		if err := TokenServiceApp.AddAmount(tx, tokenID, userGuid, WholeAmountToMicros(redemption.Amount)); err != nil {
+		amountMicros := WholeAmountToMicros(redemption.Amount)
+		// 卡密只给用户钱包入账，接口调用余额统一由钱包结算。
+		if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
+			UserGuid:     userGuid,
+			Type:         domains.WalletRecordTypeRecharge,
+			Source:       domains.WalletSourceRedemption,
+			Title:        "卡密兑换",
+			AmountMicros: amountMicros,
+			Currency:     "CNY",
+			RelatedGuid:  redemption.Guid,
+			Remark:       redemption.Code,
+			OccurredAt:   now,
+		}); err != nil {
 			return err
 		}
 		redemption.Status = constants.StatusDisabled
 		redemption.UsedBy = userGuid
 		redemption.UsedAt = now
-		updating := redemption
-		updating.Id = 0
-		redemptionCrud := s.CrudService.WithDB(tx)
-		if err := redemptionCrud.Create(updating); err != nil {
+		redemption.UpdateTime = time.Now().UnixMilli()
+		if err := tx.Model(&domains.Redemption{}).Where("id = ?", redemption.Id).Updates(map[string]any{
+			"status":      redemption.Status,
+			"used_by":     redemption.UsedBy,
+			"used_at":     redemption.UsedAt,
+			"update_time": redemption.UpdateTime,
+		}).Error; err != nil {
 			return err
 		}
 		redeemed = redemption

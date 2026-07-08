@@ -547,9 +547,6 @@ func (s RelayService) settleCost(token *domains.ApiToken, amountMicros int64, de
 			if err := TokenServiceApp.ConsumeAmount(tx, token.Id, amountMicros); err != nil {
 				return err
 			}
-			if err := UserQuotaServiceApp.ConsumeAmount(tx, token.UserGuid, amountMicros); err != nil {
-				return err
-			}
 		}
 		return UserWalletServiceApp.RecordConsume(tx, WalletRecordInput{
 			UserGuid:     token.UserGuid,

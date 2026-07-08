@@ -17,6 +17,7 @@ const (
 	WalletSourceRelay        = "relay"
 	WalletSourceCheckin      = "checkin"
 	WalletSourceInvitation   = "invitation"
+	WalletSourceRedemption   = "redemption"
 	WalletSourceManual       = "manual"
 )
 
@@ -47,7 +48,7 @@ type UserWalletRecord struct {
 	UserGuid                           string `json:"userGuid" gorm:"column:user_guid;size:100;index;comment:用户 GUID"`
 	Type                               string `json:"type" gorm:"column:type;size:30;index;comment:流水类型 recharge/subscription/consume/reward/commission"`
 	Direction                          string `json:"direction" gorm:"column:direction;size:20;index;comment:方向 income/outcome"`
-	Source                             string `json:"source" gorm:"column:source;size:60;index;comment:来源 payment/subscription/relay/checkin/invitation/manual"`
+	Source                             string `json:"source" gorm:"column:source;size:60;index;comment:来源 payment/subscription/relay/checkin/invitation/redemption/manual"`
 	Title                              string `json:"title" gorm:"column:title;size:120;comment:标题"`
 	RequestCountDelta                  int64  `json:"requestCountDelta" gorm:"column:request_count_delta;default:0;comment:请求数变动"`
 	AmountMicrosDelta                  int64  `json:"amountMicrosDelta" gorm:"column:amount_micros_delta;default:0;comment:金额微单位变动，收入为正消费为负"`

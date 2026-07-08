@@ -63,13 +63,6 @@ func (s *TokenService) Create(token *domains.ApiToken) error {
 	}
 	normalizeTokenAmounts(token)
 	return s.DB().Transaction(func(tx *gorm.DB) error {
-		quotaService := UserQuotaServiceApp.WithDB(tx)
-		if err := quotaService.Ensure(tx, token.UserGuid); err != nil {
-			return err
-		}
-		if err := quotaService.CheckGroup(token.UserGuid, token.Group); err != nil {
-			return err
-		}
 		if err := token.BeforeCreate(nil); err != nil {
 			return err
 		}
@@ -81,9 +74,6 @@ func (s *TokenService) Create(token *domains.ApiToken) error {
 func (s *TokenService) Update(token *domains.ApiToken) error {
 	token.Group = normalizeGroup(token.Group)
 	if err := ModelServiceApp.ValidateGroup(token.Group); err != nil {
-		return err
-	}
-	if err := UserQuotaServiceApp.CheckGroup(token.UserGuid, token.Group); err != nil {
 		return err
 	}
 	existing, err := s.getExisting(token.Id, token.Guid, token.UserGuid)
@@ -323,9 +313,6 @@ func (s *TokenService) AddAmount(tx *gorm.DB, id uint, userGuid string, amountMi
 		db = db.Where("user_guid = ?", userGuid)
 	}
 	if err := db.First(&token).Error; err != nil {
-		return err
-	}
-	if err := UserQuotaServiceApp.AddAmount(tx, token.UserGuid, amountMicros); err != nil {
 		return err
 	}
 	return tx.Model(&domains.ApiToken{}).Where("id = ?", token.Id).

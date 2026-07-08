@@ -214,8 +214,10 @@ func (s *SubscriptionService) Subscribe(userGuid string, req SubscribeRequest, p
 		}
 		amountMicros := WholeAmountToMicros(plan.Amount)
 		if amountMicros > 0 {
-			if err := UserQuotaServiceApp.RechargeAmount(tx, userGuid, req.TokenID, amountMicros); err != nil {
-				return err
+			if req.TokenID > 0 {
+				if err := TokenServiceApp.AddAmount(tx, req.TokenID, userGuid, amountMicros); err != nil {
+					return err
+				}
 			}
 			if err := UserWalletServiceApp.RecordIncome(tx, WalletRecordInput{
 				UserGuid:         userGuid,

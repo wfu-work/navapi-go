@@ -13,8 +13,7 @@ import (
 type RedemptionApi struct{}
 
 type redeemRequest struct {
-	Code    string `json:"code" binding:"required"`
-	TokenID uint   `json:"tokenId" binding:"required"`
+	Code string `json:"code" binding:"required"`
 }
 
 // List 兑换码列表
@@ -203,7 +202,7 @@ func (a RedemptionApi) Redeem(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	redemption, err := redemptionService.Redeem(req.Code, utils.GetUserGuid(c), req.TokenID)
+	redemption, err := redemptionService.Redeem(req.Code, utils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
