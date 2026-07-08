@@ -2,7 +2,6 @@ package apis
 
 import (
 	"navapi-go/domains"
-	"navapi-go/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
@@ -12,7 +11,7 @@ import (
 type UserSettingsApi struct{}
 
 func (a UserSettingsApi) Self(c *gin.Context) {
-	settings, err := services.UserSettingsServiceApp.Get(utils.GetUserGuid(c))
+	settings, err := userSettingsService.Get(utils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -26,7 +25,7 @@ func (a UserSettingsApi) SaveSelf(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	settings, err := services.UserSettingsServiceApp.SavePreferences(utils.GetUserGuid(c), &req)
+	settings, err := userSettingsService.SavePreferences(utils.GetUserGuid(c), &req)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

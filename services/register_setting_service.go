@@ -35,7 +35,7 @@ type RegisterSettings struct {
 
 type RegisterSettingService struct{}
 
-var RegisterSettingServiceApp = RegisterSettingService{}
+var RegisterSettingServiceApp = new(RegisterSettingService)
 
 func (s RegisterSettingService) Get() RegisterSettings {
 	settings := defaultRegisterSettings()

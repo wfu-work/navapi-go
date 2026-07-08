@@ -26,7 +26,7 @@ type SettingApi struct{}
 // @Router /settings/list [get]
 func (SettingApi) List(c *gin.Context) {
 	params := queryParams(c)
-	items, total, err := services.SettingServiceApp.List(params)
+	items, total, err := settingService.List(params)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -50,7 +50,7 @@ func (SettingApi) Save(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.SettingServiceApp.Save(setting); err != nil {
+	if err := settingService.Save(setting); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -67,7 +67,7 @@ func (SettingApi) Save(c *gin.Context) {
 // @Router /contact/settings [get]
 // @Router /settings/contact [get]
 func (SettingApi) Contact(c *gin.Context) {
-	settings, err := services.SettingServiceApp.ContactSettings()
+	settings, err := settingService.ContactSettings()
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -91,7 +91,7 @@ func (SettingApi) SaveContact(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	saved, err := services.SettingServiceApp.SaveContactSettings(settings)
+	saved, err := settingService.SaveContactSettings(settings)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -110,7 +110,7 @@ func (SettingApi) SaveContact(c *gin.Context) {
 // @Success 200 {object} response.Response{data=bool,msg=string}
 // @Router /settings/{guid} [delete]
 func (SettingApi) Delete(c *gin.Context) {
-	if err := services.SettingServiceApp.Delete(c.Param("guid")); err != nil {
+	if err := settingService.Delete(c.Param("guid")); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

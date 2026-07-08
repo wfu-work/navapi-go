@@ -1,6 +1,10 @@
 package routers
 
-import "github.com/gin-gonic/gin"
+import (
+	"navapi-go/middlewares"
+
+	"github.com/gin-gonic/gin"
+)
 
 type ModelRouter struct{}
 
@@ -14,15 +18,15 @@ func (r ModelRouter) InitModelRouter(privateGroup *gin.RouterGroup, publicGroup 
 	{
 		group.GET("/list", modelApi.List)
 		group.GET("/groups", modelApi.Groups)
-		group.POST("/groups", modelApi.UpsertGroup)
-		group.PUT("/groups", modelApi.UpsertGroup)
-		group.DELETE("/groups/:guid", modelApi.DeleteGroup)
-		group.POST("/", modelApi.Upsert)
-		group.PUT("/", modelApi.Upsert)
-		group.DELETE("/:guid", modelApi.Delete)
+		group.POST("/groups", middlewares.AdminOnly(), modelApi.UpsertGroup)
+		group.PUT("/groups", middlewares.AdminOnly(), modelApi.UpsertGroup)
+		group.DELETE("/groups/:guid", middlewares.AdminOnly(), modelApi.DeleteGroup)
+		group.POST("/", middlewares.AdminOnly(), modelApi.Upsert)
+		group.PUT("/", middlewares.AdminOnly(), modelApi.Upsert)
+		group.DELETE("/:guid", middlewares.AdminOnly(), modelApi.Delete)
 	}
 
-	vendors := privateGroup.Group("vendors")
+	vendors := privateGroup.Group("vendors", middlewares.AdminOnly())
 	{
 		vendors.GET("/list", modelApi.Vendors)
 		vendors.POST("/", modelApi.UpsertVendor)

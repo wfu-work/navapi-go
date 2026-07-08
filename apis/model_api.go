@@ -2,7 +2,6 @@ package apis
 
 import (
 	"navapi-go/domains"
-	"navapi-go/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
@@ -20,7 +19,7 @@ type ModelApi struct{}
 // @Success 200 {object} response.Response{data=[]domains.ModelMeta,msg=string}
 // @Router /models/list [get]
 func (a ModelApi) List(c *gin.Context) {
-	models, err := services.ModelServiceApp.ListMeta()
+	models, err := modelService.ListMeta()
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -37,7 +36,7 @@ func (a ModelApi) List(c *gin.Context) {
 // @Success 200 {object} response.Response{data=[]domains.ModelMeta,msg=string}
 // @Router /models/meta [get]
 func (a ModelApi) PublicList(c *gin.Context) {
-	models, err := services.ModelServiceApp.PublicListMeta()
+	models, err := modelService.PublicListMeta()
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -62,7 +61,7 @@ func (a ModelApi) Upsert(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.ModelServiceApp.UpsertMeta(&meta); err != nil {
+	if err := modelService.UpsertMeta(&meta); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -80,7 +79,7 @@ func (a ModelApi) Upsert(c *gin.Context) {
 // @Success 200 {object} response.Response{data=bool,msg=string}
 // @Router /models/{guid} [delete]
 func (a ModelApi) Delete(c *gin.Context) {
-	if err := services.ModelServiceApp.DeleteMeta(c.Param("guid")); err != nil {
+	if err := modelService.DeleteMeta(c.Param("guid")); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -97,7 +96,7 @@ func (a ModelApi) Delete(c *gin.Context) {
 // @Success 200 {object} response.Response{data=[]domains.ModelGroup,msg=string}
 // @Router /models/groups [get]
 func (a ModelApi) Groups(c *gin.Context) {
-	groups, err := services.ModelServiceApp.ListGroups(true)
+	groups, err := modelService.ListGroups(true)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -114,7 +113,7 @@ func (a ModelApi) Groups(c *gin.Context) {
 // @Success 200 {object} response.Response{data=[]domains.ModelGroup,msg=string}
 // @Router /models/group-options [get]
 func (a ModelApi) PublicGroups(c *gin.Context) {
-	groups, err := services.ModelServiceApp.ListGroups(false)
+	groups, err := modelService.ListGroups(false)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -139,7 +138,7 @@ func (a ModelApi) UpsertGroup(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.ModelServiceApp.UpsertGroup(&group); err != nil {
+	if err := modelService.UpsertGroup(&group); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -157,7 +156,7 @@ func (a ModelApi) UpsertGroup(c *gin.Context) {
 // @Success 200 {object} response.Response{data=bool,msg=string}
 // @Router /models/groups/{guid} [delete]
 func (a ModelApi) DeleteGroup(c *gin.Context) {
-	if err := services.ModelServiceApp.DeleteGroup(c.Param("guid")); err != nil {
+	if err := modelService.DeleteGroup(c.Param("guid")); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -173,7 +172,7 @@ func (a ModelApi) DeleteGroup(c *gin.Context) {
 // @Success 200 {object} response.Response{data=[]domains.VendorMeta,msg=string}
 // @Router /vendors [get]
 func (a ModelApi) PublicVendors(c *gin.Context) {
-	vendors, err := services.ModelServiceApp.ListVendors(false)
+	vendors, err := modelService.ListVendors(false)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -191,7 +190,7 @@ func (a ModelApi) PublicVendors(c *gin.Context) {
 // @Success 200 {object} response.Response{data=[]domains.VendorMeta,msg=string}
 // @Router /vendors/list [get]
 func (a ModelApi) Vendors(c *gin.Context) {
-	vendors, err := services.ModelServiceApp.ListVendors(true)
+	vendors, err := modelService.ListVendors(true)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -216,7 +215,7 @@ func (a ModelApi) UpsertVendor(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.ModelServiceApp.UpsertVendor(&meta); err != nil {
+	if err := modelService.UpsertVendor(&meta); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -239,7 +238,7 @@ func (a ModelApi) DeleteVendor(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.ModelServiceApp.DeleteVendor(id); err != nil {
+	if err := modelService.DeleteVendor(id); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

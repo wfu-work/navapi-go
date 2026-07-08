@@ -1,7 +1,6 @@
 package apis
 
 import (
-	"navapi-go/services"
 	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
@@ -21,7 +20,7 @@ type WalletApi struct{}
 // @Success 200 {object} response.Response{data=domains.UserWallet,msg=string}
 // @Router /wallet/self [get]
 func (a WalletApi) Self(c *gin.Context) {
-	wallet, err := services.UserWalletServiceApp.Get(commonUtils.GetUserGuid(c))
+	wallet, err := userWalletService.Get(commonUtils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -44,7 +43,7 @@ func (a WalletApi) Self(c *gin.Context) {
 func (a WalletApi) SelfRecords(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.UserWalletServiceApp.ListRecords(commonUtils.GetUserGuid(c), query)
+	result, err := userWalletService.ListRecords(commonUtils.GetUserGuid(c), query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

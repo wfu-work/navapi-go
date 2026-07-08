@@ -18,6 +18,9 @@ type OptionService struct {
 var OptionServiceApp = &OptionService{cache: map[string]string{}}
 
 func (s *OptionService) Load() error {
+	if global.NAV_DB == nil {
+		return nil
+	}
 	var options []domains.Option
 	if err := global.NAV_DB.Find(&options).Error; err != nil {
 		return err

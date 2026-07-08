@@ -21,7 +21,7 @@ type CheckinApi struct{}
 // @Success 200 {object} response.Response{data=services.CheckinSettings,msg=string}
 // @Router /checkin/settings [get]
 func (a CheckinApi) Settings(c *gin.Context) {
-	response.Ok(services.CheckinServiceApp.Settings(), c)
+	response.Ok(checkinService.Settings(), c)
 }
 
 // SetSettings 设置签到配置
@@ -40,11 +40,11 @@ func (a CheckinApi) SetSettings(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.CheckinServiceApp.SetSettings(settings); err != nil {
+	if err := checkinService.SetSettings(settings); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	response.Ok(services.CheckinServiceApp.Settings(), c)
+	response.Ok(checkinService.Settings(), c)
 }
 
 // Status 当前用户签到状态
@@ -57,7 +57,7 @@ func (a CheckinApi) SetSettings(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /checkin/self/status [get]
 func (a CheckinApi) Status(c *gin.Context) {
-	status, err := services.CheckinServiceApp.Status(utils.GetUserGuid(c))
+	status, err := checkinService.Status(utils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -78,7 +78,7 @@ func (a CheckinApi) Status(c *gin.Context) {
 func (a CheckinApi) Checkin(c *gin.Context) {
 	var req services.CheckinRequest
 	_ = c.ShouldBindJSON(&req)
-	record, err := services.CheckinServiceApp.Checkin(utils.GetUserGuid(c), req)
+	record, err := checkinService.Checkin(utils.GetUserGuid(c), req)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -101,7 +101,7 @@ func (a CheckinApi) Checkin(c *gin.Context) {
 func (a CheckinApi) List(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.CheckinServiceApp.List("", query)
+	result, err := checkinService.List("", query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -124,7 +124,7 @@ func (a CheckinApi) List(c *gin.Context) {
 func (a CheckinApi) Self(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.CheckinServiceApp.List(utils.GetUserGuid(c), query)
+	result, err := checkinService.List(utils.GetUserGuid(c), query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

@@ -1,11 +1,15 @@
 package routers
 
-import "github.com/gin-gonic/gin"
+import (
+	"navapi-go/middlewares"
+
+	"github.com/gin-gonic/gin"
+)
 
 type ProviderRouter struct{}
 
 func (r ProviderRouter) InitProviderRouter(router *gin.RouterGroup) {
-	group := router.Group("provider")
+	group := router.Group("provider", middlewares.AdminOnly())
 	{
 		group.GET("/list", providerApi.List)
 		group.POST("/test", providerApi.Test)

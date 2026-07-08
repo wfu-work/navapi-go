@@ -13,7 +13,7 @@ type MessageEmailConfigApi struct{}
 func (a MessageEmailConfigApi) List(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.MessageEmailConfigServiceApp.List(query, c.Query("status"))
+	result, err := messageEmailConfigService.List(query, c.Query("status"))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -27,7 +27,7 @@ func (a MessageEmailConfigApi) Save(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	item, err := services.MessageEmailConfigServiceApp.Save(req)
+	item, err := messageEmailConfigService.Save(req)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -36,7 +36,7 @@ func (a MessageEmailConfigApi) Save(c *gin.Context) {
 }
 
 func (a MessageEmailConfigApi) SetDefault(c *gin.Context) {
-	if err := services.MessageEmailConfigServiceApp.SetDefault(c.Param("guid")); err != nil {
+	if err := messageEmailConfigService.SetDefault(c.Param("guid")); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -50,7 +50,7 @@ func (a MessageEmailConfigApi) DebugSend(c *gin.Context) {
 		return
 	}
 	req.ConfigGuid = c.Param("guid")
-	result, err := services.EmailServiceApp.DebugEmailConfig(req)
+	result, err := emailService.DebugEmailConfig(req)
 	if err != nil {
 		if result != nil {
 			response.FailWithDetailed(result, err.Error(), c)
@@ -63,7 +63,7 @@ func (a MessageEmailConfigApi) DebugSend(c *gin.Context) {
 }
 
 func (a MessageEmailConfigApi) Disable(c *gin.Context) {
-	if err := services.MessageEmailConfigServiceApp.Disable(c.Param("guid")); err != nil {
+	if err := messageEmailConfigService.Disable(c.Param("guid")); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

@@ -13,7 +13,7 @@ type MessageTemplateApi struct{}
 func (a MessageTemplateApi) List(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.MessageTemplateServiceApp.List(query, c.Query("channel"), c.Query("status"))
+	result, err := messageTemplateService.List(query, c.Query("channel"), c.Query("status"))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -22,7 +22,7 @@ func (a MessageTemplateApi) List(c *gin.Context) {
 }
 
 func (a MessageTemplateApi) Get(c *gin.Context) {
-	item, err := services.MessageTemplateServiceApp.Get(c.Param("identity"))
+	item, err := messageTemplateService.Get(c.Param("identity"))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -36,7 +36,7 @@ func (a MessageTemplateApi) Save(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	item, err := services.MessageTemplateServiceApp.Save(req)
+	item, err := messageTemplateService.Save(req)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -45,7 +45,7 @@ func (a MessageTemplateApi) Save(c *gin.Context) {
 }
 
 func (a MessageTemplateApi) Disable(c *gin.Context) {
-	if err := services.MessageTemplateServiceApp.Disable(c.Param("guid")); err != nil {
+	if err := messageTemplateService.Disable(c.Param("guid")); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -58,7 +58,7 @@ func (a MessageTemplateApi) Preview(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	result, err := services.EmailServiceApp.PreviewTemplate(req)
+	result, err := emailService.PreviewTemplate(req)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

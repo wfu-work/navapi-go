@@ -1,6 +1,10 @@
 package apis
 
-import "github.com/gin-gonic/gin"
+import (
+	"navapi-go/services"
+
+	"github.com/gin-gonic/gin"
+)
 
 var ApiGroupApp = new(ApiGroup)
 
@@ -28,7 +32,38 @@ type ApiGroup struct {
 	RegisterApi
 	UserSettingsApi
 	SettingApi
+	SystemMonitorApi
 }
+
+var (
+	gatewayService            = services.ServiceGroupApp.GatewayService
+	relayService              = services.ServiceGroupApp.RelayService
+	riskControlService        = services.ServiceGroupApp.RiskControlService
+	registerSettingService    = services.ServiceGroupApp.RegisterSettingService
+	emailService              = services.ServiceGroupApp.EmailService
+	clientRegisterService     = services.ServiceGroupApp.ClientRegisterService
+	tokenService              = services.ServiceGroupApp.TokenService
+	logService                = services.ServiceGroupApp.LogService
+	modelService              = services.ServiceGroupApp.ModelService
+	providerService           = services.ServiceGroupApp.ProviderService
+	pricingService            = services.ServiceGroupApp.PricingService
+	optionService             = services.ServiceGroupApp.OptionService
+	taskService               = services.ServiceGroupApp.TaskService
+	redemptionService         = services.ServiceGroupApp.RedemptionService
+	subscriptionService       = services.ServiceGroupApp.SubscriptionService
+	paymentService            = services.ServiceGroupApp.PaymentService
+	userQuotaService          = services.ServiceGroupApp.UserQuotaService
+	userWalletService         = services.ServiceGroupApp.UserWalletService
+	userSettingsService       = services.ServiceGroupApp.UserSettingsService
+	announcementService       = services.ServiceGroupApp.AnnouncementService
+	invitationService         = services.ServiceGroupApp.InvitationService
+	checkinService            = services.ServiceGroupApp.CheckinService
+	settingService            = services.ServiceGroupApp.SettingService
+	messageEmailConfigService = services.ServiceGroupApp.MessageEmailConfigService
+	messageTemplateService    = services.ServiceGroupApp.MessageTemplateService
+	messageSendRecordService  = services.ServiceGroupApp.MessageSendRecordService
+	systemMonitorService      = services.ServiceGroupApp.SystemMonitorService
+)
 
 func queryParams(c *gin.Context) map[string]string {
 	params := make(map[string]string)

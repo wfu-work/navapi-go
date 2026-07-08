@@ -2,7 +2,6 @@ package apis
 
 import (
 	"navapi-go/domains"
-	"navapi-go/services"
 	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
@@ -28,7 +27,7 @@ func (a TaskApi) Create(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.TaskServiceApp.Create(&task); err != nil {
+	if err := taskService.Create(&task); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -52,7 +51,7 @@ func (a TaskApi) CreateSelf(c *gin.Context) {
 		return
 	}
 	task.UserGuid = utils.GetUserGuid(c)
-	if err := services.TaskServiceApp.Create(&task); err != nil {
+	if err := taskService.Create(&task); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -76,7 +75,7 @@ func (a TaskApi) Update(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.TaskServiceApp.Update(&task, ""); err != nil {
+	if err := taskService.Update(&task, ""); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -100,7 +99,7 @@ func (a TaskApi) UpdateSelf(c *gin.Context) {
 		return
 	}
 	task.UserGuid = utils.GetUserGuid(c)
-	if err := services.TaskServiceApp.Update(&task, task.UserGuid); err != nil {
+	if err := taskService.Update(&task, task.UserGuid); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -119,7 +118,7 @@ func (a TaskApi) UpdateSelf(c *gin.Context) {
 // @Success 200 {object} response.Response{data=bool,msg=string}
 // @Router /task/{task_id} [delete]
 func (a TaskApi) Delete(c *gin.Context) {
-	if err := services.TaskServiceApp.Delete(c.Param("task_id"), ""); err != nil {
+	if err := taskService.Delete(c.Param("task_id"), ""); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -137,7 +136,7 @@ func (a TaskApi) Delete(c *gin.Context) {
 // @Success 200 {object} response.Response{data=bool,msg=string}
 // @Router /task/self/{task_id} [delete]
 func (a TaskApi) DeleteSelf(c *gin.Context) {
-	if err := services.TaskServiceApp.Delete(c.Param("task_id"), utils.GetUserGuid(c)); err != nil {
+	if err := taskService.Delete(c.Param("task_id"), utils.GetUserGuid(c)); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -159,7 +158,7 @@ func (a TaskApi) DeleteSelf(c *gin.Context) {
 func (a TaskApi) List(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.TaskServiceApp.List("", query)
+	result, err := taskService.List("", query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -182,7 +181,7 @@ func (a TaskApi) List(c *gin.Context) {
 func (a TaskApi) Self(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.TaskServiceApp.List(utils.GetUserGuid(c), query)
+	result, err := taskService.List(utils.GetUserGuid(c), query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -201,7 +200,7 @@ func (a TaskApi) Self(c *gin.Context) {
 // @Success 200 {object} response.Response{data=domains.Task,msg=string}
 // @Router /task/{task_id} [get]
 func (a TaskApi) Get(c *gin.Context) {
-	task, err := services.TaskServiceApp.Get(c.Param("task_id"), "")
+	task, err := taskService.Get(c.Param("task_id"), "")
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -220,7 +219,7 @@ func (a TaskApi) Get(c *gin.Context) {
 // @Success 200 {object} response.Response{data=domains.Task,msg=string}
 // @Router /task/self/{task_id} [get]
 func (a TaskApi) GetSelf(c *gin.Context) {
-	task, err := services.TaskServiceApp.Get(c.Param("task_id"), utils.GetUserGuid(c))
+	task, err := taskService.Get(c.Param("task_id"), utils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

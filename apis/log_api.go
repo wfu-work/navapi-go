@@ -27,7 +27,7 @@ type UsageLogApi struct{}
 func (a UsageLogApi) List(c *gin.Context) {
 	var query services.UsageLogQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.LogServiceApp.List("", query)
+	result, err := logService.List("", query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -50,7 +50,7 @@ func (a UsageLogApi) List(c *gin.Context) {
 func (a UsageLogApi) Self(c *gin.Context) {
 	var query services.UsageLogQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.LogServiceApp.List(middlewares.ScopedUserGuid(c), query)
+	result, err := logService.List(middlewares.ScopedUserGuid(c), query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -70,7 +70,7 @@ func (a UsageLogApi) Self(c *gin.Context) {
 func (a UsageLogApi) Stats(c *gin.Context) {
 	var query services.UsageLogQuery
 	_ = c.ShouldBindQuery(&query)
-	stats, err := services.LogServiceApp.Stats("", query)
+	stats, err := logService.Stats("", query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -90,7 +90,7 @@ func (a UsageLogApi) Stats(c *gin.Context) {
 func (a UsageLogApi) SelfStats(c *gin.Context) {
 	var query services.UsageLogQuery
 	_ = c.ShouldBindQuery(&query)
-	stats, err := services.LogServiceApp.Stats(middlewares.ScopedUserGuid(c), query)
+	stats, err := logService.Stats(middlewares.ScopedUserGuid(c), query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -109,7 +109,7 @@ func (a UsageLogApi) SelfStats(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /data/list [get]
 func (a UsageLogApi) Data(c *gin.Context) {
-	data, err := services.LogServiceApp.DailyData("", parseDaysQuery(c))
+	data, err := logService.DailyData("", parseDaysQuery(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -128,7 +128,7 @@ func (a UsageLogApi) Data(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /data/self/list [get]
 func (a UsageLogApi) SelfData(c *gin.Context) {
-	data, err := services.LogServiceApp.DailyData(middlewares.ScopedUserGuid(c), parseDaysQuery(c))
+	data, err := logService.DailyData(middlewares.ScopedUserGuid(c), parseDaysQuery(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -150,7 +150,7 @@ func (a UsageLogApi) SelfData(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /usage/summary [get]
 func (a UsageLogApi) UsageSummary(c *gin.Context) {
-	summary, err := services.LogServiceApp.UsageSummaryByQuery("", parseUsageSummaryQuery(c))
+	summary, err := logService.UsageSummaryByQuery("", parseUsageSummaryQuery(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -172,7 +172,7 @@ func (a UsageLogApi) UsageSummary(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /usage/self/summary [get]
 func (a UsageLogApi) SelfUsageSummary(c *gin.Context) {
-	summary, err := services.LogServiceApp.UsageSummaryByQuery(middlewares.ScopedUserGuid(c), parseUsageSummaryQuery(c))
+	summary, err := logService.UsageSummaryByQuery(middlewares.ScopedUserGuid(c), parseUsageSummaryQuery(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

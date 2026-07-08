@@ -2,7 +2,6 @@ package apis
 
 import (
 	"navapi-go/domains"
-	"navapi-go/services"
 	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
@@ -20,7 +19,7 @@ type PricingApi struct{}
 // @Success 200 {object} response.Response{data=[]domains.Pricing,msg=string}
 // @Router /pricing [get]
 func (a PricingApi) Public(c *gin.Context) {
-	pricing, err := services.PricingServiceApp.PublicList()
+	pricing, err := pricingService.PublicList()
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -43,7 +42,7 @@ func (a PricingApi) Public(c *gin.Context) {
 func (a PricingApi) List(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.PricingServiceApp.List(query)
+	result, err := pricingService.List(query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -68,7 +67,7 @@ func (a PricingApi) Upsert(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.PricingServiceApp.Upsert(&pricing); err != nil {
+	if err := pricingService.Upsert(&pricing); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -91,7 +90,7 @@ func (a PricingApi) Delete(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.PricingServiceApp.Delete(id); err != nil {
+	if err := pricingService.Delete(id); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

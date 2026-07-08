@@ -1,6 +1,10 @@
 package routers
 
-import "github.com/gin-gonic/gin"
+import (
+	"navapi-go/middlewares"
+
+	"github.com/gin-gonic/gin"
+)
 
 type PaymentRouter struct{}
 
@@ -12,13 +16,13 @@ func (r PaymentRouter) InitPaymentRouter(privateGroup *gin.RouterGroup, publicGr
 
 	group := privateGroup.Group("payment")
 	{
-		group.GET("/list", paymentApi.List)
+		group.GET("/list", middlewares.AdminOnly(), paymentApi.List)
 		group.GET("/self/list", paymentApi.Self)
-		group.GET("/wechat/settings", paymentApi.WechatSettings)
-		group.PUT("/wechat/settings", paymentApi.SetWechatSettings)
+		group.GET("/wechat/settings", middlewares.AdminOnly(), paymentApi.WechatSettings)
+		group.PUT("/wechat/settings", middlewares.AdminOnly(), paymentApi.SetWechatSettings)
 		group.POST("/create", paymentApi.Create)
-		group.POST("/confirm", paymentApi.Confirm)
-		group.POST("/close", paymentApi.AdminClose)
+		group.POST("/confirm", middlewares.AdminOnly(), paymentApi.Confirm)
+		group.POST("/close", middlewares.AdminOnly(), paymentApi.AdminClose)
 		group.POST("/self/close", paymentApi.Close)
 	}
 }

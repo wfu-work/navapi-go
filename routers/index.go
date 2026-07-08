@@ -31,6 +31,7 @@ type RouterGroup struct {
 	RegisterRouter
 	UserSettingsRouter
 	SettingRouter
+	SystemMonitorRouter
 }
 
 var (
@@ -57,6 +58,7 @@ var (
 	registerApi           = apis.ApiGroupApp.RegisterApi
 	userSettingsApi       = apis.ApiGroupApp.UserSettingsApi
 	settingApi            = apis.ApiGroupApp.SettingApi
+	systemMonitorApi      = apis.ApiGroupApp.SystemMonitorApi
 )
 
 func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gin.RouterGroup) {
@@ -82,4 +84,5 @@ func (r *RouterGroup) InitRouters(publicGroup *gin.RouterGroup, privateGroup *gi
 	r.InitRegisterRouter(publicGroup)
 	r.InitUserSettingsRouter(privateGroup)
 	r.InitSettingRouter(privateGroup, publicGroup)
+	r.InitSystemMonitorRouter(privateGroup)
 }

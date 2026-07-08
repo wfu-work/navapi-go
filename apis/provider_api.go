@@ -34,7 +34,7 @@ type providerKeyRequest struct {
 func (a ProviderApi) List(c *gin.Context) {
 	var query services.ProviderListQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.ProviderServiceApp.List(query)
+	result, err := providerService.List(query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -54,7 +54,7 @@ func (a ProviderApi) List(c *gin.Context) {
 // @Router /provider/{guid} [get]
 func (a ProviderApi) Get(c *gin.Context) {
 	guid := providerGuidParam(c)
-	provider, err := services.ProviderServiceApp.GetByGUID(guid)
+	provider, err := providerService.GetByGUID(guid)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -79,7 +79,7 @@ func (a ProviderApi) Save(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.ProviderServiceApp.Save(&provider); err != nil {
+	if err := providerService.Save(&provider); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -102,7 +102,7 @@ func (a ProviderApi) Test(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	result, err := services.ProviderServiceApp.TestConnection(&provider)
+	result, err := providerService.TestConnection(&provider)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -121,7 +121,7 @@ func (a ProviderApi) Test(c *gin.Context) {
 // @Success 200 {object} response.Response{data=services.ProviderBalanceResult,msg=string}
 // @Router /provider/{guid}/balance [get]
 func (a ProviderApi) Balance(c *gin.Context) {
-	result, err := services.ProviderServiceApp.Balance(providerGuidParam(c))
+	result, err := providerService.Balance(providerGuidParam(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -145,7 +145,7 @@ func (a ProviderApi) TestBalance(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	result, err := services.ProviderServiceApp.TestBalance(&provider)
+	result, err := providerService.TestBalance(&provider)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -164,7 +164,7 @@ func (a ProviderApi) TestBalance(c *gin.Context) {
 // @Success 200 {object} response.Response{data=bool,msg=string}
 // @Router /provider/{guid} [delete]
 func (a ProviderApi) Delete(c *gin.Context) {
-	if err := services.ProviderServiceApp.Delete(providerGuidParam(c)); err != nil {
+	if err := providerService.Delete(providerGuidParam(c)); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -182,7 +182,7 @@ func (a ProviderApi) Delete(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /provider/{guid}/key [get]
 func (a ProviderApi) Key(c *gin.Context) {
-	key, err := services.ProviderServiceApp.GetKey(providerGuidParam(c))
+	key, err := providerService.GetKey(providerGuidParam(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -207,7 +207,7 @@ func (a ProviderApi) SetKey(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.ProviderServiceApp.SetKey(providerGuidParam(c), req.Key); err != nil {
+	if err := providerService.SetKey(providerGuidParam(c), req.Key); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

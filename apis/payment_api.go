@@ -32,7 +32,7 @@ type closePaymentRequest struct {
 func (a PaymentApi) List(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.PaymentServiceApp.List("", query)
+	result, err := paymentService.List("", query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -55,7 +55,7 @@ func (a PaymentApi) List(c *gin.Context) {
 func (a PaymentApi) Self(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.PaymentServiceApp.List(utils.GetUserGuid(c), query)
+	result, err := paymentService.List(utils.GetUserGuid(c), query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -79,7 +79,7 @@ func (a PaymentApi) Create(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	order, err := services.PaymentServiceApp.CreateWithContext(c.Request.Context(), utils.GetUserGuid(c), req)
+	order, err := paymentService.CreateWithContext(c.Request.Context(), utils.GetUserGuid(c), req)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -97,7 +97,7 @@ func (a PaymentApi) Create(c *gin.Context) {
 // @Success 200 {object} response.Response{data=services.WechatPaySettings,msg=string}
 // @Router /payment/wechat/settings [get]
 func (a PaymentApi) WechatSettings(c *gin.Context) {
-	response.Ok(services.PaymentServiceApp.GetWechatPaySettings().MaskSecrets(), c)
+	response.Ok(paymentService.GetWechatPaySettings().MaskSecrets(), c)
 }
 
 // SetWechatSettings 设置微信支付配置
@@ -116,11 +116,11 @@ func (a PaymentApi) SetWechatSettings(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.PaymentServiceApp.SetWechatPaySettings(settings); err != nil {
+	if err := paymentService.SetWechatPaySettings(settings); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	response.Ok(services.PaymentServiceApp.GetWechatPaySettings().MaskSecrets(), c)
+	response.Ok(paymentService.GetWechatPaySettings().MaskSecrets(), c)
 }
 
 // WechatNotify 微信支付回调通知
@@ -131,7 +131,7 @@ func (a PaymentApi) SetWechatSettings(c *gin.Context) {
 // @Produce json
 // @Router /payment/wechat/notify [post]
 func (a PaymentApi) WechatNotify(c *gin.Context) {
-	if _, err := services.PaymentServiceApp.HandleWechatNotify(c.Request); err != nil {
+	if _, err := paymentService.HandleWechatNotify(c.Request); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "FAIL", "message": err.Error()})
 		return
 	}
@@ -154,7 +154,7 @@ func (a PaymentApi) Confirm(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	order, err := services.PaymentServiceApp.Confirm(req)
+	order, err := paymentService.Confirm(req)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -178,7 +178,7 @@ func (a PaymentApi) Close(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.PaymentServiceApp.Close(req.OrderNo, utils.GetUserGuid(c)); err != nil {
+	if err := paymentService.Close(req.OrderNo, utils.GetUserGuid(c)); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -201,7 +201,7 @@ func (a PaymentApi) AdminClose(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.PaymentServiceApp.Close(req.OrderNo, ""); err != nil {
+	if err := paymentService.Close(req.OrderNo, ""); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

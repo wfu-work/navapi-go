@@ -1,13 +1,17 @@
 package routers
 
-import "github.com/gin-gonic/gin"
+import (
+	"navapi-go/middlewares"
+
+	"github.com/gin-gonic/gin"
+)
 
 type OptionRouter struct{}
 
 func (r OptionRouter) InitOptionRouter(privateGroup *gin.RouterGroup, publicGroup *gin.RouterGroup) {
 	publicGroup.GET("register/settings", optionApi.RegisterSettings)
 
-	group := privateGroup.Group("option")
+	group := privateGroup.Group("option", middlewares.AdminOnly())
 	{
 		group.GET("/list", optionApi.All)
 		group.GET("/risk_control", optionApi.RiskControl)

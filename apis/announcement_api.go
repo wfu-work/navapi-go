@@ -37,7 +37,7 @@ type announcementResponse struct {
 func (a AnnouncementApi) PublicList(c *gin.Context) {
 	var query services.AnnouncementQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.AnnouncementServiceApp.List(query, true)
+	result, err := announcementService.List(query, true)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -57,7 +57,7 @@ func (a AnnouncementApi) PublicList(c *gin.Context) {
 // @Router /announcements/latest [get]
 func (a AnnouncementApi) PublicLatest(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "5"))
-	announcements, err := services.AnnouncementServiceApp.Latest(limit)
+	announcements, err := announcementService.Latest(limit)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -83,7 +83,7 @@ func (a AnnouncementApi) PublicLatest(c *gin.Context) {
 func (a AnnouncementApi) List(c *gin.Context) {
 	var query services.AnnouncementQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.AnnouncementServiceApp.List(query, false)
+	result, err := announcementService.List(query, false)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -109,7 +109,7 @@ func (a AnnouncementApi) List(c *gin.Context) {
 func (a AnnouncementApi) ClientList(c *gin.Context) {
 	var query services.AnnouncementQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.AnnouncementServiceApp.List(query, true)
+	result, err := announcementService.List(query, true)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -134,7 +134,7 @@ func (a AnnouncementApi) Get(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	announcement, err := services.AnnouncementServiceApp.GetByID(id)
+	announcement, err := announcementService.GetByID(id)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -178,7 +178,7 @@ func (a AnnouncementApi) Save(c *gin.Context) {
 		announcement.Id = 0
 		announcement.Guid = ""
 	}
-	if err := services.AnnouncementServiceApp.Save(&announcement); err != nil {
+	if err := announcementService.Save(&announcement); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -201,7 +201,7 @@ func (a AnnouncementApi) Delete(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.AnnouncementServiceApp.Delete(id); err != nil {
+	if err := announcementService.Delete(id); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

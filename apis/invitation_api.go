@@ -22,7 +22,7 @@ type InvitationApi struct{}
 // @Success 200 {object} response.Response{data=services.InviteSettings,msg=string}
 // @Router /invitation/settings [get]
 func (a InvitationApi) Settings(c *gin.Context) {
-	response.Ok(services.InvitationServiceApp.Settings(), c)
+	response.Ok(invitationService.Settings(), c)
 }
 
 // SetSettings 设置邀请配置
@@ -41,11 +41,11 @@ func (a InvitationApi) SetSettings(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.InvitationServiceApp.SetSettings(settings); err != nil {
+	if err := invitationService.SetSettings(settings); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	response.Ok(services.InvitationServiceApp.Settings(), c)
+	response.Ok(invitationService.Settings(), c)
 }
 
 // MyCode 当前用户邀请码
@@ -58,7 +58,7 @@ func (a InvitationApi) SetSettings(c *gin.Context) {
 // @Success 200 {object} response.Response{data=domains.InvitationCode,msg=string}
 // @Router /invitation/self/code [get]
 func (a InvitationApi) MyCode(c *gin.Context) {
-	code, err := services.InvitationServiceApp.EnsureSelfCode(utils.GetUserGuid(c))
+	code, err := invitationService.EnsureSelfCode(utils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -81,7 +81,7 @@ func (a InvitationApi) MyCode(c *gin.Context) {
 func (a InvitationApi) MyCodes(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.InvitationServiceApp.ListCodes(utils.GetUserGuid(c), query)
+	result, err := invitationService.ListCodes(utils.GetUserGuid(c), query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -104,7 +104,7 @@ func (a InvitationApi) MyCodes(c *gin.Context) {
 func (a InvitationApi) Codes(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.InvitationServiceApp.ListCodes("", query)
+	result, err := invitationService.ListCodes("", query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -129,7 +129,7 @@ func (a InvitationApi) SaveCode(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.InvitationServiceApp.SaveCode(&code); err != nil {
+	if err := invitationService.SaveCode(&code); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -152,7 +152,7 @@ func (a InvitationApi) GetCode(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	code, err := services.InvitationServiceApp.GetCode(id)
+	code, err := invitationService.GetCode(id)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -176,7 +176,7 @@ func (a InvitationApi) DeleteCode(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.InvitationServiceApp.DeleteCode(id); err != nil {
+	if err := invitationService.DeleteCode(id); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -199,7 +199,7 @@ func (a InvitationApi) Accept(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	relation, err := services.InvitationServiceApp.AcceptInvite(utils.GetUserGuid(c), req)
+	relation, err := invitationService.AcceptInvite(utils.GetUserGuid(c), req)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -222,7 +222,7 @@ func (a InvitationApi) Accept(c *gin.Context) {
 func (a InvitationApi) Relations(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.InvitationServiceApp.ListRelations("", query)
+	result, err := invitationService.ListRelations("", query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -245,7 +245,7 @@ func (a InvitationApi) Relations(c *gin.Context) {
 func (a InvitationApi) MyRelations(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.InvitationServiceApp.ListRelations(utils.GetUserGuid(c), query)
+	result, err := invitationService.ListRelations(utils.GetUserGuid(c), query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -263,7 +263,7 @@ func (a InvitationApi) MyRelations(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /invitation/stats [get]
 func (a InvitationApi) Stats(c *gin.Context) {
-	stats, err := services.InvitationServiceApp.Stats("")
+	stats, err := invitationService.Stats("")
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -281,7 +281,7 @@ func (a InvitationApi) Stats(c *gin.Context) {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /invitation/self/stats [get]
 func (a InvitationApi) MyStats(c *gin.Context) {
-	stats, err := services.InvitationServiceApp.Stats(utils.GetUserGuid(c))
+	stats, err := invitationService.Stats(utils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

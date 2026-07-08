@@ -24,7 +24,7 @@ type optionRequest struct {
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /option/list [get]
 func (a OptionApi) All(c *gin.Context) {
-	options, err := services.OptionServiceApp.All()
+	options, err := optionService.All()
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -48,7 +48,7 @@ func (a OptionApi) Set(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.OptionServiceApp.Set(req.Key, req.Value); err != nil {
+	if err := optionService.Set(req.Key, req.Value); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -65,7 +65,7 @@ func (a OptionApi) Set(c *gin.Context) {
 // @Success 200 {object} response.Response{data=services.RiskControlSettings,msg=string}
 // @Router /option/risk_control [get]
 func (a OptionApi) RiskControl(c *gin.Context) {
-	response.Ok(services.RiskControlServiceApp.Get(), c)
+	response.Ok(riskControlService.Get(), c)
 }
 
 // SetRiskControl 设置风控配置
@@ -84,11 +84,11 @@ func (a OptionApi) SetRiskControl(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.RiskControlServiceApp.Set(settings); err != nil {
+	if err := riskControlService.Set(settings); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	response.Ok(services.RiskControlServiceApp.Get(), c)
+	response.Ok(riskControlService.Get(), c)
 }
 
 // RegisterSettings 注册配置
@@ -101,7 +101,7 @@ func (a OptionApi) SetRiskControl(c *gin.Context) {
 // @Router /register/settings [get]
 // @Router /option/register_settings [get]
 func (a OptionApi) RegisterSettings(c *gin.Context) {
-	response.Ok(services.RegisterSettingServiceApp.Get(), c)
+	response.Ok(registerSettingService.Get(), c)
 }
 
 // SetRegisterSettings 设置注册配置
@@ -120,11 +120,11 @@ func (a OptionApi) SetRegisterSettings(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.RegisterSettingServiceApp.Set(settings); err != nil {
+	if err := registerSettingService.Set(settings); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	response.Ok(services.RegisterSettingServiceApp.Get(), c)
+	response.Ok(registerSettingService.Get(), c)
 }
 
 // Delete 删除系统配置
@@ -138,7 +138,7 @@ func (a OptionApi) SetRegisterSettings(c *gin.Context) {
 // @Success 200 {object} response.Response{data=bool,msg=string}
 // @Router /option/{key} [delete]
 func (a OptionApi) Delete(c *gin.Context) {
-	if err := services.OptionServiceApp.Delete(c.Param("key")); err != nil {
+	if err := optionService.Delete(c.Param("key")); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

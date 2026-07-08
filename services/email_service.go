@@ -25,7 +25,7 @@ const emailDialTimeout = 10 * time.Second
 
 type EmailService struct{}
 
-var EmailServiceApp = EmailService{}
+var EmailServiceApp = new(EmailService)
 
 type EmailTemplateInput struct {
 	Code      string

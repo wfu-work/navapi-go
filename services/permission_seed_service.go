@@ -68,6 +68,7 @@ func (s *PermissionSeedService) Ensure() error {
 			}
 		}
 
+		userDeniedPermissionGuids := make([]string, 0, len(navapiAPIPermissionSeeds))
 		relations := make([]commonDomains.SysRolePermission, 0, len(navapiAPIPermissionSeeds)*2)
 		for _, seed := range navapiAPIPermissionSeeds {
 			relations = append(relations, commonDomains.SysRolePermission{
@@ -79,6 +80,15 @@ func (s *PermissionSeedService) Ensure() error {
 					RoleGuid:       roleGuidUser,
 					PermissionGuid: seed.Guid,
 				})
+			} else {
+				userDeniedPermissionGuids = append(userDeniedPermissionGuids, seed.Guid)
+			}
+		}
+		// 同步移除普通用户角色上残留的后台权限，避免历史种子关系在升级后继续生效。
+		if len(userDeniedPermissionGuids) > 0 {
+			if err := tx.Where("role_guid = ? AND permission_guid IN ?", roleGuidUser, userDeniedPermissionGuids).
+				Delete(&commonDomains.SysRolePermission{}).Error; err != nil {
+				return err
 			}
 		}
 		if len(relations) == 0 {
@@ -207,7 +217,7 @@ var navapiAPIPermissionSeeds = []apiPermissionSeed{
 	{Guid: "navapi-api-payment-settings", Name: "微信支付设置", Code: "navapi.payment.wechat.settings", Path: "/payment/wechat/settings", Verb: "GET", Sort: 672, Group: "支付"},
 	{Guid: "navapi-api-payment-settings-save", Name: "保存微信支付设置", Code: "navapi.payment.wechat.save", Path: "/payment/wechat/settings", Verb: "PUT", Sort: 673, Group: "支付"},
 	{Guid: "navapi-api-payment-create", Name: "创建支付订单", Code: "navapi.payment.create", Path: "/payment/create", Verb: "POST", User: true, Sort: 674, Group: "支付"},
-	{Guid: "navapi-api-payment-confirm", Name: "确认支付订单", Code: "navapi.payment.confirm", Path: "/payment/confirm", Verb: "POST", User: true, Sort: 675, Group: "支付"},
+	{Guid: "navapi-api-payment-confirm", Name: "确认支付订单", Code: "navapi.payment.confirm", Path: "/payment/confirm", Verb: "POST", Sort: 675, Group: "支付"},
 	{Guid: "navapi-api-payment-close", Name: "关闭支付订单", Code: "navapi.payment.close", Path: "/payment/close", Verb: "POST", Sort: 676, Group: "支付"},
 	{Guid: "navapi-api-payment-self-close", Name: "当前用户关闭支付订单", Code: "navapi.payment.self.close", Path: "/payment/self/close", Verb: "POST", User: true, Sort: 677, Group: "支付"},
 	{Guid: "navapi-api-wallet-self", Name: "当前用户钱包", Code: "navapi.wallet.self", Path: "/wallet/self", Verb: "GET", User: true, Sort: 680, Group: "钱包"},

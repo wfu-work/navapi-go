@@ -24,9 +24,9 @@ func TestGatewayPublicStatusBuildsModelProbeData(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs := []domains.UsageLog{
-		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: now - 30*60*1000}, ModelName: "gpt-5.5", Status: "success", UseTimeMs: 600},
-		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: now - 20*60*1000}, ModelName: "gpt-5.5", Status: "success", UseTimeMs: 800},
-		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: now - 10*60*1000}, ModelName: "gpt-5.5", Status: "error", UseTimeMs: 1200},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: now - 30*60*1000}, ModelName: "gpt-5.5", Status: "success", UseTimeMs: 600, FirstResponseTimeMs: 120},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: now - 20*60*1000}, ModelName: "gpt-5.5", Status: "success", UseTimeMs: 800, FirstResponseTimeMs: 180},
+		{BaseDataEntity: commonDomains.BaseDataEntity{CreateTime: now - 10*60*1000}, ModelName: "gpt-5.5", Status: "error", UseTimeMs: 1200, FirstResponseTimeMs: 300},
 	}
 	if err := db.Create(&logs).Error; err != nil {
 		t.Fatal(err)
@@ -42,6 +42,9 @@ func TestGatewayPublicStatusBuildsModelProbeData(t *testing.T) {
 	if status.Summary.TotalRequests != 3 || status.Summary.SuccessRequests != 2 || status.Summary.ErrorRequests != 1 {
 		t.Fatalf("summary = %+v, want aggregated recent logs", status.Summary)
 	}
+	if status.Summary.AvgLatencyMs != 200 {
+		t.Fatalf("summary avg latency = %d, want first response average 200", status.Summary.AvgLatencyMs)
+	}
 
 	active := findPublicModelStatus(status.Models, "gpt-5.5")
 	if active == nil {
@@ -50,8 +53,14 @@ func TestGatewayPublicStatusBuildsModelProbeData(t *testing.T) {
 	if active.DisplayName != "GPT-5.5" || active.Requests != 3 || active.LastCheckedAt == 0 {
 		t.Fatalf("active model = %+v, want display name and requests", active)
 	}
+	if active.LatencyMs != 200 {
+		t.Fatalf("active model latency = %d, want first response average 200", active.LatencyMs)
+	}
 	if len(active.Segments) != serviceStatusSegmentCount {
 		t.Fatalf("segments = %d, want %d", len(active.Segments), serviceStatusSegmentCount)
+	}
+	if segment := findPublicModelSegmentWithRequests(active.Segments); segment == nil || segment.LatencyMs != 200 {
+		t.Fatalf("active segment = %+v, want first response average 200", segment)
 	}
 
 	idle := findPublicModelStatus(status.Models, "gpt-idle")
@@ -61,6 +70,15 @@ func TestGatewayPublicStatusBuildsModelProbeData(t *testing.T) {
 	if findPublicModelStatus(status.Models, "gpt-disabled") != nil {
 		t.Fatalf("models = %+v, want disabled model hidden", status.Models)
 	}
+}
+
+func findPublicModelSegmentWithRequests(items []PublicModelStatusSegment) *PublicModelStatusSegment {
+	for i := range items {
+		if items[i].Requests > 0 {
+			return &items[i]
+		}
+	}
+	return nil
 }
 
 func findPublicModelStatus(items []PublicModelStatus, modelName string) *PublicModelStatus {

@@ -1,6 +1,10 @@
 package routers
 
-import "github.com/gin-gonic/gin"
+import (
+	"navapi-go/middlewares"
+
+	"github.com/gin-gonic/gin"
+)
 
 type PricingRouter struct{}
 
@@ -10,8 +14,8 @@ func (r PricingRouter) InitPricingRouter(privateGroup *gin.RouterGroup, publicGr
 	group := privateGroup.Group("pricing")
 	{
 		group.GET("/list", pricingApi.List)
-		group.POST("/", pricingApi.Upsert)
-		group.PUT("/", pricingApi.Upsert)
-		group.DELETE("/:id", pricingApi.Delete)
+		group.POST("/", middlewares.AdminOnly(), pricingApi.Upsert)
+		group.PUT("/", middlewares.AdminOnly(), pricingApi.Upsert)
+		group.DELETE("/:id", middlewares.AdminOnly(), pricingApi.Delete)
 	}
 }

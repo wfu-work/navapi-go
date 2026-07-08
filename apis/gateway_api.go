@@ -1,8 +1,6 @@
 package apis
 
 import (
-	"navapi-go/services"
-
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
 )
@@ -19,7 +17,7 @@ type GatewayApi struct{}
 // @Success 200 {object} response.Response{data=services.GatewayHealth,msg=string}
 // @Router /gateway/health [get]
 func (a GatewayApi) Health(c *gin.Context) {
-	response.Ok(services.GatewayServiceApp.Health(gin.Mode()), c)
+	response.Ok(gatewayService.Health(gin.Mode()), c)
 }
 
 // PublicStatus 公开服务状态
@@ -31,7 +29,7 @@ func (a GatewayApi) Health(c *gin.Context) {
 // @Success 200 {object} response.Response{data=services.PublicServiceStatus,msg=string}
 // @Router /service/status [get]
 func (a GatewayApi) PublicStatus(c *gin.Context) {
-	status, err := services.GatewayServiceApp.PublicStatus(gin.Mode())
+	status, err := gatewayService.PublicStatus(gin.Mode())
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

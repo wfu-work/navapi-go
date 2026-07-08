@@ -19,7 +19,7 @@ func (a RegisterApi) SendCode(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	result, err := services.EmailServiceApp.SendRegisterCode(services.SendRegisterCodeInput{
+	result, err := emailService.SendRegisterCode(services.SendRegisterCodeInput{
 		Email:    req.Email,
 		ClientIP: c.ClientIP(),
 	})
@@ -36,7 +36,7 @@ func (a RegisterApi) RegisterClient(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	result, err := services.ClientRegisterServiceApp.Register(req)
+	result, err := clientRegisterService.Register(req)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

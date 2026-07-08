@@ -1,11 +1,15 @@
 package routers
 
-import "github.com/gin-gonic/gin"
+import (
+	"navapi-go/middlewares"
+
+	"github.com/gin-gonic/gin"
+)
 
 type ClientsRouter struct{}
 
 func (r ClientsRouter) InitClientsRouter(router *gin.RouterGroup) {
-	clients := router.Group("clients")
+	clients := router.Group("clients", middlewares.AdminOnly())
 	{
 		register := clients.Group("register")
 		{

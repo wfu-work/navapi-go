@@ -28,9 +28,9 @@ type RelayService struct {
 	client *http.Client
 }
 
-var RelayServiceApp = RelayService{
+var RelayServiceApp = new(RelayService{
 	client: &http.Client{Timeout: 10 * time.Minute},
-}
+})
 
 type RelayEndpoint struct {
 	UpstreamPath  string
@@ -329,7 +329,7 @@ func (s RelayService) forward(ctx context.Context, provider *domains.VendorMeta,
 	}
 	firstResponseTimeMs := time.Since(requestStart).Milliseconds()
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readLimitedUpstreamBody(resp)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +375,7 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= http.StatusBadRequest || (canRetry && shouldRetryRelayStatus(resp.StatusCode)) {
-		respBody, readErr := io.ReadAll(resp.Body)
+		respBody, readErr := readLimitedUpstreamBody(resp)
 		if readErr != nil {
 			return nil, readErr
 		}
@@ -421,6 +421,34 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 		firstResponseTimeMs = headerResponseTimeMs
 	}
 	return &RelayResult{StatusCode: resp.StatusCode, Header: resp.Header.Clone(), Usage: tracker.Finish(), FirstResponseTimeMs: firstResponseTimeMs}, nil
+}
+
+func readLimitedUpstreamBody(resp *http.Response) ([]byte, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, errors.New("upstream response body is empty")
+	}
+	limit := OptionServiceApp.Int64("relay.max_upstream_response_bytes", defaultRiskMaxUpstreamResponseBytes)
+	if limit <= 0 {
+		return io.ReadAll(resp.Body)
+	}
+	if resp.ContentLength > limit {
+		return nil, upstreamResponseTooLargeError(limit)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, upstreamResponseTooLargeError(limit)
+	}
+	return body, nil
+}
+
+func upstreamResponseTooLargeError(limit int64) error {
+	return &RelayHTTPError{
+		StatusCode: http.StatusBadGateway,
+		Message:    fmt.Sprintf("upstream response body exceeds %d bytes", limit),
+	}
 }
 
 func copyResponseHeaders(dst http.Header, src http.Header) {

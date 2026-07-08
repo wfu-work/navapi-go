@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"math"
@@ -315,6 +316,38 @@ func TestRelayHTTPForwardsOpenAIChatAndSettlesQuota(t *testing.T) {
 	}
 	if walletRecord.AmountMicrosDelta != -12 || walletRecord.BalanceAmountMicrosAfter != 999999988 {
 		t.Fatalf("wallet amount record = %+v, want amount delta -12 balance 999999988", walletRecord)
+	}
+}
+
+func TestRelayForwardRejectsOversizedBufferedUpstreamBody(t *testing.T) {
+	withRelayTestDB(t)
+	if err := OptionServiceApp.Set("relay.max_upstream_response_bytes", "8"); err != nil {
+		t.Fatal(err)
+	}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"too":"large"}`))
+	}))
+	defer upstream.Close()
+
+	provider := &domains.VendorMeta{
+		VendorName: "oversized-upstream",
+		Type:       constants.ProviderTypeOpenAI,
+		BaseURL:    upstream.URL,
+		Key:        "sk-provider",
+		Enabled:    true,
+	}
+	result, err := RelayServiceApp.forward(context.Background(), provider, http.MethodGet, "/v1/test", nil, http.Header{}, "")
+	if err == nil {
+		t.Fatal("forward succeeded, want upstream response size error")
+	}
+	if result != nil {
+		t.Fatalf("result = %+v, want nil when upstream body exceeds limit", result)
+	}
+	var relayErr *RelayHTTPError
+	if !errors.As(err, &relayErr) || relayErr.StatusCode != http.StatusBadGateway {
+		t.Fatalf("error = %v, want 502 RelayHTTPError", err)
 	}
 }
 

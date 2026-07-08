@@ -64,3 +64,15 @@ func TestNavapiUserPermissionSeedsCoverClientConsole(t *testing.T) {
 		t.Fatalf("missing USER permission seed for %s", key)
 	}
 }
+
+func TestPaymentConfirmPermissionIsAdminOnly(t *testing.T) {
+	for _, seed := range navapiAPIPermissionSeeds {
+		if seed.Verb == "POST" && seed.Path == "/payment/confirm" {
+			if seed.User {
+				t.Fatal("payment confirm must not be granted to the common user role")
+			}
+			return
+		}
+	}
+	t.Fatal("missing payment confirm permission seed")
+}

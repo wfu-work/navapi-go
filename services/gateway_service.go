@@ -26,7 +26,7 @@ const (
 )
 
 var gatewayStartedAt = time.Now()
-var GatewayServiceApp = GatewayService{}
+var GatewayServiceApp = new(GatewayService)
 var gatewayStatusCache = struct {
 	sync.RWMutex
 	Mode      string
@@ -228,7 +228,7 @@ func (s GatewayService) recentUsageBuckets(start time.Time, end time.Time) ([]se
 		COUNT(*) as requests,
 		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success_requests,
 		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as error_requests,
-		COALESCE(SUM(use_time_ms), 0) as latency_total_ms,
+		COALESCE(SUM(CASE WHEN first_response_time_ms > 0 THEN first_response_time_ms ELSE use_time_ms END), 0) as latency_total_ms,
 		COALESCE(MAX(create_time), 0) as last_checked_at
 	`, bucketExpr)
 	var rows []serviceUsageBucketRow

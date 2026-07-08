@@ -21,7 +21,7 @@ const (
 
 type ClientRegisterService struct{}
 
-var ClientRegisterServiceApp = ClientRegisterService{}
+var ClientRegisterServiceApp = new(ClientRegisterService)
 
 type ClientRegisterRequest struct {
 	Username   string `json:"username"`

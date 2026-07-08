@@ -33,7 +33,7 @@ type redeemRequest struct {
 func (a RedemptionApi) List(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.RedemptionServiceApp.List(query)
+	result, err := redemptionService.List(query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -52,7 +52,7 @@ func (a RedemptionApi) List(c *gin.Context) {
 // @Router /redemption/stats [get]
 // @Router /card/stats [get]
 func (a RedemptionApi) Stats(c *gin.Context) {
-	stats, err := services.RedemptionServiceApp.Stats()
+	stats, err := redemptionService.Stats()
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -77,7 +77,7 @@ func (a RedemptionApi) Get(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	redemption, err := services.RedemptionServiceApp.Get(id)
+	redemption, err := redemptionService.Get(id)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -102,7 +102,7 @@ func (a RedemptionApi) Create(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.RedemptionServiceApp.Create(&redemption); err != nil {
+	if err := redemptionService.Create(&redemption); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -126,7 +126,7 @@ func (a RedemptionApi) BatchCreate(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	cards, err := services.RedemptionServiceApp.BatchCreate(req)
+	cards, err := redemptionService.BatchCreate(req)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -155,7 +155,7 @@ func (a RedemptionApi) Update(c *gin.Context) {
 		response.FailWithMessage("id is required", c)
 		return
 	}
-	if err := services.RedemptionServiceApp.Update(&redemption); err != nil {
+	if err := redemptionService.Update(&redemption); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -179,7 +179,7 @@ func (a RedemptionApi) Delete(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.RedemptionServiceApp.Delete(id); err != nil {
+	if err := redemptionService.Delete(id); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -203,7 +203,7 @@ func (a RedemptionApi) Redeem(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	redemption, err := services.RedemptionServiceApp.Redeem(req.Code, utils.GetUserGuid(c), req.TokenID)
+	redemption, err := redemptionService.Redeem(req.Code, utils.GetUserGuid(c), req.TokenID)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

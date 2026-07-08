@@ -1,6 +1,10 @@
 package routers
 
-import "github.com/gin-gonic/gin"
+import (
+	"navapi-go/middlewares"
+
+	"github.com/gin-gonic/gin"
+)
 
 type SubscriptionRouter struct{}
 
@@ -11,10 +15,10 @@ func (r SubscriptionRouter) InitSubscriptionRouter(privateGroup *gin.RouterGroup
 	{
 		group.GET("/plans", subscriptionApi.Plans)
 		group.GET("/plan/:id", subscriptionApi.GetPlan)
-		group.POST("/plan", subscriptionApi.SavePlan)
-		group.PUT("/plan", subscriptionApi.SavePlan)
-		group.DELETE("/plan/:id", subscriptionApi.DeletePlan)
-		group.GET("/list", subscriptionApi.List)
+		group.POST("/plan", middlewares.AdminOnly(), subscriptionApi.SavePlan)
+		group.PUT("/plan", middlewares.AdminOnly(), subscriptionApi.SavePlan)
+		group.DELETE("/plan/:id", middlewares.AdminOnly(), subscriptionApi.DeletePlan)
+		group.GET("/list", middlewares.AdminOnly(), subscriptionApi.List)
 		group.GET("/self/list", subscriptionApi.Self)
 		group.POST("/subscribe", subscriptionApi.Subscribe)
 	}

@@ -17,7 +17,7 @@ import (
 type RelayApi struct{}
 
 func (a RelayApi) Models(c *gin.Context) {
-	models, err := services.ModelServiceApp.ListOpenAIModels()
+	models, err := modelService.ListOpenAIModels()
 	if err != nil {
 		openAIError(c, http.StatusInternalServerError, err.Error())
 		return
@@ -26,7 +26,7 @@ func (a RelayApi) Models(c *gin.Context) {
 		if apiToken, ok := token.(*domains.ApiToken); ok && apiToken != nil {
 			filtered := models.Data[:0]
 			for _, model := range models.Data {
-				if services.TokenServiceApp.CheckModel(apiToken, model.ID) == nil {
+				if tokenService.CheckModel(apiToken, model.ID) == nil {
 					filtered = append(filtered, model)
 				}
 			}
@@ -60,7 +60,7 @@ func (a RelayApi) Relay(c *gin.Context, endpoint services.RelayEndpoint) {
 		openAIError(c, http.StatusUnauthorized, "token is invalid")
 		return
 	}
-	result, streamed, err := services.RelayServiceApp.RelayHTTP(c, token, endpoint)
+	result, streamed, err := relayService.RelayHTTP(c, token, endpoint)
 	if err != nil {
 		if streamed && c.Writer.Written() {
 			return
@@ -164,7 +164,7 @@ func (a RelayApi) AsyncTask(c *gin.Context, platform string) {
 		Status:   "submitted",
 		Data:     string(body),
 	}
-	if err := services.TaskServiceApp.Create(&task); err != nil {
+	if err := taskService.Create(&task); err != nil {
 		openAIError(c, http.StatusBadGateway, err.Error())
 		return
 	}

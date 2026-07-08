@@ -608,7 +608,7 @@ func (s *ProviderService) fetchModels(provider *domains.VendorMeta) ([]string, e
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimitedUpstreamBody(resp)
 	if err != nil {
 		return nil, err
 	}

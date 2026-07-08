@@ -26,7 +26,7 @@ type SubscriptionApi struct{}
 func (a SubscriptionApi) PublicPlans(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.SubscriptionServiceApp.ListPlans(query, true)
+	result, err := subscriptionService.ListPlans(query, true)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -49,7 +49,7 @@ func (a SubscriptionApi) PublicPlans(c *gin.Context) {
 func (a SubscriptionApi) Plans(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.SubscriptionServiceApp.ListPlans(query, false)
+	result, err := subscriptionService.ListPlans(query, false)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -73,7 +73,7 @@ func (a SubscriptionApi) GetPlan(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	plan, err := services.SubscriptionServiceApp.GetPlan(id)
+	plan, err := subscriptionService.GetPlan(id)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -98,7 +98,7 @@ func (a SubscriptionApi) SavePlan(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.SubscriptionServiceApp.SavePlan(&plan); err != nil {
+	if err := subscriptionService.SavePlan(&plan); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -121,7 +121,7 @@ func (a SubscriptionApi) DeletePlan(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.SubscriptionServiceApp.DeletePlan(id); err != nil {
+	if err := subscriptionService.DeletePlan(id); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -143,7 +143,7 @@ func (a SubscriptionApi) DeletePlan(c *gin.Context) {
 func (a SubscriptionApi) List(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.SubscriptionServiceApp.ListUserSubscriptions("", query)
+	result, err := subscriptionService.ListUserSubscriptions("", query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -166,7 +166,7 @@ func (a SubscriptionApi) List(c *gin.Context) {
 func (a SubscriptionApi) Self(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.SubscriptionServiceApp.ListUserSubscriptions(utils.GetUserGuid(c), query)
+	result, err := subscriptionService.ListUserSubscriptions(utils.GetUserGuid(c), query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -190,7 +190,7 @@ func (a SubscriptionApi) Subscribe(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	subscription, err := services.SubscriptionServiceApp.Subscribe(utils.GetUserGuid(c), req, "")
+	subscription, err := subscriptionService.Subscribe(utils.GetUserGuid(c), req, "")
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

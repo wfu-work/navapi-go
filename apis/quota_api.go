@@ -2,7 +2,6 @@ package apis
 
 import (
 	"navapi-go/domains"
-	"navapi-go/services"
 	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
@@ -22,7 +21,7 @@ type QuotaApi struct{}
 // @Success 200 {object} response.Response{data=domains.UserQuota,msg=string}
 // @Router /balance/self [get]
 func (a QuotaApi) Self(c *gin.Context) {
-	account, err := services.UserQuotaServiceApp.Get(utils.GetUserGuid(c))
+	account, err := userQuotaService.Get(utils.GetUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -45,7 +44,7 @@ func (a QuotaApi) Self(c *gin.Context) {
 func (a QuotaApi) List(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.UserQuotaServiceApp.List(query)
+	result, err := userQuotaService.List(query)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -69,7 +68,7 @@ func (a QuotaApi) Update(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := services.UserQuotaServiceApp.Update(&account); err != nil {
+	if err := userQuotaService.Update(&account); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

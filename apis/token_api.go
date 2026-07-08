@@ -6,7 +6,6 @@ import (
 
 	"navapi-go/domains"
 	"navapi-go/middlewares"
-	"navapi-go/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
@@ -41,13 +40,13 @@ func (a TokenApi) SelfList(c *gin.Context) {
 }
 
 func (a TokenApi) list(c *gin.Context, userGuid string) {
-	tokens, err := services.TokenServiceApp.List(userGuid)
+	tokens, err := tokenService.List(userGuid)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
 	for i := range tokens {
-		tokens[i].MaskedKey = services.TokenServiceApp.Mask(tokens[i].Key)
+		tokens[i].MaskedKey = tokenService.Mask(tokens[i].Key)
 	}
 	response.Ok(tokens, c)
 }
@@ -86,7 +85,7 @@ func (a TokenApi) get(c *gin.Context, userGuid string) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	token.MaskedKey = services.TokenServiceApp.Mask(token.Key)
+	token.MaskedKey = tokenService.Mask(token.Key)
 	response.Ok(token, c)
 }
 
@@ -129,7 +128,7 @@ func (a TokenApi) create(c *gin.Context, userGuid string) {
 	} else if strings.TrimSpace(token.UserGuid) == "" {
 		token.UserGuid = middlewares.CurrentUserGuid(c)
 	}
-	if err := services.TokenServiceApp.Create(&token); err != nil {
+	if err := tokenService.Create(&token); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
@@ -182,11 +181,11 @@ func (a TokenApi) update(c *gin.Context, userGuid string) {
 	token.Key = old.Key
 	token.UserGuid = old.UserGuid
 	token.Guid = old.Guid
-	if err := services.TokenServiceApp.Update(&token); err != nil {
+	if err := tokenService.Update(&token); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	token.MaskedKey = services.TokenServiceApp.Mask(token.Key)
+	token.MaskedKey = tokenService.Mask(token.Key)
 	response.Ok(token, c)
 }
 
@@ -269,9 +268,9 @@ func tokenByParam(c *gin.Context, userGuid string) (*domains.ApiToken, error) {
 		return nil, strconv.ErrSyntax
 	}
 	if id, err := strconv.ParseUint(raw, 10, 64); err == nil && id > 0 {
-		return services.TokenServiceApp.GetByID(uint(id), userGuid)
+		return tokenService.GetByID(uint(id), userGuid)
 	}
-	return services.TokenServiceApp.GetByGUID(raw, userGuid)
+	return tokenService.GetByGUID(raw, userGuid)
 }
 
 func deleteTokenByParam(c *gin.Context, userGuid string) error {
@@ -280,16 +279,16 @@ func deleteTokenByParam(c *gin.Context, userGuid string) error {
 		return strconv.ErrSyntax
 	}
 	if id, err := strconv.ParseUint(raw, 10, 64); err == nil && id > 0 {
-		return services.TokenServiceApp.Delete(uint(id), userGuid)
+		return tokenService.Delete(uint(id), userGuid)
 	}
-	return services.TokenServiceApp.DeleteByGUID(raw, userGuid)
+	return tokenService.DeleteByGUID(raw, userGuid)
 }
 
 func existingTokenForUpdate(token domains.ApiToken, userGuid string) (*domains.ApiToken, error) {
 	if strings.TrimSpace(token.Guid) != "" {
-		return services.TokenServiceApp.GetByGUID(token.Guid, userGuid)
+		return tokenService.GetByGUID(token.Guid, userGuid)
 	}
-	return services.TokenServiceApp.GetByID(token.Id, userGuid)
+	return tokenService.GetByID(token.Id, userGuid)
 }
 
 // Usage 当前用户令牌用量
@@ -302,7 +301,7 @@ func existingTokenForUpdate(token domains.ApiToken, userGuid string) (*domains.A
 // @Success 200 {object} response.Response{data=object,msg=string}
 // @Router /usage/token [get]
 func (a TokenApi) Usage(c *gin.Context) {
-	usage, err := services.TokenServiceApp.Usage(middlewares.ScopedUserGuid(c))
+	usage, err := tokenService.Usage(middlewares.ScopedUserGuid(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

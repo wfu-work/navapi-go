@@ -1,7 +1,6 @@
 package apis
 
 import (
-	"navapi-go/services"
 	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
@@ -13,7 +12,7 @@ type MessageSendRecordApi struct{}
 func (a MessageSendRecordApi) List(c *gin.Context) {
 	var query vos.PageQuery
 	_ = c.ShouldBindQuery(&query)
-	result, err := services.MessageSendRecordServiceApp.List(query, c.Query("sendStatus"), c.Query("templateCode"))
+	result, err := messageSendRecordService.List(query, c.Query("sendStatus"), c.Query("templateCode"))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -22,7 +21,7 @@ func (a MessageSendRecordApi) List(c *gin.Context) {
 }
 
 func (a MessageSendRecordApi) Get(c *gin.Context) {
-	item, err := services.MessageSendRecordServiceApp.Get(c.Param("guid"))
+	item, err := messageSendRecordService.Get(c.Param("guid"))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
