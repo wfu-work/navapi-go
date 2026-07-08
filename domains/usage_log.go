@@ -6,6 +6,7 @@ type UsageLog struct {
 	commonDomains.BaseDataEntity
 	UserGuid            string  `json:"userGuid" gorm:"column:user_guid;size:100;index;comment:用户 GUID"`
 	Username            string  `json:"username" gorm:"column:username;size:100;index;comment:用户名"`
+	Email               string  `json:"email,omitempty" gorm:"-"`
 	TokenGuid           string  `json:"tokenGuid" gorm:"column:token_guid;size:100;index;comment:令牌 GUID"`
 	TokenName           string  `json:"tokenName" gorm:"column:token_name;size:100;comment:令牌名称"`
 	ProviderGuid        string  `json:"providerGuid" gorm:"column:channel_guid;size:100;index;comment:上游服务商 GUID"`

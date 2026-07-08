@@ -58,16 +58,18 @@ func (s *RedemptionService) Create(redemption *domains.Redemption) error {
 }
 
 func (s *RedemptionService) Update(redemption *domains.Redemption) error {
-	if redemption.Id == 0 {
-		return errors.New("id is required")
+	redemption.Guid = strings.TrimSpace(redemption.Guid)
+	if redemption.Guid == "" {
+		return errors.New("guid is required")
 	}
-	existing, err := s.GetById(redemption.Id)
+	existing, err := s.GetByGuid(redemption.Guid)
 	if err != nil {
 		return err
 	}
 	if existing == nil {
 		return errors.New("redemption not found")
 	}
+	// 管理端编辑只用业务 GUID 定位，避免对外暴露数据库自增 ID。
 	redemption.Guid = existing.Guid
 	redemption.CreateTime = existing.CreateTime
 	redemption.Creater = existing.Creater
@@ -80,15 +82,27 @@ func (s *RedemptionService) Update(redemption *domains.Redemption) error {
 	return nil
 }
 
-func (s *RedemptionService) Delete(id uint) error {
-	return deleteByIDWithCrud(&s.CrudService, id, "redemption not found")
+func (s *RedemptionService) Delete(guid string) error {
+	guid = strings.TrimSpace(guid)
+	if guid == "" {
+		return errors.New("guid is required")
+	}
+	existing, err := s.GetByGuid(guid)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return errors.New("redemption not found")
+	}
+	return s.DeleteByGuid(guid)
 }
 
-func (s *RedemptionService) Get(id uint) (*domains.Redemption, error) {
-	if id == 0 {
-		return nil, errors.New("id is required")
+func (s *RedemptionService) Get(guid string) (*domains.Redemption, error) {
+	guid = strings.TrimSpace(guid)
+	if guid == "" {
+		return nil, errors.New("guid is required")
 	}
-	redemption, err := s.GetById(id)
+	redemption, err := s.GetByGuid(guid)
 	if err != nil {
 		return nil, err
 	}

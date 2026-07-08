@@ -1,6 +1,8 @@
 package apis
 
 import (
+	"strings"
+
 	"navapi-go/domains"
 	"navapi-go/services"
 	"navapi-go/vos"
@@ -66,17 +68,17 @@ func (a RedemptionApi) Stats(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Accept json
 // @Produce json
-// @Param id path int true "ID"
+// @Param guid path string true "GUID"
 // @Success 200 {object} response.Response{data=domains.Redemption,msg=string}
-// @Router /redemption/{id} [get]
-// @Router /card/{id} [get]
+// @Router /redemption/{guid} [get]
+// @Router /card/{guid} [get]
 func (a RedemptionApi) Get(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
+	guid := strings.TrimSpace(c.Param("guid"))
+	if guid == "" {
+		response.FailWithMessage("guid is required", c)
 		return
 	}
-	redemption, err := redemptionService.Get(id)
+	redemption, err := redemptionService.Get(guid)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
@@ -150,8 +152,8 @@ func (a RedemptionApi) Update(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if redemption.Id == 0 {
-		response.FailWithMessage("id is required", c)
+	if strings.TrimSpace(redemption.Guid) == "" {
+		response.FailWithMessage("guid is required", c)
 		return
 	}
 	if err := redemptionService.Update(&redemption); err != nil {
@@ -168,17 +170,17 @@ func (a RedemptionApi) Update(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Accept json
 // @Produce json
-// @Param id path int true "ID"
+// @Param guid path string true "GUID"
 // @Success 200 {object} response.Response{data=bool,msg=string}
-// @Router /redemption/{id} [delete]
-// @Router /card/{id} [delete]
+// @Router /redemption/{guid} [delete]
+// @Router /card/{guid} [delete]
 func (a RedemptionApi) Delete(c *gin.Context) {
-	id, err := parseUintParam(c, "id")
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
+	guid := strings.TrimSpace(c.Param("guid"))
+	if guid == "" {
+		response.FailWithMessage("guid is required", c)
 		return
 	}
-	if err := redemptionService.Delete(id); err != nil {
+	if err := redemptionService.Delete(guid); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

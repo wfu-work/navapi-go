@@ -43,44 +43,46 @@ type UsageNamedSeries struct {
 }
 
 type UsageDimensionStat struct {
-	Name             string  `json:"name"`
-	UserGuid         string  `json:"userGuid,omitempty"`
-	Username         string  `json:"username,omitempty"`
-	Email            string  `json:"email,omitempty"`
-	TokenGuid        string  `json:"tokenGuid,omitempty"`
-	ProviderGuid     string  `json:"providerGuid,omitempty"`
-	ModelName        string  `json:"modelName,omitempty"`
-	Requests         int64   `json:"requests"`
-	Success          int64   `json:"success"`
-	Errors           int64   `json:"errors"`
-	Quota            int64   `json:"quota"`
-	Cost             float64 `json:"cost"`
-	PromptTokens     int64   `json:"promptTokens"`
-	CompletionTokens int64   `json:"completionTokens"`
-	Tokens           int64   `json:"tokens"`
-	AvgUseTimeMs     int64   `json:"avgUseTimeMs"`
+	Name                   string  `json:"name"`
+	UserGuid               string  `json:"userGuid,omitempty"`
+	Username               string  `json:"username,omitempty"`
+	Email                  string  `json:"email,omitempty"`
+	TokenGuid              string  `json:"tokenGuid,omitempty"`
+	ProviderGuid           string  `json:"providerGuid,omitempty"`
+	ModelName              string  `json:"modelName,omitempty"`
+	Requests               int64   `json:"requests"`
+	Success                int64   `json:"success"`
+	Errors                 int64   `json:"errors"`
+	Quota                  int64   `json:"quota"`
+	Cost                   float64 `json:"cost"`
+	PromptTokens           int64   `json:"promptTokens"`
+	CompletionTokens       int64   `json:"completionTokens"`
+	Tokens                 int64   `json:"tokens"`
+	AvgUseTimeMs           int64   `json:"avgUseTimeMs"`
+	AvgFirstResponseTimeMs int64   `json:"avgFirstResponseTimeMs"`
 }
 
 type UsageSummary struct {
-	Days             int                  `json:"days"`
-	StartTime        int64                `json:"startTime,omitempty"`
-	EndTime          int64                `json:"endTime,omitempty"`
-	TotalRequests    int64                `json:"totalRequests"`
-	SuccessRequests  int64                `json:"successRequests"`
-	ErrorRequests    int64                `json:"errorRequests"`
-	Quota            int64                `json:"quota"`
-	Cost             float64              `json:"cost"`
-	PromptTokens     int64                `json:"promptTokens"`
-	CompletionTokens int64                `json:"completionTokens"`
-	Tokens           int64                `json:"tokens"`
-	AvgUseTimeMs     int64                `json:"avgUseTimeMs"`
-	StreamRequests   int64                `json:"streamRequests"`
-	Series           []DailyUsageData     `json:"series"`
-	SeriesByModel    []UsageNamedSeries   `json:"seriesByModel"`
-	ByModel          []UsageDimensionStat `json:"byModel"`
-	ByProvider       []UsageDimensionStat `json:"byProvider"`
-	ByToken          []UsageDimensionStat `json:"byToken"`
-	ByUser           []UsageDimensionStat `json:"byUser,omitempty"`
+	Days                   int                  `json:"days"`
+	StartTime              int64                `json:"startTime,omitempty"`
+	EndTime                int64                `json:"endTime,omitempty"`
+	TotalRequests          int64                `json:"totalRequests"`
+	SuccessRequests        int64                `json:"successRequests"`
+	ErrorRequests          int64                `json:"errorRequests"`
+	Quota                  int64                `json:"quota"`
+	Cost                   float64              `json:"cost"`
+	PromptTokens           int64                `json:"promptTokens"`
+	CompletionTokens       int64                `json:"completionTokens"`
+	Tokens                 int64                `json:"tokens"`
+	AvgUseTimeMs           int64                `json:"avgUseTimeMs"`
+	AvgFirstResponseTimeMs int64                `json:"avgFirstResponseTimeMs"`
+	StreamRequests         int64                `json:"streamRequests"`
+	Series                 []DailyUsageData     `json:"series"`
+	SeriesByModel          []UsageNamedSeries   `json:"seriesByModel"`
+	ByModel                []UsageDimensionStat `json:"byModel"`
+	ByProvider             []UsageDimensionStat `json:"byProvider"`
+	ByToken                []UsageDimensionStat `json:"byToken"`
+	ByUser                 []UsageDimensionStat `json:"byUser,omitempty"`
 }
 
 type UsageSummaryQuery struct {
@@ -98,33 +100,35 @@ type UsageLogQuery struct {
 }
 
 type usageAggregateRow struct {
-	Requests         int64   `gorm:"column:requests"`
-	Success          int64   `gorm:"column:success"`
-	Errors           int64   `gorm:"column:errors"`
-	Quota            int64   `gorm:"column:quota"`
-	Cost             float64 `gorm:"column:cost"`
-	PromptTokens     int64   `gorm:"column:prompt_tokens"`
-	CompletionTokens int64   `gorm:"column:completion_tokens"`
-	UseTimeMs        int64   `gorm:"column:use_time_ms"`
-	StreamRequests   int64   `gorm:"column:stream_requests"`
+	Requests            int64   `gorm:"column:requests"`
+	Success             int64   `gorm:"column:success"`
+	Errors              int64   `gorm:"column:errors"`
+	Quota               int64   `gorm:"column:quota"`
+	Cost                float64 `gorm:"column:cost"`
+	PromptTokens        int64   `gorm:"column:prompt_tokens"`
+	CompletionTokens    int64   `gorm:"column:completion_tokens"`
+	UseTimeMs           int64   `gorm:"column:use_time_ms"`
+	FirstResponseTimeMs int64   `gorm:"column:first_response_time_ms"`
+	StreamRequests      int64   `gorm:"column:stream_requests"`
 }
 
 type usageDimensionAggregateRow struct {
-	Key              string  `gorm:"column:stat_key"`
-	Name             string  `gorm:"column:name"`
-	UserGuid         string  `gorm:"column:user_guid"`
-	Username         string  `gorm:"column:username"`
-	TokenGuid        string  `gorm:"column:token_guid"`
-	ProviderGuid     string  `gorm:"column:provider_guid"`
-	ModelName        string  `gorm:"column:model_name"`
-	Requests         int64   `gorm:"column:requests"`
-	Success          int64   `gorm:"column:success"`
-	Errors           int64   `gorm:"column:errors"`
-	Quota            int64   `gorm:"column:quota"`
-	Cost             float64 `gorm:"column:cost"`
-	PromptTokens     int64   `gorm:"column:prompt_tokens"`
-	CompletionTokens int64   `gorm:"column:completion_tokens"`
-	UseTimeMs        int64   `gorm:"column:use_time_ms"`
+	Key                 string  `gorm:"column:stat_key"`
+	Name                string  `gorm:"column:name"`
+	UserGuid            string  `gorm:"column:user_guid"`
+	Username            string  `gorm:"column:username"`
+	TokenGuid           string  `gorm:"column:token_guid"`
+	ProviderGuid        string  `gorm:"column:provider_guid"`
+	ModelName           string  `gorm:"column:model_name"`
+	Requests            int64   `gorm:"column:requests"`
+	Success             int64   `gorm:"column:success"`
+	Errors              int64   `gorm:"column:errors"`
+	Quota               int64   `gorm:"column:quota"`
+	Cost                float64 `gorm:"column:cost"`
+	PromptTokens        int64   `gorm:"column:prompt_tokens"`
+	CompletionTokens    int64   `gorm:"column:completion_tokens"`
+	UseTimeMs           int64   `gorm:"column:use_time_ms"`
+	FirstResponseTimeMs int64   `gorm:"column:first_response_time_ms"`
 }
 
 type usageModelDailyAggregateRow struct {
@@ -140,16 +144,17 @@ type usageModelDailyAggregateRow struct {
 }
 
 type usageDailyAggregateRow struct {
-	Date             string  `gorm:"column:usage_date"`
-	Requests         int64   `gorm:"column:requests"`
-	Success          int64   `gorm:"column:success"`
-	Errors           int64   `gorm:"column:errors"`
-	Quota            int64   `gorm:"column:quota"`
-	Cost             float64 `gorm:"column:cost"`
-	PromptTokens     int64   `gorm:"column:prompt_tokens"`
-	CompletionTokens int64   `gorm:"column:completion_tokens"`
-	UseTimeMs        int64   `gorm:"column:use_time_ms"`
-	StreamRequests   int64   `gorm:"column:stream_requests"`
+	Date                string  `gorm:"column:usage_date"`
+	Requests            int64   `gorm:"column:requests"`
+	Success             int64   `gorm:"column:success"`
+	Errors              int64   `gorm:"column:errors"`
+	Quota               int64   `gorm:"column:quota"`
+	Cost                float64 `gorm:"column:cost"`
+	PromptTokens        int64   `gorm:"column:prompt_tokens"`
+	CompletionTokens    int64   `gorm:"column:completion_tokens"`
+	UseTimeMs           int64   `gorm:"column:use_time_ms"`
+	FirstResponseTimeMs int64   `gorm:"column:first_response_time_ms"`
+	StreamRequests      int64   `gorm:"column:stream_requests"`
 }
 
 type usageDailyStatsResult struct {
@@ -202,6 +207,7 @@ func (s *LogService) List(userGuid string, query UsageLogQuery) (vos.PageResult,
 	if err := db.Order("id desc").Offset(query.PageQuery.Offset()).Limit(query.Size).Find(&logs).Error; err != nil {
 		return vos.PageResult{}, err
 	}
+	s.enrichUsageLogUsers(logs)
 	s.enrichOfficialCosts(logs)
 	return vos.PageResult{List: logs, Total: total, Page: query.Page, Size: query.Size}, nil
 }
@@ -212,7 +218,11 @@ func applyUsageLogFilters(db *gorm.DB, userGuid string, query UsageLogQuery) *go
 	}
 	if query.Q != "" {
 		keyword := "%" + query.Q + "%"
-		db = db.Where("model_name LIKE ? OR token_name LIKE ? OR channel_name LIKE ? OR user_guid LIKE ? OR username LIKE ? OR request_id LIKE ? OR upstream_request_id LIKE ?", keyword, keyword, keyword, keyword, keyword, keyword, keyword)
+		userSubQuery := db.Session(&gorm.Session{NewDB: true}).
+			Model(&commonDomains.SysUser{}).
+			Select("guid").
+			Where("username LIKE ? OR email LIKE ? OR nick_name LIKE ? OR guid LIKE ?", keyword, keyword, keyword, keyword)
+		db = db.Where("model_name LIKE ? OR token_name LIKE ? OR channel_name LIKE ? OR user_guid LIKE ? OR username LIKE ? OR request_id LIKE ? OR upstream_request_id LIKE ? OR user_guid IN (?)", keyword, keyword, keyword, keyword, keyword, keyword, keyword, userSubQuery)
 	}
 	if query.Status != "" {
 		db = db.Where("status = ?", query.Status)
@@ -226,6 +236,41 @@ func applyUsageLogFilters(db *gorm.DB, userGuid string, query UsageLogQuery) *go
 		db = db.Where("create_time <= ?", endTime)
 	}
 	return db
+}
+
+func (s *LogService) enrichUsageLogUsers(logs []domains.UsageLog) {
+	userGuids := make([]string, 0, len(logs))
+	seen := map[string]bool{}
+	for _, log := range logs {
+		if log.UserGuid == "" || seen[log.UserGuid] {
+			continue
+		}
+		seen[log.UserGuid] = true
+		userGuids = append(userGuids, log.UserGuid)
+	}
+	if len(userGuids) == 0 {
+		return
+	}
+	var users []commonDomains.SysUser
+	if err := s.DB().Where("guid IN ?", userGuids).Find(&users).Error; err != nil {
+		return
+	}
+	userByGuid := make(map[string]commonDomains.SysUser, len(users))
+	for _, user := range users {
+		userByGuid[user.Guid] = user
+	}
+	for i := range logs {
+		user, ok := userByGuid[logs[i].UserGuid]
+		if !ok {
+			continue
+		}
+		if user.Username != "" {
+			logs[i].Username = user.Username
+		}
+		if user.Email != "" {
+			logs[i].Email = user.Email
+		}
+	}
 }
 
 func normalizeUsageQueryTime(value int64) int64 {
@@ -456,15 +501,16 @@ func (s *LogService) Stats(userGuid string, filters ...UsageLogQuery) (map[strin
 		avgUseTimeMs = aggregate.UseTimeMs / aggregate.Requests
 	}
 	return map[string]any{
-		"totalRequests":    aggregate.Requests,
-		"successRequests":  aggregate.Success,
-		"errorRequests":    aggregate.Errors,
-		"quota":            aggregate.Quota,
-		"cost":             aggregate.Cost,
-		"promptTokens":     aggregate.PromptTokens,
-		"completionTokens": aggregate.CompletionTokens,
-		"tokens":           aggregate.PromptTokens + aggregate.CompletionTokens,
-		"avgUseTimeMs":     avgUseTimeMs,
+		"totalRequests":          aggregate.Requests,
+		"successRequests":        aggregate.Success,
+		"errorRequests":          aggregate.Errors,
+		"quota":                  aggregate.Quota,
+		"cost":                   aggregate.Cost,
+		"promptTokens":           aggregate.PromptTokens,
+		"completionTokens":       aggregate.CompletionTokens,
+		"tokens":                 aggregate.PromptTokens + aggregate.CompletionTokens,
+		"avgUseTimeMs":           avgUseTimeMs,
+		"avgFirstResponseTimeMs": avgFirstResponseTime(aggregate.FirstResponseTimeMs, aggregate.Requests),
 	}, nil
 }
 
@@ -567,8 +613,9 @@ func (s *LogService) dailyUsageStats(userGuid string, startTime int64, endTime i
 		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
 		COALESCE(SUM(completion_tokens), 0) as completion_tokens,
 		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
+		%s as first_response_time_ms,
 		COALESCE(SUM(CASE WHEN is_stream THEN 1 ELSE 0 END), 0) as stream_requests
-	`, dateExpr, usageCostSumSQL(db))
+		`, dateExpr, usageCostSumSQL(db), usageFirstResponseTimeSumSQL())
 	var rows []usageDailyAggregateRow
 	if err := db.Select(selectSQL).Group(dateExpr).Scan(&rows).Error; err != nil {
 		return usageDailyStatsResult{}, err
@@ -596,6 +643,7 @@ func (s *LogService) dailyUsageStats(userGuid string, startTime int64, endTime i
 		result.Aggregate.PromptTokens += row.PromptTokens
 		result.Aggregate.CompletionTokens += row.CompletionTokens
 		result.Aggregate.UseTimeMs += row.UseTimeMs
+		result.Aggregate.FirstResponseTimeMs += row.FirstResponseTimeMs
 		result.Aggregate.StreamRequests += row.StreamRequests
 	}
 	return result, nil
@@ -612,8 +660,9 @@ func (s *LogService) aggregateUsage(db *gorm.DB) (usageAggregateRow, error) {
 		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
 		COALESCE(SUM(completion_tokens), 0) as completion_tokens,
 		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
+		%s as first_response_time_ms,
 		COALESCE(SUM(CASE WHEN is_stream THEN 1 ELSE 0 END), 0) as stream_requests
-	`, usageCostSumSQL(db))
+		`, usageCostSumSQL(db), usageFirstResponseTimeSumSQL())
 	return row, db.Select(selectSQL).Scan(&row).Error
 }
 
@@ -633,8 +682,9 @@ func (s *LogService) usageDimensionStats(userGuid string, query UsageSummaryQuer
 		%s as cost,
 		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
 		COALESCE(SUM(completion_tokens), 0) as completion_tokens,
-		COALESCE(SUM(use_time_ms), 0) as use_time_ms
-	`, keyExpr, nameExpr, extra, usageCostSumSQL(db))
+		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
+		%s as first_response_time_ms
+		`, keyExpr, nameExpr, extra, usageCostSumSQL(db), usageFirstResponseTimeSumSQL())
 	var rows []usageDimensionAggregateRow
 	if err := db.Select(selectSQL).
 		Group(keyExpr + ", " + nameExpr).
@@ -650,6 +700,7 @@ func (s *LogService) usageDimensionStats(userGuid string, query UsageSummaryQuer
 		stat := row.toUsageDimensionStat()
 		if stat.Requests > 0 {
 			stat.AvgUseTimeMs = stat.AvgUseTimeMs / stat.Requests
+			stat.AvgFirstResponseTimeMs = avgFirstResponseTime(row.FirstResponseTimeMs, stat.Requests)
 		}
 		out = append(out, stat)
 	}
@@ -712,21 +763,22 @@ func (s *LogService) usageModelSeries(userGuid string, query UsageSummaryQuery, 
 
 func (row usageDimensionAggregateRow) toUsageDimensionStat() UsageDimensionStat {
 	return UsageDimensionStat{
-		Name:             fallbackName(row.Name, row.Key),
-		UserGuid:         row.UserGuid,
-		Username:         row.Username,
-		TokenGuid:        row.TokenGuid,
-		ProviderGuid:     row.ProviderGuid,
-		ModelName:        row.ModelName,
-		Requests:         row.Requests,
-		Success:          row.Success,
-		Errors:           row.Errors,
-		Quota:            row.Quota,
-		Cost:             row.Cost,
-		PromptTokens:     row.PromptTokens,
-		CompletionTokens: row.CompletionTokens,
-		Tokens:           row.PromptTokens + row.CompletionTokens,
-		AvgUseTimeMs:     row.UseTimeMs,
+		Name:                   fallbackName(row.Name, row.Key),
+		UserGuid:               row.UserGuid,
+		Username:               row.Username,
+		TokenGuid:              row.TokenGuid,
+		ProviderGuid:           row.ProviderGuid,
+		ModelName:              row.ModelName,
+		Requests:               row.Requests,
+		Success:                row.Success,
+		Errors:                 row.Errors,
+		Quota:                  row.Quota,
+		Cost:                   row.Cost,
+		PromptTokens:           row.PromptTokens,
+		CompletionTokens:       row.CompletionTokens,
+		Tokens:                 row.PromptTokens + row.CompletionTokens,
+		AvgUseTimeMs:           row.UseTimeMs,
+		AvgFirstResponseTimeMs: row.FirstResponseTimeMs,
 	}
 }
 
@@ -742,7 +794,20 @@ func applyAggregateToSummary(summary *UsageSummary, row usageAggregateRow) {
 	summary.StreamRequests = row.StreamRequests
 	if row.Requests > 0 {
 		summary.AvgUseTimeMs = row.UseTimeMs / row.Requests
+		summary.AvgFirstResponseTimeMs = avgFirstResponseTime(row.FirstResponseTimeMs, row.Requests)
 	}
+}
+
+func avgFirstResponseTime(total int64, count int64) int64 {
+	if count <= 0 {
+		return 0
+	}
+	return total / count
+}
+
+func usageFirstResponseTimeSumSQL() string {
+	// Old logs may not have first-response latency; fall back to total duration for useful history charts.
+	return "COALESCE(SUM(CASE WHEN first_response_time_ms > 0 THEN first_response_time_ms ELSE use_time_ms END), 0)"
 }
 
 func (s *LogService) enrichUsageUsers(rows []UsageDimensionStat) {
