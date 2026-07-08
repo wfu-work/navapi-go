@@ -2,6 +2,8 @@ package services
 
 import (
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -63,6 +65,62 @@ type WalletBalanceAccount struct {
 	TotalAmountMicros  int64  `json:"totalAmountMicros"`
 	Group              string `json:"group"`
 	AllowedGroups      string `json:"allowedGroups"`
+}
+
+type WalletRecordQuery struct {
+	vos.PageQuery
+	Type      string `form:"type" json:"type"`
+	Source    string `form:"source" json:"source"`
+	Direction string `form:"direction" json:"direction"`
+	StartTime int64  `form:"startTime" json:"startTime"`
+	EndTime   int64  `form:"endTime" json:"endTime"`
+}
+
+func (q *WalletRecordQuery) Normalize() {
+	q.PageQuery.Normalize()
+	q.Type = strings.ToLower(strings.TrimSpace(q.Type))
+	q.Source = strings.ToLower(strings.TrimSpace(q.Source))
+	q.Direction = strings.ToLower(strings.TrimSpace(q.Direction))
+	q.StartTime = normalizeUnixSeconds(q.StartTime)
+	q.EndTime = normalizeUnixSeconds(q.EndTime)
+	if q.StartTime > 0 && q.EndTime > 0 && q.EndTime < q.StartTime {
+		q.EndTime = 0
+	}
+}
+
+type WalletActivityQuery struct {
+	StartTime int64 `form:"startTime" json:"startTime"`
+	EndTime   int64 `form:"endTime" json:"endTime"`
+}
+
+func (q *WalletActivityQuery) Normalize() {
+	q.StartTime = normalizeUnixSeconds(q.StartTime)
+	q.EndTime = normalizeUnixSeconds(q.EndTime)
+	if q.StartTime > 0 && q.EndTime > 0 && q.EndTime < q.StartTime {
+		q.EndTime = 0
+	}
+}
+
+type WalletActivityItem struct {
+	ID                                 string `json:"id"`
+	Category                           string `json:"category"`
+	Aggregate                          bool   `json:"aggregate"`
+	Title                              string `json:"title"`
+	Source                             string `json:"source"`
+	Timestamp                          int64  `json:"timestamp"`
+	EndTimestamp                       int64  `json:"endTimestamp,omitempty"`
+	AmountMicrosDelta                  int64  `json:"amountMicrosDelta"`
+	BalanceAmountMicrosAfter           int64  `json:"balanceAmountMicrosAfter"`
+	Currency                           string `json:"currency"`
+	Count                              int64  `json:"count"`
+	RequestCount                       int64  `json:"requestCount"`
+	Guid                               string `json:"guid,omitempty"`
+	RecordID                           uint   `json:"recordId,omitempty"`
+	RelatedGuid                        string `json:"relatedGuid,omitempty"`
+	Remark                             string `json:"remark,omitempty"`
+	PaidBalanceAmountMicrosAfter       int64  `json:"paidBalanceAmountMicrosAfter,omitempty"`
+	RewardBalanceAmountMicrosAfter     int64  `json:"rewardBalanceAmountMicrosAfter,omitempty"`
+	CommissionBalanceAmountMicrosAfter int64  `json:"commissionBalanceAmountMicrosAfter,omitempty"`
 }
 
 func (s *UserWalletService) WithDB(db *gorm.DB) *UserWalletService {
@@ -181,7 +239,7 @@ func (s *UserWalletService) UpdateBalanceAccount(input WalletBalanceAccount) (*W
 	return &account, nil
 }
 
-func (s *UserWalletService) ListRecords(userGuid string, query vos.PageQuery) (vos.PageResult, error) {
+func (s *UserWalletService) ListRecords(userGuid string, query WalletRecordQuery) (vos.PageResult, error) {
 	userGuid = strings.TrimSpace(userGuid)
 	if userGuid == "" {
 		return vos.PageResult{}, errors.New("user guid is required")
@@ -194,6 +252,21 @@ func (s *UserWalletService) ListRecords(userGuid string, query vos.PageQuery) (v
 		keyword := "%" + query.Q + "%"
 		db = db.Where("type LIKE ? OR source LIKE ? OR title LIKE ? OR order_no LIKE ? OR remark LIKE ?", keyword, keyword, keyword, keyword, keyword)
 	}
+	if query.Type != "" {
+		db = db.Where("type = ?", query.Type)
+	}
+	if query.Source != "" {
+		db = db.Where("source = ?", query.Source)
+	}
+	if query.Direction != "" {
+		db = db.Where("direction = ?", query.Direction)
+	}
+	if query.StartTime > 0 {
+		db = db.Where("occurred_at >= ?", query.StartTime)
+	}
+	if query.EndTime > 0 {
+		db = db.Where("occurred_at <= ?", query.EndTime)
+	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err
 	}
@@ -201,6 +274,102 @@ func (s *UserWalletService) ListRecords(userGuid string, query vos.PageQuery) (v
 		return vos.PageResult{}, err
 	}
 	return vos.PageResult{List: records, Total: total, Page: query.Page, Size: query.Size}, nil
+}
+
+func (s *UserWalletService) ListActivities(userGuid string, query WalletActivityQuery) ([]WalletActivityItem, error) {
+	userGuid = strings.TrimSpace(userGuid)
+	if userGuid == "" {
+		return nil, errors.New("user guid is required")
+	}
+	query.Normalize()
+	db := s.RecordCrud.DB().Model(&domains.UserWalletRecord{}).Where("user_guid = ?", userGuid)
+	db = applyWalletActivityTimeRange(db, query)
+
+	var records []domains.UserWalletRecord
+	if err := db.
+		Where("amount_micros_delta <> 0").
+		Where("NOT " + walletAPIConsumeSQL()).
+		Order("occurred_at desc, id desc").
+		Find(&records).Error; err != nil {
+		return nil, err
+	}
+
+	activities := make([]WalletActivityItem, 0, len(records))
+	for i := range records {
+		activities = append(activities, walletRecordActivity(records[i]))
+	}
+
+	apiActivities, err := s.listAPIConsumeActivities(userGuid, query)
+	if err != nil {
+		return nil, err
+	}
+	activities = append(activities, apiActivities...)
+	sort.SliceStable(activities, func(i, j int) bool {
+		if activities[i].Timestamp == activities[j].Timestamp {
+			return activities[i].ID > activities[j].ID
+		}
+		return activities[i].Timestamp > activities[j].Timestamp
+	})
+	return activities, nil
+}
+
+type walletAPIConsumeAggregate struct {
+	HourStart         int64
+	Count             int64
+	RequestCount      int64
+	AmountMicrosDelta int64
+}
+
+func (s *UserWalletService) listAPIConsumeActivities(userGuid string, query WalletActivityQuery) ([]WalletActivityItem, error) {
+	hourExpr := walletHourBucketExpr(s.RecordCrud.DB())
+	db := s.RecordCrud.DB().
+		Model(&domains.UserWalletRecord{}).
+		Select(fmt.Sprintf("%s AS hour_start, COUNT(*) AS count, COALESCE(SUM(request_count_delta), 0) AS request_count, COALESCE(SUM(amount_micros_delta), 0) AS amount_micros_delta", hourExpr)).
+		Where("user_guid = ?", userGuid).
+		Where(walletAPIConsumeSQL()).
+		Group(hourExpr)
+	db = applyWalletActivityTimeRange(db, query)
+
+	var rows []walletAPIConsumeAggregate
+	if err := db.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	activities := make([]WalletActivityItem, 0, len(rows))
+	for _, row := range rows {
+		if row.HourStart <= 0 || row.Count <= 0 {
+			continue
+		}
+		latest, err := s.latestAPIConsumeRecord(userGuid, row.HourStart)
+		if err != nil {
+			return nil, err
+		}
+		activities = append(activities, WalletActivityItem{
+			ID:                       fmt.Sprintf("api-consume-%d", row.HourStart),
+			Category:                 domains.WalletRecordTypeConsume,
+			Aggregate:                true,
+			Title:                    "API 消费汇总",
+			Source:                   domains.WalletSourceRelay,
+			Timestamp:                row.HourStart,
+			EndTimestamp:             row.HourStart + 3599,
+			AmountMicrosDelta:        row.AmountMicrosDelta,
+			BalanceAmountMicrosAfter: latest.BalanceAmountMicrosAfter,
+			Currency:                 defaultString(latest.Currency, "CNY"),
+			Count:                    row.Count,
+			RequestCount:             firstPositiveInt64(row.RequestCount, row.Count),
+		})
+	}
+	return activities, nil
+}
+
+func (s *UserWalletService) latestAPIConsumeRecord(userGuid string, hourStart int64) (domains.UserWalletRecord, error) {
+	var record domains.UserWalletRecord
+	err := s.RecordCrud.DB().
+		Where("user_guid = ?", userGuid).
+		Where(walletAPIConsumeSQL()).
+		Where("occurred_at >= ? AND occurred_at <= ?", hourStart, hourStart+3599).
+		Order("occurred_at desc, id desc").
+		First(&record).Error
+	return record, err
 }
 
 func (s *UserWalletService) RecordIncome(tx *gorm.DB, input WalletRecordInput) error {
@@ -461,6 +630,107 @@ func applyBalanceAccountUpdate(wallet *domains.UserWallet, input WalletBalanceAc
 	normalizeWallet(wallet)
 }
 
+func walletRecordActivity(record domains.UserWalletRecord) WalletActivityItem {
+	timestamp := normalizeUnixSeconds(record.OccurredAt)
+	if timestamp <= 0 {
+		timestamp = normalizeUnixSeconds(record.CreateTime)
+	}
+	return WalletActivityItem{
+		ID:                                 walletRecordActivityID(record),
+		Category:                           walletRecordCategory(record),
+		Aggregate:                          false,
+		Title:                              defaultString(record.Title, walletRecordTypeText(record.Type)),
+		Source:                             record.Source,
+		Timestamp:                          timestamp,
+		AmountMicrosDelta:                  record.AmountMicrosDelta,
+		BalanceAmountMicrosAfter:           record.BalanceAmountMicrosAfter,
+		Currency:                           defaultString(record.Currency, "CNY"),
+		Count:                              1,
+		RequestCount:                       nonNegativeInt64(record.RequestCountDelta),
+		Guid:                               record.Guid,
+		RecordID:                           record.Id,
+		RelatedGuid:                        record.RelatedGuid,
+		Remark:                             record.Remark,
+		PaidBalanceAmountMicrosAfter:       record.PaidBalanceAmountMicrosAfter,
+		RewardBalanceAmountMicrosAfter:     record.RewardBalanceAmountMicrosAfter,
+		CommissionBalanceAmountMicrosAfter: record.CommissionBalanceAmountMicrosAfter,
+	}
+}
+
+func walletRecordActivityID(record domains.UserWalletRecord) string {
+	if strings.TrimSpace(record.Guid) != "" {
+		return record.Guid
+	}
+	if record.Id > 0 {
+		return fmt.Sprintf("wallet-record-%d", record.Id)
+	}
+	return fmt.Sprintf("wallet-record-%d-%s-%d", normalizeUnixSeconds(record.OccurredAt), record.Type, record.AmountMicrosDelta)
+}
+
+func walletRecordCategory(record domains.UserWalletRecord) string {
+	recordType := strings.ToLower(strings.TrimSpace(record.Type))
+	source := strings.ToLower(strings.TrimSpace(record.Source))
+	if source == domains.WalletSourceRedemption {
+		return "redemption"
+	}
+	if recordType == domains.WalletRecordTypeSubscription || source == domains.WalletSourceSubscription {
+		return domains.WalletRecordTypeSubscription
+	}
+	if recordType == domains.WalletRecordTypeCommission || source == domains.WalletSourceInvitation {
+		return domains.WalletRecordTypeCommission
+	}
+	if recordType == domains.WalletRecordTypeReward || source == domains.WalletSourceCheckin {
+		return domains.WalletRecordTypeReward
+	}
+	if recordType == domains.WalletRecordTypeConsume || source == domains.WalletSourceRelay {
+		return domains.WalletRecordTypeConsume
+	}
+	if recordType == domains.WalletRecordTypeRecharge || source == domains.WalletSourcePayment {
+		return domains.WalletRecordTypeRecharge
+	}
+	return "other"
+}
+
+func walletRecordTypeText(recordType string) string {
+	switch strings.ToLower(strings.TrimSpace(recordType)) {
+	case domains.WalletRecordTypeRecharge:
+		return "充值"
+	case domains.WalletRecordTypeSubscription:
+		return "订阅"
+	case domains.WalletRecordTypeConsume:
+		return "消费"
+	case domains.WalletRecordTypeReward:
+		return "奖励"
+	case domains.WalletRecordTypeCommission:
+		return "分佣"
+	default:
+		return "资金流水"
+	}
+}
+
+func applyWalletActivityTimeRange(db *gorm.DB, query WalletActivityQuery) *gorm.DB {
+	if query.StartTime > 0 {
+		db = db.Where("occurred_at >= ?", query.StartTime)
+	}
+	if query.EndTime > 0 {
+		db = db.Where("occurred_at <= ?", query.EndTime)
+	}
+	return db
+}
+
+func walletAPIConsumeSQL() string {
+	return "(amount_micros_delta < 0 AND (type = 'consume' OR source = 'relay' OR LOWER(title) LIKE '%api%'))"
+}
+
+func walletHourBucketExpr(db *gorm.DB) string {
+	switch db.Dialector.Name() {
+	case "mysql", "postgres":
+		return "(FLOOR(occurred_at / 3600) * 3600)"
+	default:
+		return "((occurred_at / 3600) * 3600)"
+	}
+}
+
 func walletTotalIncomeAmountMicros(wallet *domains.UserWallet) int64 {
 	return nonNegativeInt64(wallet.TotalRechargeAmountMicros) +
 		nonNegativeInt64(wallet.TotalSubscriptionAmountMicros) +
@@ -487,6 +757,13 @@ func int64Min(a, b int64) int64 {
 func nonNegativeInt64(value int64) int64 {
 	if value < 0 {
 		return 0
+	}
+	return value
+}
+
+func normalizeUnixSeconds(value int64) int64 {
+	if value > 1_000_000_000_000 {
+		return value / 1000
 	}
 	return value
 }

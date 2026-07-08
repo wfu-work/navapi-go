@@ -9,5 +9,6 @@ func (r WalletRouter) InitWalletRouter(privateGroup *gin.RouterGroup, publicGrou
 	{
 		group.GET("/self", walletApi.Self)
 		group.GET("/self/records", walletApi.SelfRecords)
+		group.GET("/self/activities", walletApi.SelfActivities)
 	}
 }
