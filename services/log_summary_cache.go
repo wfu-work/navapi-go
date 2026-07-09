@@ -35,7 +35,7 @@ func usageSummaryCacheKey(userGuid string, original UsageSummaryQuery, normalize
 		}
 		endKey = normalized.EndTime / bucketMS
 	}
-	return fmt.Sprintf("%s|%s|%d|%d|%d|%d", mode, userGuid, normalized.Days, normalized.TopN, startKey, endKey)
+	return fmt.Sprintf("%s|%s|%d|%d|%d|%d|%s|%t", mode, userGuid, normalized.Days, normalized.TopN, startKey, endKey, normalized.Source, normalized.IncludeProbe)
 }
 
 func usageSummaryCacheGet(key string, now time.Time) (UsageSummary, bool) {

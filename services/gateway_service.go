@@ -54,6 +54,7 @@ type PublicServiceStatus struct {
 	StatusLabel   string                     `json:"statusLabel"`
 	UpdatedAt     int64                      `json:"updatedAt"`
 	WindowMinutes int                        `json:"windowMinutes"`
+	Probe         ProbeSettings              `json:"probe"`
 	Health        GatewayHealth              `json:"health"`
 	Summary       PublicServiceStatusSummary `json:"summary"`
 	Models        []PublicModelStatus        `json:"models"`
@@ -175,6 +176,7 @@ func (s GatewayService) publicStatus(mode string, now time.Time) (PublicServiceS
 		StatusLabel:   "正常",
 		UpdatedAt:     now.UnixMilli(),
 		WindowMinutes: int(serviceStatusWindow / time.Minute),
+		Probe:         ProbeServiceApp.Settings(),
 		Health:        health,
 	}
 	if health.DatabaseStatus != "ok" {
@@ -187,15 +189,23 @@ func (s GatewayService) publicStatus(mode string, now time.Time) (PublicServiceS
 	if err != nil {
 		return PublicServiceStatus{}, err
 	}
-	rows, err := s.recentUsageBuckets(start, now)
-	if err != nil {
-		return PublicServiceStatus{}, err
+	var rows []serviceUsageBucketRow
+	if status.Probe.Enabled {
+		rows, err = s.recentProbeBuckets(start, now)
+		if err != nil {
+			return PublicServiceStatus{}, err
+		}
 	}
 	status.Summary.EnabledModels = len(models)
 	status.Models = buildPublicModelStatuses(models, rows, start, now)
 	status.Summary = summarizePublicServiceStatus(status.Summary, status.Models)
-	status.Status = publicServiceOverallTone(status.Health, status.Summary, status.Models)
-	status.StatusLabel = publicServiceStatusLabel(status.Status, true)
+	if !status.Probe.Enabled {
+		status.Status = "idle"
+		status.StatusLabel = "探测未启用"
+	} else {
+		status.Status = publicServiceOverallTone(status.Health, status.Summary, status.Models)
+		status.StatusLabel = publicServiceStatusLabel(status.Status, true)
+	}
 	return status, nil
 }
 
@@ -207,7 +217,7 @@ func resetGatewayStatusCache() {
 	gatewayStatusCache.Unlock()
 }
 
-func (s GatewayService) recentUsageBuckets(start time.Time, end time.Time) ([]serviceUsageBucketRow, error) {
+func (s GatewayService) recentProbeBuckets(start time.Time, end time.Time) ([]serviceUsageBucketRow, error) {
 	if !end.After(start) {
 		return nil, nil
 	}
@@ -233,7 +243,7 @@ func (s GatewayService) recentUsageBuckets(start time.Time, end time.Time) ([]se
 	`, bucketExpr)
 	var rows []serviceUsageBucketRow
 	err := global.NAV_DB.
-		Model(&domains.UsageLog{}).
+		Model(&domains.ProbeLog{}).
 		Select(selectSQL).
 		Where("create_time >= ? AND create_time < ?", startMS, endExclusive).
 		Group(bucketExpr + ", model_name").
@@ -394,6 +404,9 @@ func publicServiceOverallTone(health GatewayHealth, summary PublicServiceStatusS
 	if health.DatabaseStatus != "ok" {
 		return "danger"
 	}
+	if summary.TotalRequests <= 0 {
+		return "idle"
+	}
 	hasWarning := false
 	for _, model := range models {
 		if model.Status == "danger" {
@@ -437,7 +450,7 @@ func publicServiceStatusLabel(tone string, overall bool) string {
 	case "danger":
 		return "异常"
 	case "idle":
-		return "暂无调用"
+		return "暂无探测"
 	default:
 		return "正常"
 	}
@@ -446,7 +459,7 @@ func publicServiceStatusLabel(tone string, overall bool) string {
 func publicServiceSegmentLabel(start time.Time, bucket serviceBucketAggregate, tone string, latencyMs int64) string {
 	timeLabel := start.Format("15:04")
 	if bucket.requests <= 0 {
-		return timeLabel + " 暂无调用"
+		return timeLabel + " 暂无探测"
 	}
 	return timeLabel + " " + publicServiceStatusLabel(tone, false) + " " + strconv.FormatInt(bucket.requests, 10) + " 次 " + strconv.FormatInt(latencyMs, 10) + "ms"
 }

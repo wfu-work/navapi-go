@@ -943,6 +943,7 @@ func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.Ve
 		RequestID:           c.GetHeader("X-Request-Id"),
 		UpstreamRequestID:   upstreamRequestID,
 		ClientIP:            c.ClientIP(),
+		Source:              domains.UsageLogSourceUser,
 		Other:               buildUsageLogOther(token, body, detail),
 	}
 }

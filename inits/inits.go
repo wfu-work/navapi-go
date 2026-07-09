@@ -50,6 +50,10 @@ func Init() {
 			global.NAV_LOG.Error("ensure usage log indexes failed", zap.Error(err))
 			os.Exit(1)
 		}
+		if err := services.ProbeServiceApp.EnsureIndexes(); err != nil {
+			global.NAV_LOG.Error("ensure probe log indexes failed", zap.Error(err))
+			os.Exit(1)
+		}
 		if err := services.PermissionSeedServiceApp.Ensure(); err != nil {
 			global.NAV_LOG.Error("ensure navapi permissions failed", zap.Error(err))
 			os.Exit(1)
@@ -58,23 +62,32 @@ func Init() {
 	sysInit.OnScheInit(func(timers commonScheduleds.Timer, options []cron.Option) {
 		_, _ = timers.AddTaskByFunc("navapi", "@every 1m", func() {
 			_ = services.OptionServiceApp.Load()
+			_ = services.ProbeServiceApp.RefreshSchedule()
 		}, "refresh_navapi_options", options...)
+		if err := services.ProbeServiceApp.ConfigureScheduler(timers, options); err != nil {
+			global.NAV_LOG.Error("configure probe scheduler failed", zap.Error(err))
+		}
 	})
 	sysInit.OnClearInit(func() []commonScheduleds.ClearDB {
 		retentionDays := services.OptionServiceApp.Int64("usage.log_retention_days", defaultUsageLogRetentionDays)
-		if retentionDays <= 0 {
-			return []commonScheduleds.ClearDB{}
-		}
 		if retentionDays > 3650 {
 			retentionDays = 3650
 		}
-		return []commonScheduleds.ClearDB{
-			{
+		clearDBs := []commonScheduleds.ClearDB{}
+		if retentionDays > 0 {
+			clearDBs = append(clearDBs, commonScheduleds.ClearDB{
 				TableName:    (domains.UsageLog{}).TableName(),
 				CompareField: "create_time",
 				Interval:     fmt.Sprintf("%dh", retentionDays*24),
-			},
+			})
 		}
+		probeRetentionDays := services.ProbeServiceApp.RetentionDays()
+		clearDBs = append(clearDBs, commonScheduleds.ClearDB{
+			TableName:    (domains.ProbeLog{}).TableName(),
+			CompareField: "create_time",
+			Interval:     fmt.Sprintf("%dh", probeRetentionDays*24),
+		})
+		return clearDBs
 	})
 	sysInit.Init()
 }

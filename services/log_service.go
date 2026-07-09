@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"navapi-go/domains"
@@ -86,17 +87,21 @@ type UsageSummary struct {
 }
 
 type UsageSummaryQuery struct {
-	Days      int
-	TopN      int
-	StartTime int64
-	EndTime   int64
+	Days         int
+	TopN         int
+	StartTime    int64
+	EndTime      int64
+	Source       string
+	IncludeProbe bool
 }
 
 type UsageLogQuery struct {
 	vos.PageQuery
-	Status    string `form:"status" json:"status"`
-	StartTime int64  `form:"startTime" json:"startTime"`
-	EndTime   int64  `form:"endTime" json:"endTime"`
+	Status       string `form:"status" json:"status"`
+	StartTime    int64  `form:"startTime" json:"startTime"`
+	EndTime      int64  `form:"endTime" json:"endTime"`
+	Source       string `form:"source" json:"source"`
+	IncludeProbe bool   `form:"includeProbe" json:"includeProbe"`
 }
 
 type usageAggregateRow struct {
@@ -183,6 +188,7 @@ func (s *LogService) EnsureIndexes() error {
 		{name: "idx_nav_api_usage_logs_user_status_time", sql: "CREATE INDEX idx_nav_api_usage_logs_user_status_time ON nav_api_usage_logs(user_guid, status, create_time)"},
 		{name: "idx_nav_api_usage_logs_time_token", sql: "CREATE INDEX idx_nav_api_usage_logs_time_token ON nav_api_usage_logs(create_time, token_guid)"},
 		{name: "idx_nav_api_usage_logs_time_channel", sql: "CREATE INDEX idx_nav_api_usage_logs_time_channel ON nav_api_usage_logs(create_time, channel_guid)"},
+		{name: "idx_nav_api_usage_logs_source_time", sql: "CREATE INDEX idx_nav_api_usage_logs_source_time ON nav_api_usage_logs(source, create_time)"},
 	}
 	for _, index := range indexes {
 		if db.Migrator().HasIndex(&domains.UsageLog{}, index.name) {
@@ -227,6 +233,7 @@ func applyUsageLogFilters(db *gorm.DB, userGuid string, query UsageLogQuery) *go
 	if query.Status != "" {
 		db = db.Where("status = ?", query.Status)
 	}
+	db = applyUsageLogSourceFilter(db, query.Source, query.IncludeProbe)
 	startTime := normalizeUsageQueryTime(query.StartTime)
 	endTime := normalizeUsageQueryTime(query.EndTime)
 	if startTime > 0 {
@@ -236,6 +243,30 @@ func applyUsageLogFilters(db *gorm.DB, userGuid string, query UsageLogQuery) *go
 		db = db.Where("create_time <= ?", endTime)
 	}
 	return db
+}
+
+func applyUsageLogSourceFilter(db *gorm.DB, source string, includeProbe bool) *gorm.DB {
+	source = normalizeUsageLogSource(source)
+	if source != "" {
+		if source == domains.UsageLogSourceUser {
+			return db.Where("source IS NULL OR source = '' OR source = ?", domains.UsageLogSourceUser)
+		}
+		return db.Where("source = ?", source)
+	}
+	if includeProbe {
+		return db
+	}
+	return db.Where("source IS NULL OR source = '' OR source <> ?", domains.UsageLogSourceProbe)
+}
+
+func normalizeUsageLogSource(source string) string {
+	source = strings.ToLower(strings.TrimSpace(source))
+	switch source {
+	case domains.UsageLogSourceUser, domains.UsageLogSourceProbe:
+		return source
+	default:
+		return ""
+	}
 }
 
 func (s *LogService) enrichUsageLogUsers(logs []domains.UsageLog) {
@@ -489,8 +520,8 @@ func (s *LogService) Stats(userGuid string, filters ...UsageLogQuery) (map[strin
 	db := s.DB().Model(&domains.UsageLog{})
 	if len(filters) > 0 {
 		db = applyUsageLogFilters(db, userGuid, filters[0])
-	} else if userGuid != "" {
-		db = db.Where("user_guid = ?", userGuid)
+	} else {
+		db = applyUsageLogFilters(db, userGuid, UsageLogQuery{})
 	}
 	aggregate, err := s.aggregateUsage(db)
 	if err != nil {
@@ -539,7 +570,7 @@ func (s *LogService) dailyDataInRange(userGuid string, startTime int64, endTime 
 		startTime, endTime = endTime, startTime
 	}
 	windows := buildUsageDayWindows(startTime, endTime)
-	stats, err := s.dailyUsageStats(userGuid, startTime, endTime)
+	stats, err := s.dailyUsageStats(userGuid, UsageSummaryQuery{StartTime: startTime, EndTime: endTime})
 	if err != nil {
 		return nil, err
 	}
@@ -558,7 +589,7 @@ func (s *LogService) UsageSummaryByQuery(userGuid string, query UsageSummaryQuer
 	if cached, ok := usageSummaryCacheGet(cacheKey, now); ok {
 		return cached, nil
 	}
-	dailyStats, err := s.dailyUsageStats(userGuid, normalized.StartTime, normalized.EndTime)
+	dailyStats, err := s.dailyUsageStats(userGuid, normalized)
 	if err != nil {
 		return UsageSummary{}, err
 	}
@@ -592,16 +623,18 @@ func (s *LogService) UsageSummaryByQuery(userGuid string, query UsageSummaryQuer
 	return summary, nil
 }
 
-func (s *LogService) usageRangeDB(userGuid string, startTime int64, endTime int64) *gorm.DB {
+func (s *LogService) usageRangeDB(userGuid string, query UsageSummaryQuery) *gorm.DB {
+	startTime := normalizeUsageQueryTime(query.StartTime)
+	endTime := normalizeUsageQueryTime(query.EndTime)
 	db := s.DB().Model(&domains.UsageLog{}).Where("create_time >= ? AND create_time <= ?", startTime, endTime)
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
-	return db
+	return applyUsageLogSourceFilter(db, query.Source, query.IncludeProbe)
 }
 
-func (s *LogService) dailyUsageStats(userGuid string, startTime int64, endTime int64) (usageDailyStatsResult, error) {
-	db := s.usageRangeDB(userGuid, startTime, endTime)
+func (s *LogService) dailyUsageStats(userGuid string, query UsageSummaryQuery) (usageDailyStatsResult, error) {
+	db := s.usageRangeDB(userGuid, query)
 	dateExpr := usageDateExprSQL(db)
 	selectSQL := fmt.Sprintf(`
 		%s as usage_date,
@@ -667,7 +700,7 @@ func (s *LogService) aggregateUsage(db *gorm.DB) (usageAggregateRow, error) {
 }
 
 func (s *LogService) usageDimensionStats(userGuid string, query UsageSummaryQuery, keyExpr string, nameExpr string, extraSelect string) ([]UsageDimensionStat, error) {
-	db := s.usageRangeDB(userGuid, query.StartTime, query.EndTime)
+	db := s.usageRangeDB(userGuid, query)
 	extra := ""
 	if extraSelect != "" {
 		extra = ", " + extraSelect
@@ -722,7 +755,7 @@ func (s *LogService) usageModelSeries(userGuid string, query UsageSummaryQuery, 
 		return []UsageNamedSeries{}, nil
 	}
 	seriesByModel := map[string]map[string]*DailyUsageData{}
-	db := s.usageRangeDB(userGuid, query.StartTime, query.EndTime).Where("model_name IN ?", modelNames)
+	db := s.usageRangeDB(userGuid, query).Where("model_name IN ?", modelNames)
 	dateExpr := usageDateExprSQL(db)
 	selectSQL := fmt.Sprintf(`
 		%s as usage_date,
@@ -866,7 +899,7 @@ func normalizeUsageSummaryQuery(query UsageSummaryQuery) UsageSummaryQuery {
 	if startTime <= 0 && endTime <= 0 {
 		end := time.Now()
 		start := beginningOfDay(end).AddDate(0, 0, -(days - 1))
-		return UsageSummaryQuery{Days: days, TopN: topN, StartTime: start.UnixMilli(), EndTime: end.UnixMilli()}
+		return UsageSummaryQuery{Days: days, TopN: topN, StartTime: start.UnixMilli(), EndTime: end.UnixMilli(), Source: normalizeUsageLogSource(query.Source), IncludeProbe: query.IncludeProbe}
 	}
 	if endTime <= 0 {
 		endTime = time.Now().UnixMilli()
@@ -887,7 +920,7 @@ func normalizeUsageSummaryQuery(query UsageSummaryQuery) UsageSummaryQuery {
 		days = 366
 		startTime = endDay.AddDate(0, 0, -(days - 1)).UnixMilli()
 	}
-	return UsageSummaryQuery{Days: days, TopN: topN, StartTime: startTime, EndTime: endTime}
+	return UsageSummaryQuery{Days: days, TopN: topN, StartTime: startTime, EndTime: endTime, Source: normalizeUsageLogSource(query.Source), IncludeProbe: query.IncludeProbe}
 }
 
 func buildUsageDayWindows(startTime int64, endTime int64) []usageDayWindow {

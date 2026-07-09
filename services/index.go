@@ -11,6 +11,7 @@ var ServiceGroupApp = &ServiceGroup{
 	ClientRegisterService:     ClientRegisterServiceApp,
 	ClientUserService:         ClientUserServiceApp,
 	SystemMonitorService:      SystemMonitorServiceApp,
+	ProbeService:              ProbeServiceApp,
 	TokenService:              TokenServiceApp,
 	LogService:                LogServiceApp,
 	ModelService:              ModelServiceApp,
@@ -45,6 +46,7 @@ type ServiceGroup struct {
 	*ClientRegisterService
 	*ClientUserService
 	*SystemMonitorService
+	*ProbeService
 	*TokenService
 	*LogService
 	*ModelService
