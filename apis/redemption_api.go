@@ -17,6 +17,11 @@ type redeemRequest struct {
 	Code string `json:"code" binding:"required"`
 }
 
+type adminRedeemRequest struct {
+	Code  string `json:"code" binding:"required"`
+	Email string `json:"email" binding:"required"`
+}
+
 // List 兑换码列表
 // @Summary 兑换码列表
 // @Description 兑换码列表
@@ -205,6 +210,34 @@ func (a RedemptionApi) Redeem(c *gin.Context) {
 		return
 	}
 	redemption, err := redemptionService.Redeem(req.Code, utils.GetUserGuid(c))
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(redemption, c)
+}
+
+// AdminRedeem 管理端按用户邮箱兑换卡密
+// @Summary 管理端按用户邮箱兑换卡密
+// @Description 管理端调试充值使用，按用户邮箱将未使用卡密兑换到指定用户钱包
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body adminRedeemRequest true "管理端兑换请求"
+// @Success 200 {object} response.Response{data=domains.Redemption,msg=string}
+// @Router /redemption/admin-redeem [post]
+// @Router /card/admin-redeem [post]
+func (a RedemptionApi) AdminRedeem(c *gin.Context) {
+	var req adminRedeemRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	redemption, err := redemptionService.RedeemByEmail(services.RedemptionAdminRedeemRequest{
+		Code:  req.Code,
+		Email: req.Email,
+	})
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

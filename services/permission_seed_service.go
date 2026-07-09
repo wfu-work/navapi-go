@@ -244,6 +244,7 @@ var navapiAPIPermissionSeeds = []apiPermissionSeed{
 	{Guid: "navapi-api-card-update", Name: "更新兑换卡", Code: "navapi.card.update", Path: "/card/", Verb: "PUT", Sort: 735, Group: "兑换卡"},
 	{Guid: "navapi-api-card-delete", Name: "删除兑换卡", Code: "navapi.card.delete", Path: "/card/:guid", Verb: "DELETE", Sort: 736, Group: "兑换卡"},
 	{Guid: "navapi-api-card-redeem", Name: "兑换卡兑换", Code: "navapi.card.redeem", Path: "/card/redeem", Verb: "POST", User: true, Sort: 737, Group: "兑换卡"},
+	{Guid: "navapi-api-card-admin-redeem", Name: "管理端兑换卡充值", Code: "navapi.card.adminRedeem", Path: "/card/admin-redeem", Verb: "POST", Sort: 738, Group: "兑换卡"},
 	{Guid: "navapi-api-redemption-list", Name: "兑换码列表", Code: "navapi.redemption.list", Path: "/redemption/list", Verb: "GET", Sort: 740, Group: "兑换卡"},
 	{Guid: "navapi-api-redemption-stats", Name: "兑换码统计", Code: "navapi.redemption.stats", Path: "/redemption/stats", Verb: "GET", Sort: 741, Group: "兑换卡"},
 	{Guid: "navapi-api-redemption-get", Name: "兑换码详情", Code: "navapi.redemption.get", Path: "/redemption/:guid", Verb: "GET", Sort: 742, Group: "兑换卡"},
@@ -252,6 +253,7 @@ var navapiAPIPermissionSeeds = []apiPermissionSeed{
 	{Guid: "navapi-api-redemption-update", Name: "更新兑换码", Code: "navapi.redemption.update", Path: "/redemption/", Verb: "PUT", Sort: 745, Group: "兑换卡"},
 	{Guid: "navapi-api-redemption-delete", Name: "删除兑换码", Code: "navapi.redemption.delete", Path: "/redemption/:guid", Verb: "DELETE", Sort: 746, Group: "兑换卡"},
 	{Guid: "navapi-api-redemption-redeem", Name: "兑换码兑换", Code: "navapi.redemption.redeem", Path: "/redemption/redeem", Verb: "POST", User: true, Sort: 747, Group: "兑换卡"},
+	{Guid: "navapi-api-redemption-admin-redeem", Name: "管理端兑换码充值", Code: "navapi.redemption.adminRedeem", Path: "/redemption/admin-redeem", Verb: "POST", Sort: 748, Group: "兑换卡"},
 
 	{Guid: "navapi-api-announcement-client-list", Name: "客户端公告列表", Code: "navapi.announcement.client.list", Path: "/announcement/client/list", Verb: "GET", User: true, Sort: 779, Group: "运营"},
 	{Guid: "navapi-api-announcement-list", Name: "公告列表", Code: "navapi.announcement.list", Path: "/announcement/list", Verb: "GET", Sort: 780, Group: "运营"},

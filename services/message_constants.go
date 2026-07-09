@@ -18,6 +18,7 @@ const (
 	TemplateCodeUserBalanceInsufficient = "user_balance_insufficient"
 	TemplateCodeUserDailyUsageBill      = "user_daily_usage_bill"
 	TemplateCodeAdminDailyUsageBill     = "admin_daily_usage_bill"
+	TemplateCodePlatformAnnouncement    = "platform_announcement"
 	TemplateCodeEmailConfigTest         = "email_config_test"
 	MaxMessageSendRetries               = 3
 	RegisterEmailCodeTTL                = 10 * time.Minute

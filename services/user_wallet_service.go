@@ -24,6 +24,11 @@ type UserWalletService struct {
 
 var UserWalletServiceApp = new(UserWalletService)
 
+const (
+	balanceReminderThresholdAmountMicros int64 = 10 * amountMicrosPerUnit
+	balanceReminderDedupeWindow                = 24 * time.Hour
+)
+
 type WalletRecordInput struct {
 	UserGuid         string
 	Type             string
@@ -192,6 +197,59 @@ func (s *UserWalletService) GetBalanceAccount(userGuid string) (*WalletBalanceAc
 	}
 	account := walletToBalanceAccount(wallet)
 	return &account, nil
+}
+
+func (s *UserWalletService) NotifyBalanceReminderAsync(userGuid string, reason string) {
+	userGuid = strings.TrimSpace(userGuid)
+	if userGuid == "" {
+		return
+	}
+	go func() {
+		_ = s.NotifyBalanceReminder(userGuid, reason)
+	}()
+}
+
+func (s *UserWalletService) NotifyBalanceReminder(userGuid string, reason string) error {
+	userGuid = strings.TrimSpace(userGuid)
+	if userGuid == "" {
+		return nil
+	}
+	wallet, err := s.Get(userGuid)
+	if err != nil {
+		return err
+	}
+	if wallet.BalanceAmountMicros >= balanceReminderThresholdAmountMicros {
+		return nil
+	}
+	settings, err := UserSettingsServiceApp.Get(userGuid)
+	if err != nil {
+		return err
+	}
+	if !settings.BalanceReminderEnabled {
+		return nil
+	}
+	user, err := s.balanceReminderUser(userGuid)
+	if err != nil {
+		return err
+	}
+	email := strings.ToLower(strings.TrimSpace(user.Email))
+	if email == "" || !isValidEmailAddress(email) {
+		return nil
+	}
+	recent, err := s.hasRecentBalanceReminder(email)
+	if err != nil {
+		return err
+	}
+	if recent {
+		return nil
+	}
+	_, err = EmailServiceApp.SendTemplate(EmailTemplateInput{
+		Code:      TemplateCodeUserBalanceInsufficient,
+		Title:     "用户余额不足提醒",
+		Variables: balanceReminderEmailVariables(user, wallet, reason),
+		To:        []string{email},
+	})
+	return err
 }
 
 // ListBalanceAccounts is the admin balance list backed by user wallets.
@@ -544,6 +602,33 @@ func (s *UserWalletService) CancelReservedConsume(tx *gorm.DB, recordID uint, re
 		"commission_balance_amount_micros_after": wallet.CommissionBalanceAmountMicros,
 		"remark":                                 reason,
 	}).Error
+}
+
+func (s *UserWalletService) balanceReminderUser(userGuid string) (commonDomains.SysUser, error) {
+	var user commonDomains.SysUser
+	err := s.DB().Where("guid = ?", strings.TrimSpace(userGuid)).First(&user).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return user, nil
+	}
+	return user, err
+}
+
+func (s *UserWalletService) hasRecentBalanceReminder(email string) (bool, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return false, nil
+	}
+	since := nowMilli() - int64(balanceReminderDedupeWindow/time.Millisecond)
+	var count int64
+	err := MessageSendRecordServiceApp.DB().
+		Model(&domains.MessageSendRecord{}).
+		Where("channel = ?", MessageChannelEmail).
+		Where("template_code = ?", TemplateCodeUserBalanceInsufficient).
+		Where("LOWER(recipient_email) = ?", email).
+		Where("send_status = ?", MessageSendStatusSuccess).
+		Where("(success_time >= ? OR create_time >= ?)", since, since).
+		Count(&count).Error
+	return count > 0, err
 }
 
 func (s *UserWalletService) lockWallet(tx *gorm.DB, userGuid string) (*domains.UserWallet, error) {
@@ -940,6 +1025,43 @@ func walletTotalIncomeAmountMicros(wallet *domains.UserWallet) int64 {
 		nonNegativeInt64(wallet.TotalSubscriptionAmountMicros) +
 		nonNegativeInt64(wallet.TotalRewardAmountMicros) +
 		nonNegativeInt64(wallet.TotalCommissionAmountMicros)
+}
+
+func balanceReminderEmailVariables(user commonDomains.SysUser, wallet *domains.UserWallet, reason string) map[string]string {
+	normalizeWallet(wallet)
+	email := strings.ToLower(strings.TrimSpace(user.Email))
+	username := defaultString(user.NickName, defaultString(user.Username, email))
+	totalAmountMicros := walletTotalIncomeAmountMicros(wallet)
+	if totalAmountMicros <= 0 && wallet.BalanceAmountMicros+wallet.TotalConsumedAmountMicros > 0 {
+		totalAmountMicros = wallet.BalanceAmountMicros + wallet.TotalConsumedAmountMicros
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "账户余额低于 10 元"
+	}
+	return map[string]string{
+		"appName":      "Nav API",
+		"username":     username,
+		"email":        email,
+		"userGuid":     strings.TrimSpace(user.Guid),
+		"remainAmount": formatReminderAmountMicros(wallet.BalanceAmountMicros),
+		"threshold":    formatReminderAmountMicros(balanceReminderThresholdAmountMicros),
+		"totalAmount":  formatReminderAmountMicros(totalAmountMicros),
+		"usedAmount":   formatReminderAmountMicros(wallet.TotalConsumedAmountMicros),
+		"amountUnit":   "元",
+		"reason":       strings.TrimSpace(reason),
+		"rechargeUrl":  "/app/dashboard/wallet",
+		"consoleUrl":   "/app/dashboard/overview",
+		"time":         time.Now().Format("2006-01-02 15:04:05"),
+	}
+}
+
+func formatReminderAmountMicros(micros int64) string {
+	text := fmt.Sprintf("%.6f", AmountMicrosToCost(micros))
+	text = strings.TrimRight(strings.TrimRight(text, "0"), ".")
+	if text == "" {
+		return "0"
+	}
+	return text
 }
 
 func firstPositiveInt64(values ...int64) int64 {

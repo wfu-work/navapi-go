@@ -211,6 +211,16 @@ func defaultMessageTemplates(now int64) []domains.MessageTemplate {
 			Description:    "管理员每日平台调用、用户、模型与渠道用量汇总账单邮件，模板编码不要修改。",
 			Status:         constants.StatusEnabled,
 		},
+		{
+			BaseDataEntity: commonDomains.BaseDataEntity{Guid: TemplateCodePlatformAnnouncement, CreateTime: now, UpdateTime: now},
+			Code:           TemplateCodePlatformAnnouncement,
+			Name:           "系统公告通知",
+			Channel:        MessageChannelEmail,
+			Subject:        "{{appName}} 系统公告：{{announcementTitle}}",
+			Content:        strings.TrimSpace(static.PlatformAnnouncementTemplateHTML),
+			Description:    "管理端发布公告并开启邮件通知时发送给系统用户，模板编码不要修改。",
+			Status:         constants.StatusEnabled,
+		},
 	}
 }
 

@@ -18,6 +18,7 @@ func (r RedemptionRouter) InitRedemptionRouter(router *gin.RouterGroup) {
 		group.POST("/batch", middlewares.AdminOnly(), redemptionApi.BatchCreate)
 		group.PUT("/", middlewares.AdminOnly(), redemptionApi.Update)
 		group.DELETE("/:guid", middlewares.AdminOnly(), redemptionApi.Delete)
+		group.POST("/admin-redeem", middlewares.AdminOnly(), redemptionApi.AdminRedeem)
 		group.POST("/redeem", redemptionApi.Redeem)
 	}
 
@@ -30,6 +31,7 @@ func (r RedemptionRouter) InitRedemptionRouter(router *gin.RouterGroup) {
 		card.POST("/batch", middlewares.AdminOnly(), redemptionApi.BatchCreate)
 		card.PUT("/", middlewares.AdminOnly(), redemptionApi.Update)
 		card.DELETE("/:guid", middlewares.AdminOnly(), redemptionApi.Delete)
+		card.POST("/admin-redeem", middlewares.AdminOnly(), redemptionApi.AdminRedeem)
 		card.POST("/redeem", redemptionApi.Redeem)
 	}
 }

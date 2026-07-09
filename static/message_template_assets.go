@@ -13,3 +13,6 @@ var UserDailyUsageBillTemplateHTML string
 
 //go:embed message_templates/admin_daily_usage_bill.html
 var AdminDailyUsageBillTemplateHTML string
+
+//go:embed message_templates/platform_announcement.html
+var PlatformAnnouncementTemplateHTML string

@@ -35,6 +35,11 @@ type RedemptionBatchRequest struct {
 	Remark    string `json:"remark"`
 }
 
+type RedemptionAdminRedeemRequest struct {
+	Code  string `json:"code"`
+	Email string `json:"email"`
+}
+
 type RedemptionListQuery struct {
 	vos.PageQuery
 	UsageStatus string `form:"usageStatus" json:"usageStatus"`
@@ -310,6 +315,35 @@ func (s *RedemptionService) Redeem(code string, userGuid string) (*domains.Redem
 		return nil, err
 	}
 	return &redeemed, nil
+}
+
+func (s *RedemptionService) RedeemByEmail(req RedemptionAdminRedeemRequest) (*domains.Redemption, error) {
+	code := strings.TrimSpace(req.Code)
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if code == "" {
+		return nil, errors.New("redemption code is required")
+	}
+	if email == "" {
+		return nil, errors.New("email is required")
+	}
+	var user commonDomains.SysUser
+	if err := s.DB().Where("LOWER(email) = ?", email).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("用户邮箱不存在")
+		}
+		return nil, err
+	}
+	if strings.TrimSpace(user.Guid) == "" {
+		return nil, errors.New("用户 GUID 为空，无法充值")
+	}
+	redemption, err := s.Redeem(code, user.Guid)
+	if err != nil {
+		return nil, err
+	}
+	redemption.Username = user.Username
+	redemption.NickName = user.NickName
+	redemption.Email = user.Email
+	return redemption, nil
 }
 
 func (s *RedemptionService) newCode(prefix string) (string, error) {

@@ -616,7 +616,7 @@ func relayBillingError(err error) error {
 }
 
 func (s RelayService) settleCost(token *domains.ApiToken, reservation *billingReservation, amountMicros int64, detail QuotaCalculationDetail) error {
-	return TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
+	err := TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
 		reservedAmount := int64(0)
 		walletRecordID := uint(0)
 		if reservation != nil {
@@ -648,6 +648,11 @@ func (s RelayService) settleCost(token *domains.ApiToken, reservation *billingRe
 		}
 		return UserWalletServiceApp.RecordConsume(tx, input)
 	})
+	if err != nil {
+		return err
+	}
+	UserWalletServiceApp.NotifyBalanceReminderAsync(token.UserGuid, "API 调用消费后账户余额低于 10 元")
+	return nil
 }
 
 func (s RelayService) cancelReservation(token *domains.ApiToken, reservation *billingReservation, reason string) {
@@ -666,7 +671,7 @@ func (s RelayService) keepReservedCost(token *domains.ApiToken, reservation *bil
 	if token == nil || reservation == nil || reservation.AmountMicros <= 0 {
 		return
 	}
-	_ = TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
+	err := TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
 		return UserWalletServiceApp.FinalizeReservedConsume(tx, reservation.WalletRecordID, WalletRecordInput{
 			UserGuid:     token.UserGuid,
 			Type:         domains.WalletRecordTypeConsume,
@@ -679,6 +684,9 @@ func (s RelayService) keepReservedCost(token *domains.ApiToken, reservation *bil
 			Meta:         marshalBillingMeta(detail, reservation.AmountMicros),
 		})
 	})
+	if err == nil {
+		UserWalletServiceApp.NotifyBalanceReminderAsync(token.UserGuid, "API 调用消费后账户余额低于 10 元")
+	}
 }
 
 func defaultBaseURL(providerType string) string {

@@ -14,7 +14,8 @@ import (
 type AnnouncementApi struct{}
 
 type announcementRequest struct {
-	ID uint `json:"id"`
+	ID          uint `json:"id"`
+	EmailNotify bool `json:"emailNotify"`
 	domains.Announcement
 }
 
@@ -181,6 +182,9 @@ func (a AnnouncementApi) Save(c *gin.Context) {
 	if err := announcementService.Save(&announcement); err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
+	}
+	if req.EmailNotify {
+		announcementService.NotifyEmailAsync(announcement)
 	}
 	response.Ok(announcementResponseOf(announcement), c)
 }

@@ -84,7 +84,14 @@ func (s *UserSettingsService) Save(userGuid string, settings *domains.UserSettin
 	}); err != nil {
 		return nil, err
 	}
-	return s.Get(userGuid)
+	saved, err := s.Get(userGuid)
+	if err != nil {
+		return nil, err
+	}
+	if saved.BalanceReminderEnabled {
+		UserWalletServiceApp.NotifyBalanceReminderAsync(userGuid, "余额提醒开关已开启，当前账户余额低于 10 元")
+	}
+	return saved, nil
 }
 
 func (s *UserSettingsService) SavePreferences(userGuid string, settings *domains.UserSettings) (*domains.UserSettings, error) {
@@ -114,7 +121,14 @@ func (s *UserSettingsService) SavePreferences(userGuid string, settings *domains
 	}); err != nil {
 		return nil, err
 	}
-	return s.Get(userGuid)
+	saved, err := s.Get(userGuid)
+	if err != nil {
+		return nil, err
+	}
+	if saved.BalanceReminderEnabled {
+		UserWalletServiceApp.NotifyBalanceReminderAsync(userGuid, "余额提醒开关已开启，当前账户余额低于 10 元")
+	}
+	return saved, nil
 }
 
 func (s *UserSettingsService) SetMaxConcurrency(userGuid string, maxConcurrency int) (*domains.UserSettings, error) {
