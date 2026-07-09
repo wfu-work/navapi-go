@@ -13,6 +13,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,15 +51,22 @@ type RelayResult struct {
 }
 
 type preparedRelay struct {
-	Body       []byte
-	ModelName  string
-	Candidates []domains.VendorMeta
-	IsStream   bool
+	Body        []byte
+	ModelName   string
+	Candidates  []domains.VendorMeta
+	IsStream    bool
+	Reservation *billingReservation
 }
 
 type RelayHTTPError struct {
 	StatusCode int
 	Message    string
+}
+
+type billingReservation struct {
+	AmountMicros   int64
+	WalletRecordID uint
+	Detail         QuotaCalculationDetail
 }
 
 func (e *RelayHTTPError) Error() string {
@@ -122,16 +130,19 @@ func (s RelayService) prepareRelay(c *gin.Context, token *domains.ApiToken, endp
 		return nil, fmt.Errorf("no available provider for model %s", modelName)
 	}
 	candidates = ProviderServiceApp.ApplyAffinity(token.Guid, modelName, candidates)
+	var reservation *billingReservation
 	if !endpoint.NoBilling {
-		if err := s.ensureBillableBalance(token); err != nil {
+		reservation, err = s.preauthorizeCost(token, endpoint, modelName, body)
+		if err != nil {
 			return nil, err
 		}
 	}
 	return &preparedRelay{
-		Body:       body,
-		ModelName:  modelName,
-		Candidates: candidates,
-		IsStream:   isStreamRequest(body),
+		Body:        body,
+		ModelName:   modelName,
+		Candidates:  candidates,
+		IsStream:    isStreamRequest(body),
+		Reservation: reservation,
 	}, nil
 }
 
@@ -160,6 +171,7 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	if err != nil {
 		status = "error"
 		content = err.Error()
+		s.cancelReservation(token, prepared.Reservation, content)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, prepared.IsStream, status, content, prepared.Body, ""))
 		return nil, err
 	}
@@ -167,6 +179,7 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 		status = "error"
 		content = string(result.Body)
 		maybeAutoDisableProvider(provider, result)
+		s.cancelReservation(token, prepared.Reservation, content)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result)))
 		return result, nil
 	}
@@ -176,9 +189,10 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	quota := calculateFinalQuota(prepared.ModelName, token.Group, result.Usage, prepared.Body, 0)
 	if !endpoint.NoBilling {
 		detail := PricingServiceApp.CalculateQuotaDetail(prepared.ModelName, token.Group, result.Usage, estimateQuotaFromBody(prepared.Body))
-		if err := s.settleCost(token, CostToAmountMicros(detail.FinalCost), detail); err != nil {
+		if err := s.settleCost(token, prepared.Reservation, CostToAmountMicros(detail.FinalCost), detail); err != nil {
 			status = "error"
 			content = err.Error()
+			s.cancelReservation(token, prepared.Reservation, content)
 			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result)))
 			return nil, err
 		}
@@ -211,16 +225,19 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 
 	useTime := time.Since(start).Milliseconds()
 	if err != nil {
+		s.cancelReservation(token, prepared.Reservation, err.Error())
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, prepared.IsStream, "error", err.Error(), prepared.Body, ""))
 		return err
 	}
 	if result == nil {
 		err = errors.New("upstream response is empty")
+		s.cancelReservation(token, prepared.Reservation, err.Error())
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, prepared.IsStream, "error", err.Error(), prepared.Body, ""))
 		return err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
 		maybeAutoDisableProvider(provider, result)
+		s.cancelReservation(token, prepared.Reservation, string(result.Body))
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), prepared.IsStream, "error", string(result.Body), prepared.Body, extractUpstreamRequestID(result)))
 		return nil
 	}
@@ -232,9 +249,10 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 		quota = 0
 	} else {
 		detail := PricingServiceApp.CalculateQuotaDetail(prepared.ModelName, token.Group, result.Usage, estimateQuotaFromBody(prepared.Body))
-		if err := s.settleCost(token, CostToAmountMicros(detail.FinalCost), detail); err != nil {
+		if err := s.settleCost(token, prepared.Reservation, CostToAmountMicros(detail.FinalCost), detail); err != nil {
 			// The stream may already be on the wire, so settlement failures are
 			// recorded in logs instead of trying to replace the response body.
+			s.keepReservedCost(token, prepared.Reservation, detail)
 			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), prepared.IsStream, "error", err.Error(), prepared.Body, extractUpstreamRequestID(result)))
 			return nil
 		}
@@ -541,14 +559,80 @@ func (s RelayService) ensureBillableBalance(token *domains.ApiToken) error {
 	return nil
 }
 
-func (s RelayService) settleCost(token *domains.ApiToken, amountMicros int64, detail QuotaCalculationDetail) error {
+func (s RelayService) preauthorizeCost(token *domains.ApiToken, endpoint RelayEndpoint, modelName string, body []byte) (*billingReservation, error) {
+	if token == nil {
+		return nil, errors.New("token is required")
+	}
+	estimatedUsage := estimatePreauthorizeUsage(endpoint, body)
+	detail := PricingServiceApp.CalculateQuotaDetail(modelName, token.Group, estimatedUsage, estimateQuotaFromBody(body))
+	amountMicros := CostToAmountMicros(detail.FinalCost)
+	if amountMicros <= 0 {
+		return nil, relayBillingError(s.ensureBillableBalance(token))
+	}
+	var reservation *billingReservation
+	err := TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
+		if err := TokenServiceApp.ConsumeAmount(tx, token.Id, amountMicros); err != nil {
+			return err
+		}
+		record, err := UserWalletServiceApp.ReserveConsume(tx, WalletRecordInput{
+			UserGuid:     token.UserGuid,
+			Type:         domains.WalletRecordTypeConsume,
+			Source:       domains.WalletSourceRelay,
+			Title:        "API 消费预授权",
+			AmountMicros: amountMicros,
+			RequestCount: 1,
+			TokenID:      token.Id,
+			TokenGuid:    token.Guid,
+			Meta:         marshalBillingMeta(detail, amountMicros),
+		})
+		if err != nil {
+			return err
+		}
+		if record == nil {
+			return errors.New("wallet reservation failed")
+		}
+		reservation = &billingReservation{
+			AmountMicros:   amountMicros,
+			WalletRecordID: record.Id,
+			Detail:         detail,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, relayBillingError(err)
+	}
+	return reservation, nil
+}
+
+func relayBillingError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := err.Error()
+	if strings.Contains(message, "balance") {
+		return &RelayHTTPError{StatusCode: http.StatusPaymentRequired, Message: message}
+	}
+	return err
+}
+
+func (s RelayService) settleCost(token *domains.ApiToken, reservation *billingReservation, amountMicros int64, detail QuotaCalculationDetail) error {
 	return TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
-		if amountMicros > 0 {
-			if err := TokenServiceApp.ConsumeAmount(tx, token.Id, amountMicros); err != nil {
+		reservedAmount := int64(0)
+		walletRecordID := uint(0)
+		if reservation != nil {
+			reservedAmount = reservation.AmountMicros
+			walletRecordID = reservation.WalletRecordID
+		}
+		if amountMicros > reservedAmount {
+			if err := TokenServiceApp.ConsumeAmount(tx, token.Id, amountMicros-reservedAmount); err != nil {
+				return err
+			}
+		} else if amountMicros < reservedAmount {
+			if err := TokenServiceApp.RefundAmount(tx, token.Id, reservedAmount-amountMicros); err != nil {
 				return err
 			}
 		}
-		return UserWalletServiceApp.RecordConsume(tx, WalletRecordInput{
+		input := WalletRecordInput{
 			UserGuid:     token.UserGuid,
 			Type:         domains.WalletRecordTypeConsume,
 			Source:       domains.WalletSourceRelay,
@@ -558,6 +642,41 @@ func (s RelayService) settleCost(token *domains.ApiToken, amountMicros int64, de
 			TokenID:      token.Id,
 			TokenGuid:    token.Guid,
 			Meta:         marshalBillingMeta(detail, amountMicros),
+		}
+		if walletRecordID > 0 {
+			return UserWalletServiceApp.FinalizeReservedConsume(tx, walletRecordID, input)
+		}
+		return UserWalletServiceApp.RecordConsume(tx, input)
+	})
+}
+
+func (s RelayService) cancelReservation(token *domains.ApiToken, reservation *billingReservation, reason string) {
+	if token == nil || reservation == nil || reservation.AmountMicros <= 0 {
+		return
+	}
+	_ = TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
+		if err := TokenServiceApp.RefundAmount(tx, token.Id, reservation.AmountMicros); err != nil {
+			return err
+		}
+		return UserWalletServiceApp.CancelReservedConsume(tx, reservation.WalletRecordID, reason)
+	})
+}
+
+func (s RelayService) keepReservedCost(token *domains.ApiToken, reservation *billingReservation, detail QuotaCalculationDetail) {
+	if token == nil || reservation == nil || reservation.AmountMicros <= 0 {
+		return
+	}
+	_ = TokenServiceApp.DB().Transaction(func(tx *gorm.DB) error {
+		return UserWalletServiceApp.FinalizeReservedConsume(tx, reservation.WalletRecordID, WalletRecordInput{
+			UserGuid:     token.UserGuid,
+			Type:         domains.WalletRecordTypeConsume,
+			Source:       domains.WalletSourceRelay,
+			Title:        "API 消费",
+			AmountMicros: reservation.AmountMicros,
+			RequestCount: 1,
+			TokenID:      token.Id,
+			TokenGuid:    token.Guid,
+			Meta:         marshalBillingMeta(detail, reservation.AmountMicros),
 		})
 	})
 }
@@ -880,6 +999,87 @@ func estimateQuotaFromBody(body []byte) int64 {
 		return 1
 	}
 	return int64(len(b)/4 + 1)
+}
+
+func estimatePreauthorizeUsage(endpoint RelayEndpoint, body []byte) vos.Usage {
+	promptTokens := estimateQuotaFromBody(body)
+	completionTokens := int64(0)
+	if shouldReserveOutputTokens(endpoint) {
+		completionTokens = extractMaxOutputTokens(body)
+		if completionTokens <= 0 {
+			completionTokens = OptionServiceApp.Int64("relay.billing_default_output_tokens", 4096)
+		}
+		if completionTokens < 0 {
+			completionTokens = 0
+		}
+	}
+	return vos.Usage{
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      promptTokens + completionTokens,
+	}
+}
+
+func shouldReserveOutputTokens(endpoint RelayEndpoint) bool {
+	path := strings.ToLower(endpoint.UpstreamPath)
+	if strings.Contains(path, "/embeddings") ||
+		strings.Contains(path, "/moderations") ||
+		strings.Contains(path, "/rerank") ||
+		strings.Contains(path, "/images/") ||
+		strings.Contains(path, "/audio/") {
+		return false
+	}
+	return true
+}
+
+func extractMaxOutputTokens(body []byte) int64 {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return 0
+	}
+	if value := firstInt64Value(payload, "max_tokens", "max_completion_tokens", "max_output_tokens"); value > 0 {
+		return value
+	}
+	for _, key := range []string{"text", "reasoning", "thinking", "extra_body", "extraBody"} {
+		nested, ok := payload[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if value := firstInt64Value(nested, "max_tokens", "max_completion_tokens", "max_output_tokens", "budget_tokens"); value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstInt64Value(payload map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		if value, ok := payload[key]; ok {
+			if parsed := int64FromJSONValue(value); parsed > 0 {
+				return parsed
+			}
+		}
+	}
+	return 0
+}
+
+func int64FromJSONValue(value any) int64 {
+	switch item := value.(type) {
+	case float64:
+		return int64(item)
+	case int:
+		return int64(item)
+	case int64:
+		return item
+	case json.Number:
+		parsed, _ := item.Int64()
+		return parsed
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(item), 10, 64)
+		return parsed
+	default:
+		return 0
+	}
 }
 
 func isStreamRequest(body []byte) bool {

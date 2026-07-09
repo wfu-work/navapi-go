@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -121,6 +122,12 @@ type WalletActivityItem struct {
 	PaidBalanceAmountMicrosAfter       int64  `json:"paidBalanceAmountMicrosAfter,omitempty"`
 	RewardBalanceAmountMicrosAfter     int64  `json:"rewardBalanceAmountMicrosAfter,omitempty"`
 	CommissionBalanceAmountMicrosAfter int64  `json:"commissionBalanceAmountMicrosAfter,omitempty"`
+}
+
+type walletDeduction struct {
+	Paid       int64 `json:"paid"`
+	Reward     int64 `json:"reward"`
+	Commission int64 `json:"commission"`
 }
 
 func (s *UserWalletService) WithDB(db *gorm.DB) *UserWalletService {
@@ -426,6 +433,119 @@ func (s *UserWalletService) RecordConsume(tx *gorm.DB, input WalletRecordInput) 
 	return s.createRecord(tx, wallet, input, domains.WalletRecordDirectionOutcome, -amountMicros)
 }
 
+func (s *UserWalletService) ReserveConsume(tx *gorm.DB, input WalletRecordInput) (*domains.UserWalletRecord, error) {
+	input = normalizeWalletRecordInput(input)
+	if input.UserGuid == "" {
+		return nil, nil
+	}
+	if input.AmountMicros <= 0 {
+		return nil, nil
+	}
+	if err := s.Ensure(tx, input.UserGuid); err != nil {
+		return nil, err
+	}
+	wallet, err := s.lockWallet(tx, input.UserGuid)
+	if err != nil {
+		return nil, err
+	}
+	amountMicros := nonNegativeInt64(input.AmountMicros)
+	requestCount := nonNegativeInt64(input.RequestCount)
+	if wallet.BalanceAmountMicros < amountMicros {
+		return nil, errors.New("wallet balance is insufficient")
+	}
+	deduction := deductWalletAmountDetail(wallet, amountMicros)
+	wallet.TotalConsumedAmountMicros += amountMicros
+	wallet.TotalRequestCount += requestCount
+	if err := s.saveWallet(tx, wallet); err != nil {
+		return nil, err
+	}
+	input.Type = domains.WalletRecordTypeConsume
+	input.Source = defaultString(input.Source, domains.WalletSourceRelay)
+	input.Title = defaultString(input.Title, "API 消费预授权")
+	input.RequestCount = requestCount
+	input.Meta = mergeWalletRecordMeta(input.Meta, map[string]any{
+		"reserved":             true,
+		"reservedAmountMicros": amountMicros,
+		"reservationDeduction": deduction,
+	})
+	return s.createRecordWithResult(tx, wallet, input, domains.WalletRecordDirectionOutcome, -amountMicros)
+}
+
+func (s *UserWalletService) FinalizeReservedConsume(tx *gorm.DB, recordID uint, input WalletRecordInput) error {
+	if recordID == 0 {
+		return s.RecordConsume(tx, input)
+	}
+	input = normalizeWalletRecordInput(input)
+	var record domains.UserWalletRecord
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&record, recordID).Error; err != nil {
+		return err
+	}
+	if record.UserGuid == "" {
+		return errors.New("wallet reservation is invalid")
+	}
+	wallet, err := s.lockWallet(tx, record.UserGuid)
+	if err != nil {
+		return err
+	}
+	reservedAmount := nonNegativeInt64(-record.AmountMicrosDelta)
+	finalAmount := nonNegativeInt64(input.AmountMicros)
+	delta := finalAmount - reservedAmount
+	if delta > 0 {
+		if wallet.BalanceAmountMicros < delta {
+			return errors.New("wallet balance is insufficient")
+		}
+		deductWalletAmount(wallet, delta)
+	} else if delta < 0 {
+		refundReservedWalletAmount(wallet, -delta, walletRecordReservationDeduction(record.Meta))
+	}
+	wallet.TotalConsumedAmountMicros = nonNegativeInt64(wallet.TotalConsumedAmountMicros + delta)
+	requestCount := nonNegativeInt64(input.RequestCount)
+	if requestCount <= 0 {
+		requestCount = nonNegativeInt64(record.RequestCountDelta)
+	}
+	wallet.TotalRequestCount = nonNegativeInt64(wallet.TotalRequestCount - nonNegativeInt64(record.RequestCountDelta) + requestCount)
+	if err := s.saveWallet(tx, wallet); err != nil {
+		return err
+	}
+	return s.updateReservedRecord(tx, record.Id, wallet, input, requestCount, -finalAmount)
+}
+
+func (s *UserWalletService) CancelReservedConsume(tx *gorm.DB, recordID uint, reason string) error {
+	if recordID == 0 {
+		return nil
+	}
+	var record domains.UserWalletRecord
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&record, recordID).Error; err != nil {
+		return err
+	}
+	wallet, err := s.lockWallet(tx, record.UserGuid)
+	if err != nil {
+		return err
+	}
+	reservedAmount := nonNegativeInt64(-record.AmountMicrosDelta)
+	if reservedAmount > 0 {
+		refundReservedWalletAmount(wallet, reservedAmount, walletRecordReservationDeduction(record.Meta))
+	}
+	wallet.TotalConsumedAmountMicros = nonNegativeInt64(wallet.TotalConsumedAmountMicros - reservedAmount)
+	wallet.TotalRequestCount = nonNegativeInt64(wallet.TotalRequestCount - nonNegativeInt64(record.RequestCountDelta))
+	if err := s.saveWallet(tx, wallet); err != nil {
+		return err
+	}
+	if len(reason) > 255 {
+		reason = reason[:255]
+	}
+	return tx.Model(&domains.UserWalletRecord{}).Where("id = ?", record.Id).Updates(map[string]any{
+		"title":                                  "API 消费取消",
+		"request_count_delta":                    0,
+		"amount_micros_delta":                    0,
+		"balance_amount_micros_after":            wallet.BalanceAmountMicros,
+		"paid_balance_amount_micros_after":       wallet.PaidBalanceAmountMicros,
+		"reward_balance_amount_micros_after":     wallet.RewardBalanceAmountMicros,
+		"commission_balance_amount_micros_after": wallet.CommissionBalanceAmountMicros,
+		"remark":                                 reason,
+	}).Error
+}
+
 func (s *UserWalletService) lockWallet(tx *gorm.DB, userGuid string) (*domains.UserWallet, error) {
 	var wallet domains.UserWallet
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_guid = ?", userGuid).First(&wallet).Error; err != nil {
@@ -455,6 +575,11 @@ func (s *UserWalletService) saveWallet(tx *gorm.DB, wallet *domains.UserWallet) 
 }
 
 func (s *UserWalletService) createRecord(tx *gorm.DB, wallet *domains.UserWallet, input WalletRecordInput, direction string, amountMicrosDelta int64) error {
+	_, err := s.createRecordWithResult(tx, wallet, input, direction, amountMicrosDelta)
+	return err
+}
+
+func (s *UserWalletService) createRecordWithResult(tx *gorm.DB, wallet *domains.UserWallet, input WalletRecordInput, direction string, amountMicrosDelta int64) (*domains.UserWalletRecord, error) {
 	record := domains.UserWalletRecord{
 		UserGuid:                           input.UserGuid,
 		Type:                               input.Type,
@@ -483,9 +608,37 @@ func (s *UserWalletService) createRecord(tx *gorm.DB, wallet *domains.UserWallet
 		record.OccurredAt = time.Now().Unix()
 	}
 	if err := record.BeforeCreate(nil); err != nil {
-		return err
+		return nil, err
 	}
-	return tx.Create(&record).Error
+	if err := tx.Create(&record).Error; err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (s *UserWalletService) updateReservedRecord(tx *gorm.DB, recordID uint, wallet *domains.UserWallet, input WalletRecordInput, requestCount int64, amountMicrosDelta int64) error {
+	return tx.Model(&domains.UserWalletRecord{}).Where("id = ?", recordID).Updates(map[string]any{
+		"type":                                   domains.WalletRecordTypeConsume,
+		"direction":                              domains.WalletRecordDirectionOutcome,
+		"source":                                 defaultString(input.Source, domains.WalletSourceRelay),
+		"title":                                  defaultString(input.Title, "API 消费"),
+		"request_count_delta":                    requestCount,
+		"amount_micros_delta":                    amountMicrosDelta,
+		"balance_amount_micros_after":            wallet.BalanceAmountMicros,
+		"paid_balance_amount_micros_after":       wallet.PaidBalanceAmountMicros,
+		"reward_balance_amount_micros_after":     wallet.RewardBalanceAmountMicros,
+		"commission_balance_amount_micros_after": wallet.CommissionBalanceAmountMicros,
+		"amount_cents":                           input.AmountCents,
+		"currency":                               input.Currency,
+		"order_no":                               input.OrderNo,
+		"payment_guid":                           input.PaymentGuid,
+		"subscription_guid":                      input.SubscriptionGuid,
+		"token_id":                               input.TokenID,
+		"token_guid":                             input.TokenGuid,
+		"related_guid":                           input.RelatedGuid,
+		"remark":                                 input.Remark,
+		"meta":                                   input.Meta,
+	}).Error
 }
 
 func applyWalletIncome(wallet *domains.UserWallet, input WalletRecordInput) {
@@ -510,18 +663,69 @@ func applyWalletIncome(wallet *domains.UserWallet, input WalletRecordInput) {
 }
 
 func deductWalletAmount(wallet *domains.UserWallet, amountMicros int64) {
+	_ = deductWalletAmountDetail(wallet, amountMicros)
+}
+
+func deductWalletAmountDetail(wallet *domains.UserWallet, amountMicros int64) walletDeduction {
 	remaining := nonNegativeInt64(amountMicros)
+	deduction := walletDeduction{}
 	take := int64Min(wallet.RewardBalanceAmountMicros, remaining)
 	wallet.RewardBalanceAmountMicros -= take
+	deduction.Reward = take
 	remaining -= take
 	take = int64Min(wallet.CommissionBalanceAmountMicros, remaining)
 	wallet.CommissionBalanceAmountMicros -= take
+	deduction.Commission = take
 	remaining -= take
 	if remaining > wallet.PaidBalanceAmountMicros {
-		return
+		return deduction
 	}
 	wallet.PaidBalanceAmountMicros -= remaining
+	deduction.Paid = remaining
 	wallet.BalanceAmountMicros = wallet.PaidBalanceAmountMicros + wallet.RewardBalanceAmountMicros + wallet.CommissionBalanceAmountMicros
+	return deduction
+}
+
+func refundReservedWalletAmount(wallet *domains.UserWallet, amountMicros int64, deduction walletDeduction) {
+	remaining := nonNegativeInt64(amountMicros)
+	take := int64Min(deduction.Paid, remaining)
+	wallet.PaidBalanceAmountMicros += take
+	remaining -= take
+	take = int64Min(deduction.Commission, remaining)
+	wallet.CommissionBalanceAmountMicros += take
+	remaining -= take
+	take = int64Min(deduction.Reward, remaining)
+	wallet.RewardBalanceAmountMicros += take
+	remaining -= take
+	if remaining > 0 {
+		wallet.PaidBalanceAmountMicros += remaining
+	}
+	wallet.BalanceAmountMicros = wallet.PaidBalanceAmountMicros + wallet.RewardBalanceAmountMicros + wallet.CommissionBalanceAmountMicros
+}
+
+func walletRecordReservationDeduction(raw string) walletDeduction {
+	var payload struct {
+		ReservationDeduction walletDeduction `json:"reservationDeduction"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return walletDeduction{}
+	}
+	return payload.ReservationDeduction
+}
+
+func mergeWalletRecordMeta(raw string, extra map[string]any) string {
+	values := map[string]any{}
+	if strings.TrimSpace(raw) != "" {
+		_ = json.Unmarshal([]byte(raw), &values)
+	}
+	for key, value := range extra {
+		values[key] = value
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return raw
+	}
+	return string(data)
 }
 
 func normalizeWallet(wallet *domains.UserWallet) {
