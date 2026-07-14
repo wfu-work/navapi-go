@@ -25,18 +25,21 @@ const (
 )
 
 type ProviderBalanceResult struct {
-	OK           bool     `json:"ok"`
-	Template     string   `json:"template"`
-	ResponseTime int64    `json:"responseTime"`
-	StatusCode   int      `json:"statusCode,omitempty"`
-	TargetURL    string   `json:"targetUrl,omitempty"`
-	Remaining    *float64 `json:"remaining,omitempty"`
-	Total        *float64 `json:"total,omitempty"`
-	Used         *float64 `json:"used,omitempty"`
-	Unit         string   `json:"unit,omitempty"`
-	Plan         string   `json:"plan,omitempty"`
-	Valid        *bool    `json:"valid,omitempty"`
-	Message      string   `json:"message,omitempty"`
+	OK               bool     `json:"ok"`
+	Template         string   `json:"template"`
+	DetectedTemplate string   `json:"detectedTemplate,omitempty"`
+	ResponseTime     int64    `json:"responseTime"`
+	StatusCode       int      `json:"statusCode,omitempty"`
+	TargetURL        string   `json:"targetUrl,omitempty"`
+	ContentType      string   `json:"contentType,omitempty"`
+	Remaining        *float64 `json:"remaining,omitempty"`
+	Total            *float64 `json:"total,omitempty"`
+	Used             *float64 `json:"used,omitempty"`
+	Unit             string   `json:"unit,omitempty"`
+	Plan             string   `json:"plan,omitempty"`
+	Valid            *bool    `json:"valid,omitempty"`
+	Message          string   `json:"message,omitempty"`
+	htmlResponse     bool
 }
 
 func (s *ProviderService) Balance(guid string) (*ProviderBalanceResult, error) {
@@ -52,7 +55,24 @@ func (s *ProviderService) TestBalance(provider *domains.VendorMeta) (*ProviderBa
 		return nil, errors.New("provider is required")
 	}
 	s.fillProviderSecretFields(provider)
-	return s.queryBalance(provider)
+	result, err := s.queryBalance(provider)
+	if err != nil || !shouldProbeSub2Balance(provider, result) {
+		return result, err
+	}
+
+	sub2Provider := *provider
+	applySub2BalanceDefaults(&sub2Provider)
+	sub2TargetURL, targetErr := sub2BalanceProbeURL(result.TargetURL)
+	if targetErr != nil {
+		return result, nil
+	}
+	sub2Provider.BalanceCustomPath = sub2TargetURL
+	detected, detectErr := s.queryBalance(&sub2Provider)
+	if detectErr == nil && detected.OK {
+		detected.DetectedTemplate = balanceTemplateSub2
+		return detected, nil
+	}
+	return result, nil
 }
 
 func (s *ProviderService) queryBalance(provider *domains.VendorMeta) (*ProviderBalanceResult, error) {
@@ -99,12 +119,21 @@ func (s *ProviderService) queryBalance(provider *domains.VendorMeta) (*ProviderB
 		ResponseTime: responseTime,
 		StatusCode:   resp.StatusCode,
 		TargetURL:    targetURL,
+		ContentType:  strings.TrimSpace(resp.Header.Get("Content-Type")),
 		Unit:         strings.TrimSpace(provider.BalanceUnit),
 	}
+	if result.ContentType == "" {
+		result.ContentType = http.DetectContentType(body)
+	}
+	result.htmlResponse = isHTMLBalanceResponse(result.ContentType, body)
 	var payload any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		result.OK = false
-		result.Message = clipBalanceMessage(string(body))
+		if result.htmlResponse {
+			result.Message = "余额接口返回了网页内容；该服务可能是 Sub2API，请使用 Sub2API 模板（/v1/usage）"
+		} else {
+			result.Message = clipBalanceMessage(string(body))
+		}
 		if result.Message == "" {
 			result.Message = err.Error()
 		}
@@ -137,6 +166,58 @@ func (s *ProviderService) queryBalance(provider *domains.VendorMeta) (*ProviderB
 		result.Message = "balance query succeeded"
 	}
 	return result, nil
+}
+
+func shouldProbeSub2Balance(provider *domains.VendorMeta, result *ProviderBalanceResult) bool {
+	if provider == nil || result == nil || result.OK || result.StatusCode != http.StatusOK {
+		return false
+	}
+	if normalizeBalanceTemplate(provider.BalanceTemplate) != balanceTemplateGeneric {
+		return false
+	}
+	if strings.TrimSpace(provider.BalanceCustomPath) != defaultBalancePath(balanceTemplateGeneric) {
+		return false
+	}
+	return result.htmlResponse || strings.Contains(strings.ToLower(result.ContentType), "text/html")
+}
+
+func applySub2BalanceDefaults(provider *domains.VendorMeta) {
+	provider.BalanceTemplate = balanceTemplateSub2
+	provider.BalanceCustomPath = defaultBalancePath(balanceTemplateSub2)
+	provider.BalanceAuthType = balanceAuthProviderBearer
+	provider.BalanceRemainingPath = "remaining"
+	provider.BalanceMultiplier = 1
+	provider.BalanceUnit = "USD"
+	provider.BalanceTotalPath = "quota.limit"
+	provider.BalanceUsedPath = "quota.used"
+	provider.BalancePlanPath = "planName"
+	provider.BalanceValidPath = "isValid"
+	provider.BalanceErrorPath = "message"
+}
+
+func sub2BalanceProbeURL(sourceURL string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(sourceURL))
+	if err != nil || parsed.Host == "" {
+		return "", errors.New("balance response url is invalid")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("balance response url only supports http and https")
+	}
+	parsed.User = nil
+	parsed.Path = defaultBalancePath(balanceTemplateSub2)
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
+func isHTMLBalanceResponse(contentType string, body []byte) bool {
+	if strings.Contains(strings.ToLower(contentType), "text/html") {
+		return true
+	}
+	text := strings.ToLower(strings.TrimSpace(string(body)))
+	return strings.HasPrefix(text, "<!doctype html") || strings.HasPrefix(text, "<html")
 }
 
 func (s *ProviderService) fillProviderSecretFields(provider *domains.VendorMeta) {
@@ -213,7 +294,7 @@ func providerBalanceTargetURL(provider *domains.VendorMeta) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !explicitBalanceBase || provider.BalanceTemplate == balanceTemplateOfficial {
+	if !explicitBalanceBase || provider.BalanceTemplate == balanceTemplateOfficial || provider.BalanceTemplate == balanceTemplateSub2 {
 		parsed.Path = stripAPIVersionSuffix(parsed.Path)
 		parsed.RawQuery = ""
 	}
@@ -446,6 +527,8 @@ func defaultBalancePath(template string) string {
 	switch normalizeBalanceTemplate(template) {
 	case balanceTemplateNewAPI:
 		return "/api/user/self"
+	case balanceTemplateSub2:
+		return "/v1/usage"
 	case balanceTemplateOfficial:
 		return "/dashboard/billing/credit_grants"
 	default:
@@ -484,6 +567,8 @@ func balanceRemainingPaths(template string) []string {
 	switch normalizeBalanceTemplate(template) {
 	case balanceTemplateNewAPI:
 		return []string{"data.quota", "quota", "data.remaining_quota", "remaining_quota", "data.balance", "balance"}
+	case balanceTemplateSub2:
+		return []string{"remaining", "quota.remaining", "balance"}
 	case balanceTemplateOfficial:
 		return []string{"total_available", "data.total_available", "credit_grants.total_available", "remaining", "balance"}
 	default:
@@ -495,6 +580,8 @@ func balanceTotalPaths(template string) []string {
 	switch normalizeBalanceTemplate(template) {
 	case balanceTemplateNewAPI:
 		return []string{"data.total_quota", "total_quota", "data.total", "total"}
+	case balanceTemplateSub2:
+		return []string{"quota.limit", "total", "balance"}
 	case balanceTemplateOfficial:
 		return []string{"total_granted", "data.total_granted", "credit_grants.total_granted", "total"}
 	default:
@@ -506,6 +593,8 @@ func balanceUsedPaths(template string) []string {
 	switch normalizeBalanceTemplate(template) {
 	case balanceTemplateNewAPI:
 		return []string{"data.used_quota", "used_quota", "data.used", "used"}
+	case balanceTemplateSub2:
+		return []string{"quota.used", "used", "usage.total.actual_cost"}
 	case balanceTemplateOfficial:
 		return []string{"total_used", "data.total_used", "credit_grants.total_used", "used"}
 	default:
@@ -517,6 +606,8 @@ func balancePlanPaths(template string) []string {
 	switch normalizeBalanceTemplate(template) {
 	case balanceTemplateNewAPI:
 		return []string{"data.group", "group", "data.role", "role", "data.plan", "plan"}
+	case balanceTemplateSub2:
+		return []string{"planName", "mode"}
 	case balanceTemplateOfficial:
 		return []string{"plan", "data.plan"}
 	default:
@@ -528,6 +619,8 @@ func balanceValidPaths(template string) []string {
 	switch normalizeBalanceTemplate(template) {
 	case balanceTemplateNewAPI:
 		return []string{"success", "data.status", "status", "data.enabled", "enabled"}
+	case balanceTemplateSub2:
+		return []string{"isValid", "valid", "active"}
 	default:
 		return []string{"valid", "active", "data.valid", "data.active", "success"}
 	}

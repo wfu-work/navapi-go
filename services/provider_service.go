@@ -29,6 +29,7 @@ var ProviderServiceApp = new(ProviderService)
 const (
 	balanceTemplateGeneric = "generic"
 	balanceTemplateNewAPI  = "newapi"
+	balanceTemplateSub2    = "sub2"
 	balanceTemplateCustom  = "custom"
 
 	balanceAuthProviderBearer = "provider_bearer"
@@ -252,7 +253,16 @@ func (s *ProviderService) Delete(guid string) error {
 	if err != nil {
 		return err
 	}
-	return s.DeleteByGuid(provider.Guid)
+	db := s.DB()
+	if db == nil {
+		return errors.New("database is not initialized")
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Unscoped().Where("provider_guid = ?", provider.Guid).Delete(&domains.ModelGroupProvider{}).Error; err != nil {
+			return err
+		}
+		return s.WithDB(tx).DeleteByGuid(provider.Guid)
+	})
 }
 
 func (s *ProviderService) GetKey(guid string) (string, error) {
@@ -301,7 +311,15 @@ func normalizeProviderBalanceConfig(provider *domains.VendorMeta) {
 }
 
 func (s *ProviderService) ListEnabledModels() ([]string, error) {
-	providers, err := s.enabledProviders("")
+	return s.ListEnabledModelsForGroupAndType("*", "")
+}
+
+func (s *ProviderService) ListEnabledModelsForGroupAndType(group, providerType string) ([]string, error) {
+	providers, err := s.enabledProviders(providerType)
+	if err != nil {
+		return nil, err
+	}
+	providers, err = s.filterProvidersForGroup(providers, group)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +338,6 @@ func (s *ProviderService) ListEnabledModels() ([]string, error) {
 }
 
 func (s *ProviderService) FindCandidatesForModelAndType(modelName, group string, providerType string) ([]domains.VendorMeta, error) {
-	_ = group
 	providers, err := s.enabledProviders(providerType)
 	if err != nil {
 		return nil, err
@@ -332,10 +349,31 @@ func (s *ProviderService) FindCandidatesForModelAndType(modelName, group string,
 		}
 		candidates = append(candidates, provider)
 	}
+	candidates, err = s.filterProvidersForGroup(candidates, group)
+	if err != nil {
+		return nil, err
+	}
 	if len(candidates) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return candidates, nil
+}
+
+func (s *ProviderService) filterProvidersForGroup(providers []domains.VendorMeta, group string) ([]domains.VendorMeta, error) {
+	scope, allowed, err := ModelServiceApp.WithDB(s.DB()).AllowedProviderGuidsForGroup(group)
+	if err != nil {
+		return nil, err
+	}
+	if scope == constants.ModelGroupProviderScopeAll {
+		return providers, nil
+	}
+	filtered := make([]domains.VendorMeta, 0, len(providers))
+	for _, provider := range providers {
+		if _, ok := allowed[provider.Guid]; ok {
+			filtered = append(filtered, provider)
+		}
+	}
+	return filtered, nil
 }
 
 func (s *ProviderService) ApplyAffinity(tokenGuid string, modelName string, candidates []domains.VendorMeta) []domains.VendorMeta {
@@ -625,6 +663,8 @@ func normalizeBalanceTemplate(template string) string {
 	switch strings.ToLower(strings.TrimSpace(template)) {
 	case balanceTemplateNewAPI:
 		return balanceTemplateNewAPI
+	case balanceTemplateSub2:
+		return balanceTemplateSub2
 	case balanceTemplateOfficial:
 		return balanceTemplateOfficial
 	case balanceTemplateCustom:

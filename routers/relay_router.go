@@ -15,6 +15,7 @@ func (r RelayRouter) InitRelayRouter(group *gin.RouterGroup) {
 
 func (r RelayRouter) initRelayRoutes(group *gin.RouterGroup, prefix string) {
 	v1 := group.Group(prefix + "v1")
+	v1.GET("/user/balance", middlewares.TokenBalanceAuth(), relayApi.TokenBalance)
 	v1.Use(middlewares.RequestBodyLimit())
 	v1.Use(middlewares.TokenAuth())
 	{

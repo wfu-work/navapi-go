@@ -22,6 +22,7 @@ func RegisterTables() {
 		ModelMeta{},
 		ModelGroup{},
 		VendorMeta{},
+		ModelGroupProvider{},
 		Pricing{},
 		Option{},
 		Task{},

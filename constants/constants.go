@@ -10,6 +10,9 @@ const (
 
 	DefaultGroup = "default"
 
+	ModelGroupProviderScopeAll      = "all"
+	ModelGroupProviderScopeSelected = "selected"
+
 	AdminUsername = "admin"
 
 	ContextToken = "navapi_token"

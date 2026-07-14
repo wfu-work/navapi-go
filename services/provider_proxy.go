@@ -151,10 +151,17 @@ func providerTransport(provider *domains.VendorMeta) (*http.Transport, error) {
 }
 
 func cloneDefaultTransport() *http.Transport {
-	if transport, ok := http.DefaultTransport.(*http.Transport); ok {
-		return transport.Clone()
+	var transport *http.Transport
+	if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = defaultTransport.Clone()
+	} else {
+		transport = &http.Transport{}
 	}
-	return &http.Transport{}
+	transport.MaxIdleConns = 200
+	transport.MaxIdleConnsPerHost = 50
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.ForceAttemptHTTP2 = true
+	return transport
 }
 
 func socks5Dialer(proxyURL *url.URL) (xproxy.Dialer, error) {

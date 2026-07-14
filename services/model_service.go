@@ -31,7 +31,15 @@ func (s *ModelService) WithDB(db *gorm.DB) *ModelService {
 }
 
 func (s *ModelService) ListOpenAIModels() (vos.ModelListResponse, error) {
-	models, err := ProviderServiceApp.ListEnabledModels()
+	return s.listOpenAIModels("*", "")
+}
+
+func (s *ModelService) ListOpenAIModelsForGroup(group string) (vos.ModelListResponse, error) {
+	return s.listOpenAIModels(group, constants.ProviderTypeOpenAI)
+}
+
+func (s *ModelService) listOpenAIModels(group string, providerType string) (vos.ModelListResponse, error) {
+	models, err := ProviderServiceApp.WithDB(s.DB()).ListEnabledModelsForGroupAndType(group, providerType)
 	if err != nil {
 		return vos.ModelListResponse{}, err
 	}
@@ -148,34 +156,63 @@ func (s *ModelService) ListGroups(includeDisabled bool) ([]domains.ModelGroup, e
 	if !includeDisabled {
 		db = db.Where("enabled = ?", true)
 	}
-	err := db.Find(&groups).Error
-	return groups, err
+	if err := db.Find(&groups).Error; err != nil {
+		return nil, err
+	}
+	if err := s.fillModelGroupProviders(groups); err != nil {
+		return nil, err
+	}
+	return groups, nil
 }
 
 func (s *ModelService) UpsertGroup(group *domains.ModelGroup) error {
 	normalizeModelGroup(group)
-	if group.Guid == "" {
-		group.Id = 0
-		return createWithCrud(&s.GroupCrud, group)
+	providerScope := group.ProviderScope
+	providerGuids := append([]string(nil), group.ProviderGuids...)
+	if providerScope == constants.ModelGroupProviderScopeSelected && len(providerGuids) == 0 {
+		return errors.New("at least one provider is required for selected provider scope")
 	}
-	existing, err := s.GroupCrud.GetByGuid(group.Guid)
-	if err != nil {
-		return err
+	db := s.GroupCrud.DB()
+	if db == nil {
+		return errors.New("database is not initialized")
 	}
-	if existing == nil {
-		return errors.New("model group not found")
-	}
-	group.GroupName = existing.GroupName
-	group.Id = existing.Id
-	group.Guid = existing.Guid
-	group.CreateTime = existing.CreateTime
-	group.Creater = existing.Creater
-	group.Updater = existing.Updater
-	group.UpdateTime = time.Now().UnixMilli()
-	if err := s.GroupCrud.DB().Save(group).Error; err != nil {
-		return err
-	}
-	return reloadByGuidWithCrud(&s.GroupCrud, group)
+	return db.Transaction(func(tx *gorm.DB) error {
+		service := s.WithDB(tx)
+		if err := service.validateGroupProviders(providerGuids); err != nil {
+			return err
+		}
+		if group.Guid == "" {
+			group.Id = 0
+			if err := createWithCrud(&service.GroupCrud, group); err != nil {
+				return err
+			}
+		} else {
+			existing, err := service.GroupCrud.GetByGuid(group.Guid)
+			if err != nil {
+				return err
+			}
+			if existing == nil {
+				return errors.New("model group not found")
+			}
+			group.GroupName = existing.GroupName
+			group.Id = existing.Id
+			group.Guid = existing.Guid
+			group.CreateTime = existing.CreateTime
+			group.Creater = existing.Creater
+			group.Updater = existing.Updater
+			group.UpdateTime = time.Now().UnixMilli()
+			if err := service.GroupCrud.DB().Save(group).Error; err != nil {
+				return err
+			}
+			if err := reloadByGuidWithCrud(&service.GroupCrud, group); err != nil {
+				return err
+			}
+		}
+		if err := service.replaceGroupProviders(group.Guid, providerScope, providerGuids); err != nil {
+			return err
+		}
+		return service.fillModelGroupProvider(group)
+	})
 }
 
 func (s *ModelService) DeleteGroup(guid string) error {
@@ -208,7 +245,16 @@ func (s *ModelService) DeleteGroup(guid string) error {
 	if count > 0 {
 		return errors.New("model group is in use")
 	}
-	return s.GroupCrud.DeleteByGuid(guid)
+	db := s.GroupCrud.DB()
+	if db == nil {
+		return errors.New("database is not initialized")
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Unscoped().Where("group_guid = ?", group.Guid).Delete(&domains.ModelGroupProvider{}).Error; err != nil {
+			return err
+		}
+		return s.WithDB(tx).GroupCrud.DeleteByGuid(guid)
+	})
 }
 
 func (s *ModelService) EnsureDefaultGroup() error {
@@ -227,6 +273,7 @@ func (s *ModelService) EnsureDefaultGroup() error {
 		GroupName:       constants.DefaultGroup,
 		DisplayName:     "默认分组",
 		QuotaMultiplier: 1,
+		ProviderScope:   constants.ModelGroupProviderScopeAll,
 		Enabled:         true,
 	}
 	return createWithCrud(&s.GroupCrud, &group)
@@ -298,6 +345,42 @@ func (s *ModelService) GroupQuotaMultiplier(group string) float64 {
 	return modelGroup.QuotaMultiplier
 }
 
+func (s *ModelService) AllowedProviderGuidsForGroup(group string) (string, map[string]struct{}, error) {
+	group = normalizeGroup(group)
+	if group == "*" {
+		return constants.ModelGroupProviderScopeAll, nil, nil
+	}
+	if err := s.EnsureDefaultGroup(); err != nil {
+		return "", nil, err
+	}
+	modelGroup, err := s.groupByName(group)
+	if err != nil {
+		return "", nil, err
+	}
+	if modelGroup == nil {
+		return "", nil, errors.New("model group not found")
+	}
+	if !modelGroup.Enabled {
+		return "", nil, errors.New("model group is disabled")
+	}
+	scope := normalizeProviderScope(modelGroup.ProviderScope)
+	if scope == constants.ModelGroupProviderScopeAll {
+		return scope, nil, nil
+	}
+	var providerGuids []string
+	if err := s.GroupCrud.DB().Model(&domains.ModelGroupProvider{}).
+		Where("group_guid = ?", modelGroup.Guid).
+		Order("sort asc, id asc").
+		Pluck("provider_guid", &providerGuids).Error; err != nil {
+		return "", nil, err
+	}
+	allowed := make(map[string]struct{}, len(providerGuids))
+	for _, providerGuid := range providerGuids {
+		allowed[providerGuid] = struct{}{}
+	}
+	return scope, allowed, nil
+}
+
 func (s *ModelService) groupByName(group string) (*domains.ModelGroup, error) {
 	group = normalizeGroup(group)
 	var result domains.ModelGroup
@@ -312,15 +395,110 @@ func (s *ModelService) groupByName(group string) (*domains.ModelGroup, error) {
 }
 
 func normalizeModelGroup(group *domains.ModelGroup) {
+	group.Guid = strings.TrimSpace(group.Guid)
 	group.GroupName = normalizeGroup(group.GroupName)
 	group.DisplayName = strings.TrimSpace(group.DisplayName)
 	group.Remark = strings.TrimSpace(group.Remark)
+	group.ProviderScope = normalizeProviderScope(group.ProviderScope)
+	group.ProviderGuids = normalizeProviderGuids(group.ProviderGuids)
+	if group.ProviderScope == constants.ModelGroupProviderScopeAll {
+		group.ProviderGuids = nil
+	}
 	if group.DisplayName == "" {
 		group.DisplayName = group.GroupName
 	}
 	if group.QuotaMultiplier <= 0 {
 		group.QuotaMultiplier = 1
 	}
+}
+
+func normalizeProviderScope(scope string) string {
+	if strings.EqualFold(strings.TrimSpace(scope), constants.ModelGroupProviderScopeSelected) {
+		return constants.ModelGroupProviderScopeSelected
+	}
+	return constants.ModelGroupProviderScopeAll
+}
+
+func normalizeProviderGuids(providerGuids []string) []string {
+	seen := make(map[string]struct{}, len(providerGuids))
+	out := make([]string, 0, len(providerGuids))
+	for _, providerGuid := range providerGuids {
+		providerGuid = strings.TrimSpace(providerGuid)
+		if providerGuid == "" {
+			continue
+		}
+		if _, ok := seen[providerGuid]; ok {
+			continue
+		}
+		seen[providerGuid] = struct{}{}
+		out = append(out, providerGuid)
+	}
+	return out
+}
+
+func (s *ModelService) validateGroupProviders(providerGuids []string) error {
+	if len(providerGuids) == 0 {
+		return nil
+	}
+	var count int64
+	if err := s.DB().Model(&domains.VendorMeta{}).Where("guid IN ?", providerGuids).Count(&count).Error; err != nil {
+		return err
+	}
+	if count != int64(len(providerGuids)) {
+		return errors.New("one or more selected providers do not exist")
+	}
+	return nil
+}
+
+func (s *ModelService) replaceGroupProviders(groupGuid string, scope string, providerGuids []string) error {
+	if err := s.DB().Unscoped().Where("group_guid = ?", groupGuid).Delete(&domains.ModelGroupProvider{}).Error; err != nil {
+		return err
+	}
+	if scope != constants.ModelGroupProviderScopeSelected {
+		return nil
+	}
+	relations := make([]domains.ModelGroupProvider, 0, len(providerGuids))
+	for index, providerGuid := range providerGuids {
+		relations = append(relations, domains.ModelGroupProvider{
+			GroupGuid:    groupGuid,
+			ProviderGuid: providerGuid,
+			Sort:         index,
+		})
+	}
+	return s.DB().Create(&relations).Error
+}
+
+func (s *ModelService) fillModelGroupProviders(groups []domains.ModelGroup) error {
+	if len(groups) == 0 {
+		return nil
+	}
+	groupByGuid := make(map[string]*domains.ModelGroup, len(groups))
+	groupGuids := make([]string, 0, len(groups))
+	for index := range groups {
+		groups[index].ProviderScope = normalizeProviderScope(groups[index].ProviderScope)
+		groupByGuid[groups[index].Guid] = &groups[index]
+		groupGuids = append(groupGuids, groups[index].Guid)
+	}
+	var relations []domains.ModelGroupProvider
+	if err := s.GroupCrud.DB().Where("group_guid IN ?", groupGuids).Order("sort asc, id asc").Find(&relations).Error; err != nil {
+		return err
+	}
+	for _, relation := range relations {
+		if group := groupByGuid[relation.GroupGuid]; group != nil {
+			group.ProviderGuids = append(group.ProviderGuids, relation.ProviderGuid)
+			group.ProviderCount++
+		}
+	}
+	return nil
+}
+
+func (s *ModelService) fillModelGroupProvider(group *domains.ModelGroup) error {
+	groups := []domains.ModelGroup{*group}
+	if err := s.fillModelGroupProviders(groups); err != nil {
+		return err
+	}
+	*group = groups[0]
+	return nil
 }
 
 func normalizeModelMeta(meta *domains.ModelMeta) {

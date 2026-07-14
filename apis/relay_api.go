@@ -16,22 +16,65 @@ import (
 
 type RelayApi struct{}
 
+type tokenBalanceResponse struct {
+	IsActive  bool     `json:"is_active"`
+	Name      string   `json:"name"`
+	Balance   *float64 `json:"balance"`
+	Used      float64  `json:"used"`
+	Total     *float64 `json:"total"`
+	Unlimited bool     `json:"unlimited"`
+	Unit      string   `json:"unit"`
+}
+
+func (a RelayApi) TokenBalance(c *gin.Context) {
+	token, ok := c.MustGet(constants.ContextToken).(*domains.ApiToken)
+	if !ok || token == nil {
+		openAIError(c, http.StatusUnauthorized, "token is invalid")
+		return
+	}
+	c.JSON(http.StatusOK, buildTokenBalanceResponse(token))
+}
+
+func buildTokenBalanceResponse(token *domains.ApiToken) tokenBalanceResponse {
+	used := services.AmountMicrosToCost(token.UsedAmountMicros)
+	result := tokenBalanceResponse{
+		IsActive:  token.Status == constants.StatusEnabled,
+		Name:      token.Name,
+		Used:      used,
+		Unlimited: token.UnlimitedBalance,
+		Unit:      "CNY",
+	}
+	if !token.UnlimitedBalance {
+		balance := services.AmountMicrosToCost(token.BalanceAmountMicros)
+		total := balance + used
+		result.Balance = &balance
+		result.Total = &total
+	}
+	return result
+}
+
 func (a RelayApi) Models(c *gin.Context) {
-	models, err := modelService.ListOpenAIModels()
+	group := constants.DefaultGroup
+	var apiToken *domains.ApiToken
+	if token, ok := c.Get(constants.ContextToken); ok {
+		apiToken, _ = token.(*domains.ApiToken)
+		if apiToken != nil {
+			group = apiToken.Group
+		}
+	}
+	models, err := modelService.ListOpenAIModelsForGroup(group)
 	if err != nil {
 		openAIError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if token, ok := c.Get(constants.ContextToken); ok {
-		if apiToken, ok := token.(*domains.ApiToken); ok && apiToken != nil {
-			filtered := models.Data[:0]
-			for _, model := range models.Data {
-				if tokenService.CheckModel(apiToken, model.ID) == nil {
-					filtered = append(filtered, model)
-				}
+	if apiToken != nil {
+		filtered := models.Data[:0]
+		for _, model := range models.Data {
+			if tokenService.CheckModel(apiToken, model.ID) == nil {
+				filtered = append(filtered, model)
 			}
-			models.Data = filtered
 		}
+		models.Data = filtered
 	}
 	if modelID := c.Param("model"); modelID != "" {
 		for _, model := range models.Data {
