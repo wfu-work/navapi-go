@@ -110,6 +110,54 @@ func (a ProviderApi) Test(c *gin.Context) {
 	response.Ok(result, c)
 }
 
+// DebugChat 调试上游模型对话
+// @Summary 调试上游模型对话
+// @Description 使用提交的服务商配置直接验证上游模型对话，不计费且不写客户用量日志
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body services.ProviderChatDebugInput true "上游模型调试参数"
+// @Success 200 {object} response.Response{data=services.ProviderChatDebugResult,msg=string}
+// @Router /provider/debug/chat [post]
+func (a ProviderApi) DebugChat(c *gin.Context) {
+	var input services.ProviderChatDebugInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	result, err := providerService.DebugChat(c.Request.Context(), input)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(result, c)
+}
+
+// DebugRequest 调试自定义上游请求
+// @Summary 调试自定义上游请求
+// @Description 可独立发送自定义 HTTP 请求，也可复用指定服务商的密钥和代理，不计费且不写客户用量日志
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body services.ProviderRequestDebugInput true "自定义上游调试参数"
+// @Success 200 {object} response.Response{data=services.ProviderRequestDebugResult,msg=string}
+// @Router /provider/debug/request [post]
+func (a ProviderApi) DebugRequest(c *gin.Context) {
+	var input services.ProviderRequestDebugInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	result, err := providerService.DebugRequest(c.Request.Context(), input)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(result, c)
+}
+
 // Balance 查询上游余额
 // @Summary 查询上游余额
 // @Description 按服务商 GUID 查询上游余额

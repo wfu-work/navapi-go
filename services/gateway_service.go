@@ -17,12 +17,12 @@ import (
 const GatewayVersion = "v0.1.0"
 
 const (
-	serviceStatusSegmentCount        = 24
-	serviceStatusWindow              = 24 * time.Hour
-	serviceStatusCacheTTL            = 30 * time.Second
-	serviceStatusWarningLatencyMs    = int64(3000)
-	serviceStatusWarningSuccessRate  = 0.99
-	serviceStatusCriticalSuccessRate = 0.95
+	serviceStatusSegmentCount               = 24
+	serviceStatusWindow                     = 24 * time.Hour
+	serviceStatusCacheTTL                   = 30 * time.Second
+	serviceStatusWarningFirstResponseTimeMs = int64(3000)
+	serviceStatusWarningSuccessRate         = 0.99
+	serviceStatusCriticalSuccessRate        = 0.95
 )
 
 var gatewayStartedAt = time.Now()
@@ -54,56 +54,59 @@ type PublicServiceStatus struct {
 	StatusLabel   string                     `json:"statusLabel"`
 	UpdatedAt     int64                      `json:"updatedAt"`
 	WindowMinutes int                        `json:"windowMinutes"`
-	Probe         ProbeSettings              `json:"probe"`
 	Health        GatewayHealth              `json:"health"`
 	Summary       PublicServiceStatusSummary `json:"summary"`
 	Models        []PublicModelStatus        `json:"models"`
 }
 
 type PublicServiceStatusSummary struct {
-	EnabledModels   int     `json:"enabledModels"`
-	ActiveModels    int     `json:"activeModels"`
-	TotalRequests   int64   `json:"totalRequests"`
-	SuccessRequests int64   `json:"successRequests"`
-	ErrorRequests   int64   `json:"errorRequests"`
-	AvgLatencyMs    int64   `json:"avgLatencyMs"`
-	SuccessRate     float64 `json:"successRate"`
+	EnabledModels          int     `json:"enabledModels"`
+	ActiveModels           int     `json:"activeModels"`
+	TotalRequests          int64   `json:"totalRequests"`
+	SuccessRequests        int64   `json:"successRequests"`
+	ErrorRequests          int64   `json:"errorRequests"`
+	AvgFirstResponseTimeMs int64   `json:"avgFirstResponseTimeMs"`
+	SuccessRate            float64 `json:"successRate"`
 }
 
 type PublicModelStatus struct {
-	ModelName       string                     `json:"modelName"`
-	DisplayName     string                     `json:"displayName,omitempty"`
-	Status          string                     `json:"status"`
-	StatusLabel     string                     `json:"statusLabel"`
-	LastCheckedAt   int64                      `json:"lastCheckedAt,omitempty"`
-	LatencyMs       int64                      `json:"latencyMs"`
-	Requests        int64                      `json:"requests"`
-	SuccessRequests int64                      `json:"successRequests"`
-	ErrorRequests   int64                      `json:"errorRequests"`
-	SuccessRate     float64                    `json:"successRate"`
-	Segments        []PublicModelStatusSegment `json:"segments"`
+	ModelName           string                     `json:"modelName"`
+	DisplayName         string                     `json:"displayName,omitempty"`
+	Status              string                     `json:"status"`
+	StatusLabel         string                     `json:"statusLabel"`
+	LastRequestAt       int64                      `json:"lastRequestAt,omitempty"`
+	FirstResponseTimeMs int64                      `json:"firstResponseTimeMs"`
+	Requests            int64                      `json:"requests"`
+	SuccessRequests     int64                      `json:"successRequests"`
+	ErrorRequests       int64                      `json:"errorRequests"`
+	SuccessRate         float64                    `json:"successRate"`
+	Segments            []PublicModelStatusSegment `json:"segments"`
+	latencyTotalMs      int64
+	latencySamples      int64
 }
 
 type PublicModelStatusSegment struct {
-	Tone        string  `json:"tone"`
-	Label       string  `json:"label"`
-	StartTime   int64   `json:"startTime"`
-	EndTime     int64   `json:"endTime"`
-	Requests    int64   `json:"requests"`
-	Success     int64   `json:"success"`
-	Errors      int64   `json:"errors"`
-	LatencyMs   int64   `json:"latencyMs"`
-	SuccessRate float64 `json:"successRate"`
+	Tone                string  `json:"tone"`
+	Label               string  `json:"label"`
+	StartTime           int64   `json:"startTime"`
+	EndTime             int64   `json:"endTime"`
+	Requests            int64   `json:"requests"`
+	Success             int64   `json:"success"`
+	Errors              int64   `json:"errors"`
+	FirstResponseTimeMs int64   `json:"firstResponseTimeMs"`
+	LatencySamples      int64   `json:"latencySamples"`
+	SuccessRate         float64 `json:"successRate"`
 }
 
 type serviceModelAggregate struct {
 	modelName       string
 	displayName     string
-	lastCheckedAt   int64
+	lastRequestAt   int64
 	requests        int64
 	successRequests int64
 	errorRequests   int64
 	latencyTotalMs  int64
+	latencySamples  int64
 	buckets         []serviceBucketAggregate
 }
 
@@ -112,6 +115,7 @@ type serviceBucketAggregate struct {
 	success        int64
 	errors         int64
 	latencyTotalMs int64
+	latencySamples int64
 }
 
 type serviceUsageBucketRow struct {
@@ -121,7 +125,8 @@ type serviceUsageBucketRow struct {
 	SuccessRequests int64  `gorm:"column:success_requests"`
 	ErrorRequests   int64  `gorm:"column:error_requests"`
 	LatencyTotalMs  int64  `gorm:"column:latency_total_ms"`
-	LastCheckedAt   int64  `gorm:"column:last_checked_at"`
+	LatencySamples  int64  `gorm:"column:latency_samples"`
+	LastRequestAt   int64  `gorm:"column:last_request_at"`
 }
 
 func (s GatewayService) Health(mode string) GatewayHealth {
@@ -176,7 +181,6 @@ func (s GatewayService) publicStatus(mode string, now time.Time) (PublicServiceS
 		StatusLabel:   "正常",
 		UpdatedAt:     now.UnixMilli(),
 		WindowMinutes: int(serviceStatusWindow / time.Minute),
-		Probe:         ProbeServiceApp.Settings(),
 		Health:        health,
 	}
 	if health.DatabaseStatus != "ok" {
@@ -189,36 +193,20 @@ func (s GatewayService) publicStatus(mode string, now time.Time) (PublicServiceS
 	if err != nil {
 		return PublicServiceStatus{}, err
 	}
-	var rows []serviceUsageBucketRow
-	if status.Probe.Enabled {
-		rows, err = s.recentProbeBuckets(start, now)
-		if err != nil {
-			return PublicServiceStatus{}, err
-		}
+	rows, err := s.recentUsageBuckets(start, now, publicModelNames(models))
+	if err != nil {
+		return PublicServiceStatus{}, err
 	}
 	status.Summary.EnabledModels = len(models)
 	status.Models = buildPublicModelStatuses(models, rows, start, now)
 	status.Summary = summarizePublicServiceStatus(status.Summary, status.Models)
-	if !status.Probe.Enabled {
-		status.Status = "idle"
-		status.StatusLabel = "探测未启用"
-	} else {
-		status.Status = publicServiceOverallTone(status.Health, status.Summary, status.Models)
-		status.StatusLabel = publicServiceStatusLabel(status.Status, true)
-	}
+	status.Status = publicServiceOverallTone(status.Health, status.Summary, status.Models)
+	status.StatusLabel = publicServiceStatusLabel(status.Status, true)
 	return status, nil
 }
 
-func resetGatewayStatusCache() {
-	gatewayStatusCache.Lock()
-	gatewayStatusCache.Mode = ""
-	gatewayStatusCache.ExpiresAt = time.Time{}
-	gatewayStatusCache.Status = PublicServiceStatus{}
-	gatewayStatusCache.Unlock()
-}
-
-func (s GatewayService) recentProbeBuckets(start time.Time, end time.Time) ([]serviceUsageBucketRow, error) {
-	if !end.After(start) {
+func (s GatewayService) recentUsageBuckets(start time.Time, end time.Time, modelNames []string) ([]serviceUsageBucketRow, error) {
+	if !end.After(start) || len(modelNames) == 0 {
 		return nil, nil
 	}
 	span := end.Sub(start) / time.Duration(serviceStatusSegmentCount)
@@ -238,20 +226,40 @@ func (s GatewayService) recentProbeBuckets(start time.Time, end time.Time) ([]se
 		COUNT(*) as requests,
 		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success_requests,
 		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as error_requests,
-		COALESCE(SUM(CASE WHEN first_response_time_ms > 0 THEN first_response_time_ms ELSE use_time_ms END), 0) as latency_total_ms,
-		COALESCE(MAX(create_time), 0) as last_checked_at
+		COALESCE(SUM(CASE WHEN first_response_time_ms > 0 THEN first_response_time_ms ELSE 0 END), 0) as latency_total_ms,
+		COALESCE(SUM(CASE WHEN first_response_time_ms > 0 THEN 1 ELSE 0 END), 0) as latency_samples,
+		COALESCE(MAX(create_time), 0) as last_request_at
 	`, bucketExpr)
 	var rows []serviceUsageBucketRow
 	err := global.NAV_DB.
-		Model(&domains.ProbeLog{}).
+		Model(&domains.UsageLog{}).
 		Select(selectSQL).
 		Where("create_time >= ? AND create_time < ?", startMS, endExclusive).
+		Where("model_name IN ?", modelNames).
+		Where("source IS NULL OR source = '' OR source = ?", domains.UsageLogSourceUser).
 		Group(bucketExpr + ", model_name").
 		Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
 	return rows, nil
+}
+
+func publicModelNames(models []domains.ModelMeta) []string {
+	seen := make(map[string]struct{}, len(models))
+	modelNames := make([]string, 0, len(models))
+	for _, model := range models {
+		modelName := strings.TrimSpace(model.ModelName)
+		if modelName == "" {
+			continue
+		}
+		if _, exists := seen[modelName]; exists {
+			continue
+		}
+		seen[modelName] = struct{}{}
+		modelNames = append(modelNames, modelName)
+	}
+	return modelNames
 }
 
 func serviceStatusBucketExprSQL(dialect string, startMS int64, spanMS int64) string {
@@ -304,9 +312,7 @@ func buildPublicModelStatuses(models []domains.ModelMeta, rows []serviceUsageBuc
 		}
 		aggregate := aggregates[modelName]
 		if aggregate == nil {
-			aggregate = newServiceModelAggregate(modelName, "")
-			aggregates[modelName] = aggregate
-			order = append(order, modelName)
+			continue
 		}
 		aggregate.applyBucket(row)
 	}
@@ -330,8 +336,9 @@ func (a *serviceModelAggregate) applyBucket(row serviceUsageBucketRow) {
 	a.successRequests += row.SuccessRequests
 	a.errorRequests += row.ErrorRequests
 	a.latencyTotalMs += row.LatencyTotalMs
-	if row.LastCheckedAt > a.lastCheckedAt {
-		a.lastCheckedAt = row.LastCheckedAt
+	a.latencySamples += row.LatencySamples
+	if row.LastRequestAt > a.lastRequestAt {
+		a.lastRequestAt = row.LastRequestAt
 	}
 	if row.BucketIndex < 0 || row.BucketIndex >= len(a.buckets) {
 		return
@@ -341,23 +348,26 @@ func (a *serviceModelAggregate) applyBucket(row serviceUsageBucketRow) {
 	bucket.success += row.SuccessRequests
 	bucket.errors += row.ErrorRequests
 	bucket.latencyTotalMs += row.LatencyTotalMs
+	bucket.latencySamples += row.LatencySamples
 }
 
 func (a *serviceModelAggregate) toPublicStatus(start time.Time, end time.Time) PublicModelStatus {
-	latency := avgLatency(a.latencyTotalMs, a.requests)
+	latency := avgLatency(a.latencyTotalMs, a.latencySamples)
 	tone := publicServiceTone(a.requests, a.successRequests, a.errorRequests, latency)
 	return PublicModelStatus{
-		ModelName:       a.modelName,
-		DisplayName:     a.displayName,
-		Status:          tone,
-		StatusLabel:     publicServiceStatusLabel(tone, false),
-		LastCheckedAt:   a.lastCheckedAt,
-		LatencyMs:       latency,
-		Requests:        a.requests,
-		SuccessRequests: a.successRequests,
-		ErrorRequests:   a.errorRequests,
-		SuccessRate:     successRate(a.successRequests, a.requests),
-		Segments:        a.segments(start, end),
+		ModelName:           a.modelName,
+		DisplayName:         a.displayName,
+		Status:              tone,
+		StatusLabel:         publicServiceStatusLabel(tone, false),
+		LastRequestAt:       a.lastRequestAt,
+		FirstResponseTimeMs: latency,
+		Requests:            a.requests,
+		SuccessRequests:     a.successRequests,
+		ErrorRequests:       a.errorRequests,
+		SuccessRate:         successRate(a.successRequests, a.requests),
+		Segments:            a.segments(start, end),
+		latencyTotalMs:      a.latencyTotalMs,
+		latencySamples:      a.latencySamples,
 	}
 }
 
@@ -367,18 +377,19 @@ func (a *serviceModelAggregate) segments(start time.Time, end time.Time) []Publi
 	for index, bucket := range a.buckets {
 		segmentStart := start.Add(time.Duration(index) * span)
 		segmentEnd := segmentStart.Add(span)
-		latency := avgLatency(bucket.latencyTotalMs, bucket.requests)
+		latency := avgLatency(bucket.latencyTotalMs, bucket.latencySamples)
 		tone := publicServiceTone(bucket.requests, bucket.success, bucket.errors, latency)
 		segments = append(segments, PublicModelStatusSegment{
-			Tone:        tone,
-			Label:       publicServiceSegmentLabel(segmentStart, bucket, tone, latency),
-			StartTime:   segmentStart.UnixMilli(),
-			EndTime:     segmentEnd.UnixMilli(),
-			Requests:    bucket.requests,
-			Success:     bucket.success,
-			Errors:      bucket.errors,
-			LatencyMs:   latency,
-			SuccessRate: successRate(bucket.success, bucket.requests),
+			Tone:                tone,
+			Label:               publicServiceSegmentLabel(segmentStart, bucket, tone, latency),
+			StartTime:           segmentStart.UnixMilli(),
+			EndTime:             segmentEnd.UnixMilli(),
+			Requests:            bucket.requests,
+			Success:             bucket.success,
+			Errors:              bucket.errors,
+			FirstResponseTimeMs: latency,
+			LatencySamples:      bucket.latencySamples,
+			SuccessRate:         successRate(bucket.success, bucket.requests),
 		})
 	}
 	return segments
@@ -386,6 +397,7 @@ func (a *serviceModelAggregate) segments(start time.Time, end time.Time) []Publi
 
 func summarizePublicServiceStatus(summary PublicServiceStatusSummary, models []PublicModelStatus) PublicServiceStatusSummary {
 	latencyTotal := int64(0)
+	latencySamples := int64(0)
 	for _, model := range models {
 		if model.Requests > 0 {
 			summary.ActiveModels++
@@ -393,9 +405,10 @@ func summarizePublicServiceStatus(summary PublicServiceStatusSummary, models []P
 		summary.TotalRequests += model.Requests
 		summary.SuccessRequests += model.SuccessRequests
 		summary.ErrorRequests += model.ErrorRequests
-		latencyTotal += model.LatencyMs * model.Requests
+		latencyTotal += model.latencyTotalMs
+		latencySamples += model.latencySamples
 	}
-	summary.AvgLatencyMs = avgLatency(latencyTotal, summary.TotalRequests)
+	summary.AvgFirstResponseTimeMs = avgLatency(latencyTotal, latencySamples)
 	summary.SuccessRate = successRate(summary.SuccessRequests, summary.TotalRequests)
 	return summary
 }
@@ -416,7 +429,7 @@ func publicServiceOverallTone(health GatewayHealth, summary PublicServiceStatusS
 			hasWarning = true
 		}
 	}
-	tone := publicServiceTone(summary.TotalRequests, summary.SuccessRequests, summary.ErrorRequests, summary.AvgLatencyMs)
+	tone := publicServiceTone(summary.TotalRequests, summary.SuccessRequests, summary.ErrorRequests, summary.AvgFirstResponseTimeMs)
 	if tone == "danger" {
 		return tone
 	}
@@ -426,7 +439,7 @@ func publicServiceOverallTone(health GatewayHealth, summary PublicServiceStatusS
 	return "success"
 }
 
-func publicServiceTone(requests int64, success int64, errors int64, latencyMs int64) string {
+func publicServiceTone(requests int64, success int64, errors int64, firstResponseTimeMs int64) string {
 	if requests <= 0 {
 		return "idle"
 	}
@@ -434,7 +447,7 @@ func publicServiceTone(requests int64, success int64, errors int64, latencyMs in
 	if errors > 0 && rate < serviceStatusCriticalSuccessRate {
 		return "danger"
 	}
-	if errors > 0 || rate < serviceStatusWarningSuccessRate || latencyMs >= serviceStatusWarningLatencyMs {
+	if errors > 0 || rate < serviceStatusWarningSuccessRate || firstResponseTimeMs >= serviceStatusWarningFirstResponseTimeMs {
 		return "warning"
 	}
 	return "success"
@@ -446,22 +459,22 @@ func publicServiceStatusLabel(tone string, overall bool) string {
 		if overall {
 			return "部分波动"
 		}
-		return "延迟偏高"
+		return "存在波动"
 	case "danger":
 		return "异常"
 	case "idle":
-		return "暂无探测"
+		return "暂无调用"
 	default:
 		return "正常"
 	}
 }
 
-func publicServiceSegmentLabel(start time.Time, bucket serviceBucketAggregate, tone string, latencyMs int64) string {
+func publicServiceSegmentLabel(start time.Time, bucket serviceBucketAggregate, tone string, firstResponseTimeMs int64) string {
 	timeLabel := start.Format("15:04")
 	if bucket.requests <= 0 {
-		return timeLabel + " 暂无探测"
+		return timeLabel + " 暂无调用"
 	}
-	return timeLabel + " " + publicServiceStatusLabel(tone, false) + " " + strconv.FormatInt(bucket.requests, 10) + " 次 " + strconv.FormatInt(latencyMs, 10) + "ms"
+	return timeLabel + " " + publicServiceStatusLabel(tone, false) + " " + strconv.FormatInt(bucket.requests, 10) + " 次 首响 " + strconv.FormatInt(firstResponseTimeMs, 10) + "ms"
 }
 
 func avgLatency(total int64, count int64) int64 {

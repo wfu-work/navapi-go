@@ -12,17 +12,12 @@ func RegisterTables() {
 	if db == nil {
 		return
 	}
-	if err := migrateLegacyProbeLogTable(db); err != nil {
-		global.NAV_LOG.Error("migrate legacy probe log table failed", zap.Error(err))
-		os.Exit(1)
-	}
 	if err := db.AutoMigrate(
 		ApiToken{},
 		UserWallet{},
 		UserWalletRecord{},
 		UserSettings{},
 		UsageLog{},
-		ProbeLog{},
 		Announcement{},
 		ModelMeta{},
 		ModelGroup{},

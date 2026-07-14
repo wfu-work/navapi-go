@@ -343,7 +343,7 @@ func (s *TokenService) Usage(userGuid string) ([]TokenUsage, error) {
 		db := s.DB().Model(&domains.UsageLog{}).
 			Select("token_guid, COUNT(*) AS total_requests, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END),0) AS success_requests, COALESCE(SUM(quota),0) AS quota, COALESCE(SUM(prompt_tokens),0) AS prompt_tokens, COALESCE(SUM(completion_tokens),0) AS completion_tokens").
 			Where("token_guid IN ?", tokenGuids)
-		db = applyUsageLogSourceFilter(db, "", false)
+		db = applyUserUsageLogSourceFilter(db)
 		if userGuid != "" {
 			db = db.Where("user_guid = ?", userGuid)
 		}

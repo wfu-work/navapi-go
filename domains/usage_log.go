@@ -2,10 +2,7 @@ package domains
 
 import commonDomains "github.com/wfu-work/nav-common-go-lib/domains"
 
-const (
-	UsageLogSourceUser  = "user"
-	UsageLogSourceProbe = "probe"
-)
+const UsageLogSourceUser = "user"
 
 type UsageLog struct {
 	commonDomains.BaseDataEntity
@@ -29,7 +26,7 @@ type UsageLog struct {
 	RequestID           string  `json:"requestId" gorm:"column:request_id;size:100;index;comment:请求 ID"`
 	UpstreamRequestID   string  `json:"upstreamRequestId" gorm:"column:upstream_request_id;size:100;index;comment:上游请求 ID"`
 	ClientIP            string  `json:"clientIp" gorm:"column:client_ip;size:80;index;comment:客户端 IP"`
-	Source              string  `json:"source" gorm:"column:source;size:30;index;default:user;comment:日志来源 user/probe"`
+	Source              string  `json:"source" gorm:"column:source;size:30;index;default:user;comment:日志来源"`
 	Other               string  `json:"other" gorm:"column:other;type:text;comment:扩展信息 JSON"`
 }
 

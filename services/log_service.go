@@ -3,7 +3,6 @@ package services
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"navapi-go/domains"
@@ -87,21 +86,17 @@ type UsageSummary struct {
 }
 
 type UsageSummaryQuery struct {
-	Days         int
-	TopN         int
-	StartTime    int64
-	EndTime      int64
-	Source       string
-	IncludeProbe bool
+	Days      int
+	TopN      int
+	StartTime int64
+	EndTime   int64
 }
 
 type UsageLogQuery struct {
 	vos.PageQuery
-	Status       string `form:"status" json:"status"`
-	StartTime    int64  `form:"startTime" json:"startTime"`
-	EndTime      int64  `form:"endTime" json:"endTime"`
-	Source       string `form:"source" json:"source"`
-	IncludeProbe bool   `form:"includeProbe" json:"includeProbe"`
+	Status    string `form:"status" json:"status"`
+	StartTime int64  `form:"startTime" json:"startTime"`
+	EndTime   int64  `form:"endTime" json:"endTime"`
 }
 
 type usageAggregateRow struct {
@@ -233,7 +228,7 @@ func applyUsageLogFilters(db *gorm.DB, userGuid string, query UsageLogQuery) *go
 	if query.Status != "" {
 		db = db.Where("status = ?", query.Status)
 	}
-	db = applyUsageLogSourceFilter(db, query.Source, query.IncludeProbe)
+	db = applyUserUsageLogSourceFilter(db)
 	startTime := normalizeUsageQueryTime(query.StartTime)
 	endTime := normalizeUsageQueryTime(query.EndTime)
 	if startTime > 0 {
@@ -245,28 +240,8 @@ func applyUsageLogFilters(db *gorm.DB, userGuid string, query UsageLogQuery) *go
 	return db
 }
 
-func applyUsageLogSourceFilter(db *gorm.DB, source string, includeProbe bool) *gorm.DB {
-	source = normalizeUsageLogSource(source)
-	if source != "" {
-		if source == domains.UsageLogSourceUser {
-			return db.Where("source IS NULL OR source = '' OR source = ?", domains.UsageLogSourceUser)
-		}
-		return db.Where("source = ?", source)
-	}
-	if includeProbe {
-		return db
-	}
-	return db.Where("source IS NULL OR source = '' OR source <> ?", domains.UsageLogSourceProbe)
-}
-
-func normalizeUsageLogSource(source string) string {
-	source = strings.ToLower(strings.TrimSpace(source))
-	switch source {
-	case domains.UsageLogSourceUser, domains.UsageLogSourceProbe:
-		return source
-	default:
-		return ""
-	}
+func applyUserUsageLogSourceFilter(db *gorm.DB) *gorm.DB {
+	return db.Where("source IS NULL OR source = '' OR source = ?", domains.UsageLogSourceUser)
 }
 
 func (s *LogService) enrichUsageLogUsers(logs []domains.UsageLog) {
@@ -630,7 +605,7 @@ func (s *LogService) usageRangeDB(userGuid string, query UsageSummaryQuery) *gor
 	if userGuid != "" {
 		db = db.Where("user_guid = ?", userGuid)
 	}
-	return applyUsageLogSourceFilter(db, query.Source, query.IncludeProbe)
+	return applyUserUsageLogSourceFilter(db)
 }
 
 func (s *LogService) dailyUsageStats(userGuid string, query UsageSummaryQuery) (usageDailyStatsResult, error) {
@@ -899,7 +874,7 @@ func normalizeUsageSummaryQuery(query UsageSummaryQuery) UsageSummaryQuery {
 	if startTime <= 0 && endTime <= 0 {
 		end := time.Now()
 		start := beginningOfDay(end).AddDate(0, 0, -(days - 1))
-		return UsageSummaryQuery{Days: days, TopN: topN, StartTime: start.UnixMilli(), EndTime: end.UnixMilli(), Source: normalizeUsageLogSource(query.Source), IncludeProbe: query.IncludeProbe}
+		return UsageSummaryQuery{Days: days, TopN: topN, StartTime: start.UnixMilli(), EndTime: end.UnixMilli()}
 	}
 	if endTime <= 0 {
 		endTime = time.Now().UnixMilli()
@@ -920,7 +895,7 @@ func normalizeUsageSummaryQuery(query UsageSummaryQuery) UsageSummaryQuery {
 		days = 366
 		startTime = endDay.AddDate(0, 0, -(days - 1)).UnixMilli()
 	}
-	return UsageSummaryQuery{Days: days, TopN: topN, StartTime: startTime, EndTime: endTime, Source: normalizeUsageLogSource(query.Source), IncludeProbe: query.IncludeProbe}
+	return UsageSummaryQuery{Days: days, TopN: topN, StartTime: startTime, EndTime: endTime}
 }
 
 func buildUsageDayWindows(startTime int64, endTime int64) []usageDayWindow {
