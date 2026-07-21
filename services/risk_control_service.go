@@ -8,19 +8,20 @@ import (
 )
 
 type RiskControlSettings struct {
-	MaxBodyBytes                int64  `json:"maxBodyBytes"`
-	MaxUpstreamResponseBytes    int64  `json:"maxUpstreamResponseBytes"`
-	ModelRateLimitEnabled       bool   `json:"modelRateLimitEnabled"`
-	ModelRateLimitCount         int64  `json:"modelRateLimitCount"`
-	ModelRateLimitWindowSeconds int64  `json:"modelRateLimitWindowSeconds"`
-	ProviderAffinityEnabled     bool   `json:"providerAffinityEnabled"`
-	ProviderAffinitySeconds     int64  `json:"providerAffinitySeconds"`
-	ProviderCircuitEnabled      bool   `json:"providerCircuitEnabled"`
-	ProviderFailureThreshold    int64  `json:"providerFailureThreshold"`
-	ProviderCooldownSeconds     int64  `json:"providerCooldownSeconds"`
-	ProviderMaxCooldownSeconds  int64  `json:"providerMaxCooldownSeconds"`
-	SSRFCheckEnabled            bool   `json:"ssrfCheckEnabled"`
-	SensitiveWords              string `json:"sensitiveWords"`
+	MaxBodyBytes                      int64  `json:"maxBodyBytes"`
+	MaxUpstreamResponseBytes          int64  `json:"maxUpstreamResponseBytes"`
+	ModelRateLimitEnabled             bool   `json:"modelRateLimitEnabled"`
+	ModelRateLimitCount               int64  `json:"modelRateLimitCount"`
+	ModelRateLimitWindowSeconds       int64  `json:"modelRateLimitWindowSeconds"`
+	ProviderAffinityEnabled           bool   `json:"providerAffinityEnabled"`
+	ProviderAffinitySeconds           int64  `json:"providerAffinitySeconds"`
+	ProviderCircuitEnabled            bool   `json:"providerCircuitEnabled"`
+	ProviderFailureThreshold          int64  `json:"providerFailureThreshold"`
+	ProviderCooldownSeconds           int64  `json:"providerCooldownSeconds"`
+	ProviderMaxCooldownSeconds        int64  `json:"providerMaxCooldownSeconds"`
+	ResponsesSynthesizeCompletedOnEOF bool   `json:"responsesSynthesizeCompletedOnEOF"`
+	SSRFCheckEnabled                  bool   `json:"ssrfCheckEnabled"`
+	SensitiveWords                    string `json:"sensitiveWords"`
 }
 
 type RiskControlService struct{}
@@ -59,19 +60,20 @@ func (s RiskControlService) Get() RiskControlSettings {
 		affinitySeconds = defaultRiskProviderAffinitySeconds
 	}
 	return RiskControlSettings{
-		MaxBodyBytes:                OptionServiceApp.Int64("relay.max_body_bytes", defaultRiskMaxBodyBytes),
-		MaxUpstreamResponseBytes:    OptionServiceApp.Int64("relay.max_upstream_response_bytes", defaultRiskMaxUpstreamResponseBytes),
-		ModelRateLimitEnabled:       OptionServiceApp.Bool("relay.model_rate_limit_enabled", storedRateLimitCount > 0),
-		ModelRateLimitCount:         rateLimitCount,
-		ModelRateLimitWindowSeconds: OptionServiceApp.Int64("relay.model_rate_limit_window_seconds", defaultRiskModelRateLimitWindowSeconds),
-		ProviderAffinityEnabled:     OptionServiceApp.Bool("relay.provider_affinity_enabled", storedAffinitySeconds > 0),
-		ProviderAffinitySeconds:     affinitySeconds,
-		ProviderCircuitEnabled:      OptionServiceApp.Bool("relay.provider_circuit_enabled", true),
-		ProviderFailureThreshold:    OptionServiceApp.Int64("relay.provider_failure_threshold", defaultRiskProviderFailureThreshold),
-		ProviderCooldownSeconds:     OptionServiceApp.Int64("relay.provider_cooldown_seconds", defaultRiskProviderCooldownSeconds),
-		ProviderMaxCooldownSeconds:  OptionServiceApp.Int64("relay.provider_max_cooldown_seconds", defaultRiskProviderMaxCooldownSeconds),
-		SSRFCheckEnabled:            OptionServiceApp.Bool("relay.ssrf_check_enabled", true),
-		SensitiveWords:              OptionServiceApp.Get("relay.sensitive_words", ""),
+		MaxBodyBytes:                      OptionServiceApp.Int64("relay.max_body_bytes", defaultRiskMaxBodyBytes),
+		MaxUpstreamResponseBytes:          OptionServiceApp.Int64("relay.max_upstream_response_bytes", defaultRiskMaxUpstreamResponseBytes),
+		ModelRateLimitEnabled:             OptionServiceApp.Bool("relay.model_rate_limit_enabled", storedRateLimitCount > 0),
+		ModelRateLimitCount:               rateLimitCount,
+		ModelRateLimitWindowSeconds:       OptionServiceApp.Int64("relay.model_rate_limit_window_seconds", defaultRiskModelRateLimitWindowSeconds),
+		ProviderAffinityEnabled:           OptionServiceApp.Bool("relay.provider_affinity_enabled", storedAffinitySeconds > 0),
+		ProviderAffinitySeconds:           affinitySeconds,
+		ProviderCircuitEnabled:            OptionServiceApp.Bool("relay.provider_circuit_enabled", true),
+		ProviderFailureThreshold:          OptionServiceApp.Int64("relay.provider_failure_threshold", defaultRiskProviderFailureThreshold),
+		ProviderCooldownSeconds:           OptionServiceApp.Int64("relay.provider_cooldown_seconds", defaultRiskProviderCooldownSeconds),
+		ProviderMaxCooldownSeconds:        OptionServiceApp.Int64("relay.provider_max_cooldown_seconds", defaultRiskProviderMaxCooldownSeconds),
+		ResponsesSynthesizeCompletedOnEOF: OptionServiceApp.Bool("relay.responses_synthesize_completed_on_eof", true),
+		SSRFCheckEnabled:                  OptionServiceApp.Bool("relay.ssrf_check_enabled", true),
+		SensitiveWords:                    OptionServiceApp.Get("relay.sensitive_words", ""),
 	}
 }
 
@@ -84,19 +86,20 @@ func (s RiskControlService) Set(settings RiskControlSettings) error {
 		return err
 	}
 	values := map[string]string{
-		"relay.max_body_bytes":                  strconv.FormatInt(settings.MaxBodyBytes, 10),
-		"relay.max_upstream_response_bytes":     strconv.FormatInt(settings.MaxUpstreamResponseBytes, 10),
-		"relay.model_rate_limit_enabled":        strconv.FormatBool(settings.ModelRateLimitEnabled),
-		"relay.model_rate_limit_count":          strconv.FormatInt(settings.ModelRateLimitCount, 10),
-		"relay.model_rate_limit_window_seconds": strconv.FormatInt(settings.ModelRateLimitWindowSeconds, 10),
-		"relay.provider_affinity_enabled":       strconv.FormatBool(settings.ProviderAffinityEnabled),
-		"relay.provider_affinity_seconds":       strconv.FormatInt(settings.ProviderAffinitySeconds, 10),
-		"relay.provider_circuit_enabled":        strconv.FormatBool(settings.ProviderCircuitEnabled),
-		"relay.provider_failure_threshold":      strconv.FormatInt(settings.ProviderFailureThreshold, 10),
-		"relay.provider_cooldown_seconds":       strconv.FormatInt(settings.ProviderCooldownSeconds, 10),
-		"relay.provider_max_cooldown_seconds":   strconv.FormatInt(settings.ProviderMaxCooldownSeconds, 10),
-		"relay.ssrf_check_enabled":              strconv.FormatBool(settings.SSRFCheckEnabled),
-		"relay.sensitive_words":                 settings.SensitiveWords,
+		"relay.max_body_bytes":                        strconv.FormatInt(settings.MaxBodyBytes, 10),
+		"relay.max_upstream_response_bytes":           strconv.FormatInt(settings.MaxUpstreamResponseBytes, 10),
+		"relay.model_rate_limit_enabled":              strconv.FormatBool(settings.ModelRateLimitEnabled),
+		"relay.model_rate_limit_count":                strconv.FormatInt(settings.ModelRateLimitCount, 10),
+		"relay.model_rate_limit_window_seconds":       strconv.FormatInt(settings.ModelRateLimitWindowSeconds, 10),
+		"relay.provider_affinity_enabled":             strconv.FormatBool(settings.ProviderAffinityEnabled),
+		"relay.provider_affinity_seconds":             strconv.FormatInt(settings.ProviderAffinitySeconds, 10),
+		"relay.provider_circuit_enabled":              strconv.FormatBool(settings.ProviderCircuitEnabled),
+		"relay.provider_failure_threshold":            strconv.FormatInt(settings.ProviderFailureThreshold, 10),
+		"relay.provider_cooldown_seconds":             strconv.FormatInt(settings.ProviderCooldownSeconds, 10),
+		"relay.provider_max_cooldown_seconds":         strconv.FormatInt(settings.ProviderMaxCooldownSeconds, 10),
+		"relay.responses_synthesize_completed_on_eof": strconv.FormatBool(settings.ResponsesSynthesizeCompletedOnEOF),
+		"relay.ssrf_check_enabled":                    strconv.FormatBool(settings.SSRFCheckEnabled),
+		"relay.sensitive_words":                       settings.SensitiveWords,
 	}
 	if err := OptionServiceApp.SetMany(values); err != nil {
 		return err

@@ -320,6 +320,9 @@ func classifyProviderCircuitOutcome(requestContext context.Context, result *Rela
 	if result == nil {
 		return providerCircuitOutcome{Kind: providerCircuitGlobalFailure}
 	}
+	if result.StreamSynthesized {
+		return providerCircuitOutcome{Kind: providerCircuitGlobalFailure}
+	}
 	switch {
 	case result.StatusCode == http.StatusNotFound:
 		return providerCircuitOutcome{Kind: providerCircuitNotFound}

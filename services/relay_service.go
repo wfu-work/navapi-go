@@ -55,6 +55,7 @@ type RelayResult struct {
 	StreamStarted       bool
 	StreamTerminal      string
 	StreamTerminalError string
+	StreamSynthesized   bool
 }
 
 type preparedRelay struct {
@@ -365,6 +366,9 @@ func shouldForgetProviderAffinity(outcome providerCircuitOutcome, result *RelayR
 	if outcome.Kind == providerCircuitHealthy && isUpstreamResponseLimitError(err) {
 		return false
 	}
+	if result != nil && result.StreamSynthesized {
+		return true
+	}
 	if err != nil {
 		return true
 	}
@@ -528,6 +532,7 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 	firstResponseTimeMs := int64(0)
 	streamStarted := false
 	requireResponsesTerminal := strings.TrimSpace(upstreamPath) == "/v1/responses"
+	synthesizeResponsesCompleted := requireResponsesTerminal && responsesSynthesizeCompletedOnEOFEnabled()
 	if responseLimit > 0 && resp.ContentLength > responseLimit {
 		timing := trace.Snapshot(time.Since(requestStart))
 		if timing.ResponseHeaderTimeMs <= 0 {
@@ -570,9 +575,20 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 			}
 		}
 		if readErr == io.EOF {
+			if shouldSynthesizeResponsesCompleted(c, tracker, streamStarted, synthesizeResponsesCompleted) {
+				if writeErr := writeSynthesizedResponsesCompletedEvent(c, tracker, "upstream EOF before response.completed"); writeErr != nil {
+					return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), &downstreamStreamWriteError{err: writeErr}
+				}
+			}
 			break
 		}
 		if readErr != nil {
+			if shouldSynthesizeResponsesCompleted(c, tracker, streamStarted, synthesizeResponsesCompleted) {
+				if writeErr := writeSynthesizedResponsesCompletedEvent(c, tracker, "upstream stream error before response.completed: "+readErr.Error()); writeErr != nil {
+					return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), &downstreamStreamWriteError{err: writeErr}
+				}
+				break
+			}
 			return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), readErr
 		}
 	}
@@ -624,7 +640,107 @@ func finishStreamRelayResult(resp *http.Response, tracker *streamUsageTracker, f
 		StreamStarted:       streamStarted,
 		StreamTerminal:      tracker.terminal,
 		StreamTerminalError: tracker.terminalError,
+		StreamSynthesized:   tracker.terminalSynthesized,
 	}
+}
+
+func responsesSynthesizeCompletedOnEOFEnabled() bool {
+	return OptionServiceApp.Bool("relay.responses_synthesize_completed_on_eof", true)
+}
+
+func shouldSynthesizeResponsesCompleted(c *gin.Context, tracker *streamUsageTracker, streamStarted bool, enabled bool) bool {
+	if !enabled || !streamStarted || tracker == nil || tracker.terminal != "" {
+		return false
+	}
+	if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
+		return false
+	}
+	return true
+}
+
+func writeSynthesizedResponsesCompletedEvent(c *gin.Context, tracker *streamUsageTracker, reason string) error {
+	if c == nil || tracker == nil {
+		return errors.New("stream context is empty")
+	}
+	chunk := synthesizedResponsesCompletedEvent(tracker, time.Now())
+	if _, err := c.Writer.Write(chunk); err != nil {
+		return err
+	}
+	c.Writer.Flush()
+	tracker.Write(chunk)
+	tracker.terminal = "response.completed"
+	tracker.terminalSynthesized = true
+	tracker.terminalError = strings.TrimSpace(reason)
+	return nil
+}
+
+func synthesizedResponsesCompletedEvent(tracker *streamUsageTracker, now time.Time) []byte {
+	response := synthesizedResponsesCompletedResponse(tracker, now)
+	payload := map[string]any{
+		"type":     "response.completed",
+		"response": response,
+	}
+	if tracker != nil && tracker.hasSequenceNumber {
+		payload["sequence_number"] = tracker.sequenceNumber + 1
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		data = []byte(`{"type":"response.completed","response":{"status":"completed","output":[]}}`)
+	}
+	return []byte("\n\nevent: response.completed\ndata: " + string(data) + "\n\n")
+}
+
+func synthesizedResponsesCompletedResponse(tracker *streamUsageTracker, now time.Time) map[string]any {
+	response := map[string]any{}
+	if tracker != nil && len(tracker.responseSnapshot) > 0 {
+		_ = json.Unmarshal(tracker.responseSnapshot, &response)
+	}
+	if response == nil {
+		response = map[string]any{}
+	}
+	if _, ok := response["id"]; !ok {
+		response["id"] = fmt.Sprintf("resp_synth_%d", now.UnixNano())
+	}
+	if _, ok := response["object"]; !ok {
+		response["object"] = "response"
+	}
+	if _, ok := response["created_at"]; !ok {
+		response["created_at"] = now.Unix()
+	}
+	if _, ok := response["output"]; !ok {
+		response["output"] = []any{}
+	}
+	response["status"] = "completed"
+	if tracker != nil && hasUsageTokens(tracker.usage) {
+		response["usage"] = responsesUsagePayload(tracker.usage)
+	}
+	return response
+}
+
+func responsesUsagePayload(usage vos.Usage) map[string]any {
+	inputTokens := usage.PromptTokens
+	if inputTokens <= 0 {
+		inputTokens = usage.InputTokens
+	}
+	outputTokens := usage.CompletionTokens
+	if outputTokens <= 0 {
+		outputTokens = usage.OutputTokens
+	}
+	totalTokens := usage.TotalTokens
+	if totalTokens <= 0 {
+		totalTokens = inputTokens + outputTokens
+	}
+	payload := map[string]any{
+		"input_tokens":  inputTokens,
+		"output_tokens": outputTokens,
+		"total_tokens":  totalTokens,
+	}
+	if usage.CachedTokens > 0 {
+		payload["input_tokens_details"] = map[string]any{
+			"cached_tokens": usage.CachedTokens,
+		}
+	}
+	return payload
 }
 
 func readLimitedUpstreamBody(resp *http.Response) ([]byte, error) {
@@ -1153,11 +1269,15 @@ func parseStreamUsage(body []byte) vos.Usage {
 }
 
 type streamUsageTracker struct {
-	pending       string
-	eventType     string
-	usage         vos.Usage
-	terminal      string
-	terminalError string
+	pending             string
+	eventType           string
+	usage               vos.Usage
+	terminal            string
+	terminalError       string
+	terminalSynthesized bool
+	responseSnapshot    json.RawMessage
+	sequenceNumber      int64
+	hasSequenceNumber   bool
 }
 
 // Write incrementally parses SSE "data:" lines while bytes are being proxied.
@@ -1212,9 +1332,16 @@ func (t *streamUsageTracker) consumeLine(line string) {
 	if parsed.TotalTokens > 0 || parsed.PromptTokens > 0 || parsed.CompletionTokens > 0 {
 		t.usage = parsed
 	}
-	eventType, eventError := parseResponsesStreamEvent([]byte(data))
+	eventType, eventError, responseSnapshot, sequenceNumber, hasSequenceNumber := parseResponsesStreamEvent([]byte(data))
 	if eventType == "" {
 		eventType = t.eventType
+	}
+	if len(responseSnapshot) > 0 {
+		t.responseSnapshot = append(t.responseSnapshot[:0], responseSnapshot...)
+	}
+	if hasSequenceNumber {
+		t.sequenceNumber = sequenceNumber
+		t.hasSequenceNumber = true
 	}
 	if isResponsesTerminalEvent(eventType) {
 		t.terminal = eventType
@@ -1233,28 +1360,41 @@ func isResponsesTerminalEvent(eventType string) bool {
 	}
 }
 
-func parseResponsesStreamEvent(data []byte) (string, string) {
+func parseResponsesStreamEvent(data []byte) (string, string, json.RawMessage, int64, bool) {
 	var payload struct {
-		Type     string          `json:"type"`
-		Error    json.RawMessage `json:"error"`
-		Response struct {
+		Type           string          `json:"type"`
+		SequenceNumber *int64          `json:"sequence_number"`
+		Error          json.RawMessage `json:"error"`
+		Response       json.RawMessage `json:"response"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", "", nil, 0, false
+	}
+	detail := responseStreamErrorMessage(payload.Error)
+	if detail == "" && len(payload.Response) > 0 {
+		var response struct {
 			Error             json.RawMessage `json:"error"`
 			IncompleteDetails struct {
 				Reason string `json:"reason"`
 			} `json:"incomplete_details"`
-		} `json:"response"`
+		}
+		_ = json.Unmarshal(payload.Response, &response)
+		detail = responseStreamErrorMessage(response.Error)
+		if detail == "" {
+			detail = strings.TrimSpace(response.IncompleteDetails.Reason)
+		}
 	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return "", ""
+	responseSnapshot := json.RawMessage(nil)
+	if len(payload.Response) > 0 && string(payload.Response) != "null" {
+		responseSnapshot = append(responseSnapshot, payload.Response...)
 	}
-	detail := responseStreamErrorMessage(payload.Error)
-	if detail == "" {
-		detail = responseStreamErrorMessage(payload.Response.Error)
+	sequenceNumber := int64(0)
+	hasSequenceNumber := false
+	if payload.SequenceNumber != nil {
+		sequenceNumber = *payload.SequenceNumber
+		hasSequenceNumber = true
 	}
-	if detail == "" {
-		detail = strings.TrimSpace(payload.Response.IncompleteDetails.Reason)
-	}
-	return strings.TrimSpace(payload.Type), detail
+	return strings.TrimSpace(payload.Type), detail, responseSnapshot, sequenceNumber, hasSequenceNumber
 }
 
 func responseStreamErrorMessage(raw json.RawMessage) string {
