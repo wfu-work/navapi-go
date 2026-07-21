@@ -45,8 +45,13 @@ func (a RelayApi) TokenBalance(c *gin.Context) {
 func buildTokenBalanceResponse(token *domains.ApiToken, wallet *domains.UserWallet) tokenBalanceResponse {
 	used := services.AmountMicrosToCost(token.UsedAmountMicros)
 	availableMicros := token.BalanceAmountMicros
+	effectiveUnlimited := token.UnlimitedBalance
 	unit := "CNY"
 	if wallet != nil {
+		// UnlimitedBalance only removes the per-token cap. The user's wallet is
+		// still finite, so balance clients such as CCS must see the wallet amount
+		// instead of treating the whole account as unlimited.
+		effectiveUnlimited = false
 		walletBalance := wallet.BalanceAmountMicros
 		if token.UnlimitedBalance || walletBalance < availableMicros {
 			availableMicros = walletBalance
@@ -64,7 +69,7 @@ func buildTokenBalanceResponse(token *domains.ApiToken, wallet *domains.UserWall
 		Balance:   &available,
 		Used:      used,
 		Total:     &total,
-		Unlimited: token.UnlimitedBalance,
+		Unlimited: effectiveUnlimited,
 		Unit:      unit,
 	}
 	return result
