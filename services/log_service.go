@@ -176,6 +176,9 @@ func (s *LogService) Create(log *domains.UsageLog) error {
 
 func (s *LogService) EnsureIndexes() error {
 	db := s.DB()
+	if err := normalizeLegacyUsageLogSources(db); err != nil {
+		return err
+	}
 	indexes := []struct {
 		name string
 		sql  string
@@ -188,6 +191,7 @@ func (s *LogService) EnsureIndexes() error {
 		{name: "idx_nav_api_usage_logs_time_token", sql: "CREATE INDEX idx_nav_api_usage_logs_time_token ON nav_api_usage_logs(create_time, token_guid)"},
 		{name: "idx_nav_api_usage_logs_time_channel", sql: "CREATE INDEX idx_nav_api_usage_logs_time_channel ON nav_api_usage_logs(create_time, channel_guid)"},
 		{name: "idx_nav_api_usage_logs_source_time", sql: "CREATE INDEX idx_nav_api_usage_logs_source_time ON nav_api_usage_logs(source, create_time)"},
+		{name: "idx_nav_api_usage_logs_user_source_time_id_active", sql: usageLogListIndexSQL(db)},
 	}
 	for _, index := range indexes {
 		if db.Migrator().HasIndex(&domains.UsageLog{}, index.name) {
@@ -200,6 +204,21 @@ func (s *LogService) EnsureIndexes() error {
 	return nil
 }
 
+func normalizeLegacyUsageLogSources(db *gorm.DB) error {
+	return db.Exec(
+		"UPDATE nav_api_usage_logs SET source = ? WHERE source IS NULL OR source = ''",
+		domains.UsageLogSourceUser,
+	).Error
+}
+
+func usageLogListIndexSQL(db *gorm.DB) string {
+	const name = "idx_nav_api_usage_logs_user_source_time_id_active"
+	if db != nil && db.Dialector.Name() == "mysql" {
+		return "CREATE INDEX " + name + " ON nav_api_usage_logs(user_guid, source, deleted_time, create_time DESC, id DESC)"
+	}
+	return "CREATE INDEX " + name + " ON nav_api_usage_logs(user_guid, source, create_time DESC, id DESC) WHERE deleted_time IS NULL"
+}
+
 func (s *LogService) List(userGuid string, query UsageLogQuery) (vos.PageResult, error) {
 	query.PageQuery.Normalize()
 	var logs []domains.UsageLog
@@ -209,7 +228,7 @@ func (s *LogService) List(userGuid string, query UsageLogQuery) (vos.PageResult,
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err
 	}
-	if err := db.Order("id desc").Offset(query.PageQuery.Offset()).Limit(query.Size).Find(&logs).Error; err != nil {
+	if err := db.Order("create_time desc, id desc").Offset(query.PageQuery.Offset()).Limit(query.Size).Find(&logs).Error; err != nil {
 		return vos.PageResult{}, err
 	}
 	s.enrichUsageLogUsers(logs)
@@ -245,7 +264,7 @@ func applyUsageLogFilters(db *gorm.DB, userGuid string, query UsageLogQuery) *go
 }
 
 func applyUserUsageLogSourceFilter(db *gorm.DB) *gorm.DB {
-	return db.Where("source IS NULL OR source = '' OR source = ?", domains.UsageLogSourceUser)
+	return db.Where("source = ?", domains.UsageLogSourceUser)
 }
 
 func (s *LogService) enrichUsageLogUsers(logs []domains.UsageLog) {
