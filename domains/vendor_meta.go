@@ -11,6 +11,7 @@ type VendorMeta struct {
 	BaseURL              string  `json:"baseUrl" gorm:"column:base_url;size:500;comment:默认 Base URL"`
 	Key                  string  `json:"-" gorm:"column:key;type:text;comment:上游 API Key"`
 	Models               string  `json:"models" gorm:"column:models;type:text;comment:逗号分隔模型列表"`
+	EndpointCapabilities string  `json:"endpointCapabilities" gorm:"column:endpoint_capabilities;type:text;comment:逗号分隔端点能力"`
 	ModelOverride        string  `json:"modelOverride" gorm:"column:model_override;size:120;comment:上游模型覆盖"`
 	QuotaModelWhitelist  string  `json:"quotaModelWhitelist" gorm:"column:quota_model_whitelist;type:text;comment:余额模型白名单"`
 	ModelMapping         string  `json:"modelMapping" gorm:"column:model_mapping;type:text;comment:JSON 模型映射"`

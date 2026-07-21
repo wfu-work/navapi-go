@@ -27,11 +27,13 @@ import (
 )
 
 type RelayService struct {
-	client *http.Client
+	client       *http.Client
+	streamClient *http.Client
 }
 
 var RelayServiceApp = new(RelayService{
-	client: &http.Client{Timeout: 10 * time.Minute, Transport: cloneDefaultTransport()},
+	client:       &http.Client{Timeout: 10 * time.Minute, Transport: cloneDefaultTransport()},
+	streamClient: newStreamHTTPClient(),
 })
 
 type RelayEndpoint struct {
@@ -50,6 +52,9 @@ type RelayResult struct {
 	Usage               vos.Usage
 	FirstResponseTimeMs int64
 	Timing              UpstreamTiming
+	StreamStarted       bool
+	StreamTerminal      string
+	StreamTerminalError string
 }
 
 type preparedRelay struct {
@@ -63,6 +68,7 @@ type preparedRelay struct {
 type RelayHTTPError struct {
 	StatusCode int
 	Message    string
+	RetryAfter time.Duration
 }
 
 type billingReservation struct {
@@ -121,15 +127,15 @@ func (s RelayService) prepareRelay(c *gin.Context, token *domains.ApiToken, endp
 	if err := ValidateSensitiveWords(body); err != nil {
 		return nil, err
 	}
-	if err := checkModelRateLimit(token, modelName); err != nil {
-		return nil, err
-	}
 	if err := TokenServiceApp.CheckModel(token, modelName); err != nil {
 		return nil, err
 	}
-	candidates, err := ProviderServiceApp.FindCandidatesForModelAndType(modelName, token.Group, endpoint.Format)
+	candidates, err := ProviderServiceApp.FindCandidatesForEndpointAndType(modelName, token.Group, endpoint.Format, endpoint.UpstreamPath)
 	if err != nil {
 		return nil, fmt.Errorf("no available provider for model %s", modelName)
+	}
+	if err := checkModelRateLimit(token, modelName); err != nil {
+		return nil, err
 	}
 	candidates = ProviderServiceApp.ApplyAffinity(token.Guid, modelName, candidates)
 	var reservation *billingReservation
@@ -154,25 +160,44 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	var result *RelayResult
 	var err error
 	attempts := 0
+	var circuitRetryAfter time.Duration
 	for i := range prepared.Candidates {
-		attempts++
 		current := prepared.Candidates[i]
+		permit, retryAfter, available := ProviderCircuitBreakerApp.TryAcquire(current.Guid, prepared.ModelName, endpoint.UpstreamPath)
+		if !available {
+			if retryAfter > 0 && (circuitRetryAfter <= 0 || retryAfter < circuitRetryAfter) {
+				circuitRetryAfter = retryAfter
+			}
+			continue
+		}
+		attempts++
 		forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
 		provider = &current
 		result, err = s.forward(c.Request.Context(), &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery)
 		if result != nil {
 			result.Timing.AttemptCount = attempts
 		}
+		outcome := classifyProviderCircuitOutcome(c.Request.Context(), result, err, time.Now())
+		ProviderCircuitBreakerApp.Record(permit, outcome)
+		if shouldForgetProviderAffinity(outcome, result, err) {
+			ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
+		}
+		maybeAutoDisableProvider(&current, result)
 		if err != nil && i < len(prepared.Candidates)-1 {
 			continue
 		}
 		if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && i < len(prepared.Candidates)-1 {
-			maybeAutoDisableProvider(&current, result)
 			continue
 		}
 		break
 	}
 	useTime := time.Since(start).Milliseconds()
+	if attempts == 0 {
+		err = providerCircuitUnavailableError(circuitRetryAfter)
+		s.cancelReservation(token, prepared.Reservation, err.Error())
+		_ = LogServiceApp.Create(buildUsageLog(c, token, nil, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, ""))
+		return nil, err
+	}
 	status := "success"
 	content := ""
 	if err != nil {
@@ -185,7 +210,6 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	if result.StatusCode >= http.StatusBadRequest {
 		status = "error"
 		content = string(result.Body)
-		maybeAutoDisableProvider(provider, result)
 		s.cancelReservation(token, prepared.Reservation, content)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result)))
 		return result, nil
@@ -216,29 +240,56 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	var result *RelayResult
 	var err error
 	attempts := 0
+	var circuitRetryAfter time.Duration
 	for i := range prepared.Candidates {
-		attempts++
 		current := prepared.Candidates[i]
+		permit, retryAfter, available := ProviderCircuitBreakerApp.TryAcquire(current.Guid, prepared.ModelName, endpoint.UpstreamPath)
+		if !available {
+			if retryAfter > 0 && (circuitRetryAfter <= 0 || retryAfter < circuitRetryAfter) {
+				circuitRetryAfter = retryAfter
+			}
+			continue
+		}
+		attempts++
 		forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
 		provider = &current
 		result, err = s.forwardStream(c, &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery, i < len(prepared.Candidates)-1)
 		if result != nil {
 			result.Timing.AttemptCount = attempts
 		}
-		if err != nil && i < len(prepared.Candidates)-1 {
+		outcome := classifyProviderCircuitOutcome(c.Request.Context(), result, err, time.Now())
+		ProviderCircuitBreakerApp.Record(permit, outcome)
+		if shouldForgetProviderAffinity(outcome, result, err) {
+			ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
+		}
+		maybeAutoDisableProvider(&current, result)
+		if err != nil && i < len(prepared.Candidates)-1 && canRetryStreamAttempt(result) {
 			continue
 		}
 		if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && i < len(prepared.Candidates)-1 {
-			maybeAutoDisableProvider(&current, result)
 			continue
 		}
 		break
 	}
 
 	useTime := time.Since(start).Milliseconds()
+	if attempts == 0 {
+		err = providerCircuitUnavailableError(circuitRetryAfter)
+		s.cancelReservation(token, prepared.Reservation, err.Error())
+		_ = LogServiceApp.Create(buildUsageLog(c, token, nil, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, ""))
+		return err
+	}
 	if err != nil {
 		s.cancelReservation(token, prepared.Reservation, err.Error())
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, ""))
+		usage := vos.Usage{}
+		firstResponseMs := int64(0)
+		upstreamRequestID := ""
+		if result != nil {
+			usage = result.Usage
+			firstResponseMs = firstResponseTime(result)
+			upstreamRequestID = extractUpstreamRequestID(result)
+		}
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, usage, 0, useTime, firstResponseMs, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, upstreamRequestID))
 		return err
 	}
 	if result == nil {
@@ -248,7 +299,9 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 		return err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
-		maybeAutoDisableProvider(provider, result)
+		if !result.StreamStarted {
+			writeBufferedStreamResult(c, result)
+		}
 		s.cancelReservation(token, prepared.Reservation, string(result.Body))
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", string(result.Body), prepared.Body, extractUpstreamRequestID(result)))
 		return nil
@@ -286,16 +339,50 @@ func checkModelRateLimit(token *domains.ApiToken, modelName string) error {
 	}
 	message := "rate limit exceeded"
 	if retryAfter > 0 {
-		message = fmt.Sprintf("rate limit exceeded, retry after %s", retryAfter.Round(time.Second))
+		seconds := int64((retryAfter + time.Second - 1) / time.Second)
+		message = fmt.Sprintf("rate limit exceeded, retry after %ds", seconds)
 	}
-	return &RelayHTTPError{StatusCode: http.StatusTooManyRequests, Message: message}
+	return &RelayHTTPError{
+		StatusCode: http.StatusTooManyRequests,
+		Message:    message,
+		RetryAfter: retryAfter,
+	}
 }
 
 func shouldRetryRelayStatus(statusCode int) bool {
-	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden || statusCode == http.StatusRequestTimeout || statusCode == http.StatusConflict || statusCode == http.StatusTooManyRequests {
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden || statusCode == http.StatusNotFound || statusCode == http.StatusRequestTimeout || statusCode == http.StatusConflict || statusCode == http.StatusTooManyRequests {
 		return true
 	}
 	return statusCode >= http.StatusInternalServerError
+}
+
+func canRetryStreamAttempt(result *RelayResult) bool {
+	return result == nil || !result.StreamStarted
+}
+
+func shouldForgetProviderAffinity(outcome providerCircuitOutcome, result *RelayResult, err error) bool {
+	if outcome.Kind == providerCircuitIgnored {
+		return false
+	}
+	if outcome.Kind == providerCircuitHealthy && isUpstreamResponseLimitError(err) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	return result != nil && shouldRetryRelayStatus(result.StatusCode)
+}
+
+func providerCircuitUnavailableError(retryAfter time.Duration) error {
+	message := "all available providers are cooling down"
+	if retryAfter > 0 {
+		message = fmt.Sprintf("all available providers are cooling down, retry after %s", retryAfter.Round(time.Second))
+	}
+	return &RelayHTTPError{
+		StatusCode: http.StatusServiceUnavailable,
+		Message:    message,
+		RetryAfter: retryAfter,
+	}
 }
 
 func maybeAutoDisableProvider(provider *domains.VendorMeta, result *RelayResult) {
@@ -399,7 +486,7 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 	copyForwardHeaders(req.Header, incoming)
 	setupAuthHeaders(req.Header, provider)
 	applyHeaderOverride(req.Header, provider.HeaderOverride)
-	client, err := s.clientForProvider(provider)
+	client, err := s.streamClientForProvider(provider)
 	if err != nil {
 		return nil, err
 	}
@@ -412,13 +499,15 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 	}
 	headerResponseTimeMs := time.Since(requestStart).Milliseconds()
 	defer resp.Body.Close()
+	responseLimit := maxUpstreamResponseBytes()
 
-	if resp.StatusCode >= http.StatusBadRequest || (canRetry && shouldRetryRelayStatus(resp.StatusCode)) {
+	if resp.StatusCode >= http.StatusBadRequest {
+		willRetry := canRetry && shouldRetryRelayStatus(resp.StatusCode)
 		respBody, readErr := readLimitedUpstreamBody(resp)
 		if readErr != nil {
 			return &RelayResult{StatusCode: resp.StatusCode, Header: resp.Header.Clone(), Timing: trace.Snapshot(time.Since(requestStart))}, readErr
 		}
-		if !canRetry {
+		if !willRetry {
 			copyResponseHeaders(c.Writer.Header(), resp.Header)
 			c.Data(resp.StatusCode, contentTypeOrJSON(resp.Header), respBody)
 		}
@@ -433,36 +522,93 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 			Usage:               parseUsage(respBody, resp.Header.Get("Content-Type")),
 			FirstResponseTimeMs: headerResponseTimeMs,
 			Timing:              timing,
+			StreamStarted:       !willRetry,
 		}, nil
 	}
 
-	copyResponseHeaders(c.Writer.Header(), resp.Header)
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	c.Status(resp.StatusCode)
 	tracker := &streamUsageTracker{}
 	firstResponseTimeMs := int64(0)
+	streamStarted := false
+	requireResponsesTerminal := strings.TrimSpace(upstreamPath) == "/v1/responses"
+	if responseLimit > 0 && resp.ContentLength > responseLimit {
+		timing := trace.Snapshot(time.Since(requestStart))
+		if timing.ResponseHeaderTimeMs <= 0 {
+			timing.ResponseHeaderTimeMs = headerResponseTimeMs
+		}
+		return &RelayResult{
+			StatusCode:          resp.StatusCode,
+			Header:              resp.Header.Clone(),
+			FirstResponseTimeMs: headerResponseTimeMs,
+			Timing:              timing,
+		}, upstreamResponseTooLargeError(responseLimit)
+	}
+	streamedResponseBytes := int64(0)
 	buf := make([]byte, 32*1024)
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
+			if responseLimit > 0 && int64(n) > responseLimit-streamedResponseBytes {
+				return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), upstreamResponseTooLargeError(responseLimit)
+			}
+			streamedResponseBytes += int64(n)
+			if !streamStarted {
+				copyResponseHeaders(c.Writer.Header(), resp.Header)
+				c.Writer.Header().Set("Cache-Control", "no-cache")
+				c.Writer.Header().Set("X-Accel-Buffering", "no")
+				c.Status(resp.StatusCode)
+				streamStarted = true
+			}
 			if firstResponseTimeMs <= 0 {
 				firstResponseTimeMs = time.Since(requestStart).Milliseconds()
 			}
 			chunk := buf[:n]
 			tracker.Write(chunk)
 			if _, writeErr := c.Writer.Write(chunk); writeErr != nil {
-				return &RelayResult{StatusCode: resp.StatusCode, Header: resp.Header.Clone(), Usage: tracker.Finish(), FirstResponseTimeMs: firstResponseTimeMs, Timing: trace.Snapshot(time.Since(requestStart))}, writeErr
+				return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), &downstreamStreamWriteError{err: writeErr}
 			}
 			c.Writer.Flush()
+			if requireResponsesTerminal && tracker.terminal != "" {
+				break
+			}
 		}
 		if readErr == io.EOF {
 			break
 		}
 		if readErr != nil {
-			return &RelayResult{StatusCode: resp.StatusCode, Header: resp.Header.Clone(), Usage: tracker.Finish(), FirstResponseTimeMs: firstResponseTimeMs, Timing: trace.Snapshot(time.Since(requestStart))}, readErr
+			return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), readErr
 		}
 	}
+	result := finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted)
+	if !requireResponsesTerminal {
+		return result, nil
+	}
+	return result, responsesStreamTerminalError(result)
+}
+
+func responsesStreamTerminalError(result *RelayResult) error {
+	if result == nil {
+		return errors.New("responses stream result is empty")
+	}
+	var err error
+	switch result.StreamTerminal {
+	case "response.completed":
+		return nil
+	case "response.failed":
+		err = errors.New("responses stream failed")
+	case "response.incomplete":
+		err = errors.New("responses stream incomplete")
+	default:
+		err = errors.New("responses stream ended before terminal event")
+	}
+	if result.StreamTerminalError != "" {
+		err = fmt.Errorf("%w: %s", err, result.StreamTerminalError)
+	} else {
+		result.StreamTerminalError = err.Error()
+	}
+	return err
+}
+
+func finishStreamRelayResult(resp *http.Response, tracker *streamUsageTracker, firstResponseTimeMs int64, headerResponseTimeMs int64, requestStart time.Time, trace *upstreamRequestTrace, streamStarted bool) *RelayResult {
 	if firstResponseTimeMs <= 0 {
 		firstResponseTimeMs = headerResponseTimeMs
 	}
@@ -470,14 +616,24 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 	if timing.ResponseHeaderTimeMs <= 0 {
 		timing.ResponseHeaderTimeMs = headerResponseTimeMs
 	}
-	return &RelayResult{StatusCode: resp.StatusCode, Header: resp.Header.Clone(), Usage: tracker.Finish(), FirstResponseTimeMs: firstResponseTimeMs, Timing: timing}, nil
+	usage := tracker.Finish()
+	return &RelayResult{
+		StatusCode:          resp.StatusCode,
+		Header:              resp.Header.Clone(),
+		Usage:               usage,
+		FirstResponseTimeMs: firstResponseTimeMs,
+		Timing:              timing,
+		StreamStarted:       streamStarted,
+		StreamTerminal:      tracker.terminal,
+		StreamTerminalError: tracker.terminalError,
+	}
 }
 
 func readLimitedUpstreamBody(resp *http.Response) ([]byte, error) {
 	if resp == nil || resp.Body == nil {
 		return nil, errors.New("upstream response body is empty")
 	}
-	limit := OptionServiceApp.Int64("relay.max_upstream_response_bytes", defaultRiskMaxUpstreamResponseBytes)
+	limit := maxUpstreamResponseBytes()
 	if limit <= 0 {
 		return io.ReadAll(resp.Body)
 	}
@@ -494,11 +650,25 @@ func readLimitedUpstreamBody(resp *http.Response) ([]byte, error) {
 	return body, nil
 }
 
+func maxUpstreamResponseBytes() int64 {
+	return OptionServiceApp.Int64("relay.max_upstream_response_bytes", defaultRiskMaxUpstreamResponseBytes)
+}
+
+type upstreamResponseLimitError struct {
+	limit int64
+}
+
+func (e *upstreamResponseLimitError) Error() string {
+	return fmt.Sprintf("upstream response body exceeds %d bytes", e.limit)
+}
+
+func isUpstreamResponseLimitError(err error) bool {
+	var limitErr *upstreamResponseLimitError
+	return errors.As(err, &limitErr)
+}
+
 func upstreamResponseTooLargeError(limit int64) error {
-	return &RelayHTTPError{
-		StatusCode: http.StatusBadGateway,
-		Message:    fmt.Sprintf("upstream response body exceeds %d bytes", limit),
-	}
+	return &upstreamResponseLimitError{limit: limit}
 }
 
 func copyResponseHeaders(dst http.Header, src http.Header) {
@@ -510,6 +680,15 @@ func copyResponseHeaders(dst http.Header, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
+}
+
+func writeBufferedStreamResult(c *gin.Context, result *RelayResult) {
+	if c == nil || result == nil || c.Writer.Written() {
+		return
+	}
+	copyResponseHeaders(c.Writer.Header(), result.Header)
+	c.Data(result.StatusCode, contentTypeOrJSON(result.Header), result.Body)
+	result.StreamStarted = true
 }
 
 func contentTypeOrJSON(header http.Header) string {
@@ -965,8 +1144,11 @@ func parseStreamUsage(body []byte) vos.Usage {
 }
 
 type streamUsageTracker struct {
-	pending string
-	usage   vos.Usage
+	pending       string
+	eventType     string
+	usage         vos.Usage
+	terminal      string
+	terminalError string
 }
 
 // Write incrementally parses SSE "data:" lines while bytes are being proxied.
@@ -989,12 +1171,27 @@ func (t *streamUsageTracker) Write(chunk []byte) {
 func (t *streamUsageTracker) Finish() vos.Usage {
 	if strings.TrimSpace(t.pending) != "" {
 		t.consumeLine(t.pending)
+		t.pending = ""
+	}
+	if t.terminal == "" && isResponsesTerminalEvent(t.eventType) {
+		t.terminal = t.eventType
 	}
 	return t.usage
 }
 
 func (t *streamUsageTracker) consumeLine(line string) {
-	line = strings.TrimSpace(line)
+	line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+	if line == "" {
+		if t.terminal == "" && isResponsesTerminalEvent(t.eventType) {
+			t.terminal = t.eventType
+		}
+		t.eventType = ""
+		return
+	}
+	if strings.HasPrefix(line, "event:") {
+		t.eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		return
+	}
 	if !strings.HasPrefix(line, "data:") {
 		return
 	}
@@ -1006,6 +1203,73 @@ func (t *streamUsageTracker) consumeLine(line string) {
 	if parsed.TotalTokens > 0 || parsed.PromptTokens > 0 || parsed.CompletionTokens > 0 {
 		t.usage = parsed
 	}
+	eventType, eventError := parseResponsesStreamEvent([]byte(data))
+	if eventType == "" {
+		eventType = t.eventType
+	}
+	if isResponsesTerminalEvent(eventType) {
+		t.terminal = eventType
+		if eventError != "" {
+			t.terminalError = eventError
+		}
+	}
+}
+
+func isResponsesTerminalEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "response.completed", "response.failed", "response.incomplete":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseResponsesStreamEvent(data []byte) (string, string) {
+	var payload struct {
+		Type     string          `json:"type"`
+		Error    json.RawMessage `json:"error"`
+		Response struct {
+			Error             json.RawMessage `json:"error"`
+			IncompleteDetails struct {
+				Reason string `json:"reason"`
+			} `json:"incomplete_details"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", ""
+	}
+	detail := responseStreamErrorMessage(payload.Error)
+	if detail == "" {
+		detail = responseStreamErrorMessage(payload.Response.Error)
+	}
+	if detail == "" {
+		detail = strings.TrimSpace(payload.Response.IncompleteDetails.Reason)
+	}
+	return strings.TrimSpace(payload.Type), detail
+}
+
+func responseStreamErrorMessage(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var object struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &object); err == nil {
+		message := strings.TrimSpace(object.Message)
+		if message != "" {
+			return message
+		}
+		if code := strings.TrimSpace(object.Code); code != "" {
+			return code
+		}
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return strings.TrimSpace(text)
+	}
+	return ""
 }
 
 func calculateQuota(usage vos.Usage) int64 {

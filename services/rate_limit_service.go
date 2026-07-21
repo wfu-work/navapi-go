@@ -8,6 +8,7 @@ import (
 type RateLimitService struct {
 	mu      sync.Mutex
 	buckets map[string]*rateLimitBucket
+	now     func() time.Time
 }
 
 type rateLimitBucket struct {
@@ -15,13 +16,16 @@ type rateLimitBucket struct {
 	Count       int64
 }
 
-var RateLimitServiceApp = &RateLimitService{buckets: map[string]*rateLimitBucket{}}
+var RateLimitServiceApp = &RateLimitService{buckets: map[string]*rateLimitBucket{}, now: time.Now}
 
 func (s *RateLimitService) Allow(key string, limit int64, window time.Duration) (bool, time.Duration) {
 	if limit <= 0 || window <= 0 {
 		return true, 0
 	}
 	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	bucket := s.buckets[key]

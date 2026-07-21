@@ -168,6 +168,7 @@ func (s *ProviderService) Save(provider *domains.VendorMeta) error {
 	provider.LogoURL = strings.TrimSpace(provider.LogoURL)
 	provider.BaseURL = strings.TrimSpace(provider.BaseURL)
 	provider.Models = strings.Join(splitCSV(provider.Models), ",")
+	provider.EndpointCapabilities = normalizeEndpointCapabilities(provider.EndpointCapabilities)
 	provider.ModelOverride = strings.TrimSpace(provider.ModelOverride)
 	provider.QuotaModelWhitelist = strings.Join(splitCSV(provider.QuotaModelWhitelist), ",")
 	provider.ModelMapping = strings.TrimSpace(provider.ModelMapping)
@@ -338,6 +339,13 @@ func (s *ProviderService) ListEnabledModelsForGroupAndType(group, providerType s
 }
 
 func (s *ProviderService) FindCandidatesForModelAndType(modelName, group string, providerType string) ([]domains.VendorMeta, error) {
+	return s.FindCandidatesForEndpointAndType(modelName, group, providerType, "")
+}
+
+// FindCandidatesForEndpointAndType applies endpoint capability checks after
+// the existing provider type and model filters. Responses support is opt-in
+// because many OpenAI-compatible upstreams do not implement that API.
+func (s *ProviderService) FindCandidatesForEndpointAndType(modelName, group string, providerType string, endpointPath string) ([]domains.VendorMeta, error) {
 	providers, err := s.enabledProviders(providerType)
 	if err != nil {
 		return nil, err
@@ -345,6 +353,9 @@ func (s *ProviderService) FindCandidatesForModelAndType(modelName, group string,
 	candidates := make([]domains.VendorMeta, 0, len(providers))
 	for _, provider := range providers {
 		if len(splitCSV(provider.Models)) > 0 && !containsString(splitCSV(provider.Models), modelName) {
+			continue
+		}
+		if !providerSupportsEndpoint(&provider, endpointPath) {
 			continue
 		}
 		candidates = append(candidates, provider)
@@ -357,6 +368,30 @@ func (s *ProviderService) FindCandidatesForModelAndType(modelName, group string,
 		return nil, gorm.ErrRecordNotFound
 	}
 	return candidates, nil
+}
+
+func normalizeEndpointCapabilities(raw string) string {
+	seen := make(map[string]struct{})
+	capabilities := make([]string, 0)
+	for _, capability := range splitCSV(raw) {
+		capability = strings.ToLower(strings.TrimSpace(capability))
+		if capability == "" {
+			continue
+		}
+		if _, ok := seen[capability]; ok {
+			continue
+		}
+		seen[capability] = struct{}{}
+		capabilities = append(capabilities, capability)
+	}
+	return strings.Join(capabilities, ",")
+}
+
+func providerSupportsEndpoint(provider *domains.VendorMeta, endpointPath string) bool {
+	if strings.TrimSpace(endpointPath) != "/v1/responses" {
+		return true
+	}
+	return provider != nil && containsString(splitCSV(provider.EndpointCapabilities), "responses")
 }
 
 func (s *ProviderService) filterProvidersForGroup(providers []domains.VendorMeta, group string) ([]domains.VendorMeta, error) {
@@ -413,6 +448,18 @@ func (s *ProviderService) RememberAffinity(tokenGuid string, modelName string, p
 	providerAffinity.entries[key] = providerAffinityEntry{
 		ProviderGuid: providerGuid,
 		ExpiresAt:    time.Now().Add(time.Duration(ttl) * time.Second),
+	}
+	providerAffinity.Unlock()
+}
+
+func (s *ProviderService) ForgetAffinity(tokenGuid string, modelName string, providerGuid string) {
+	if tokenGuid == "" || modelName == "" || providerGuid == "" {
+		return
+	}
+	key := tokenGuid + ":" + modelName
+	providerAffinity.Lock()
+	if entry, ok := providerAffinity.entries[key]; ok && entry.ProviderGuid == providerGuid {
+		delete(providerAffinity.entries, key)
 	}
 	providerAffinity.Unlock()
 }

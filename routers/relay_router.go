@@ -9,6 +9,9 @@ import (
 type RelayRouter struct{}
 
 func (r RelayRouter) InitRelayRouter(group *gin.RouterGroup) {
+	// CCS generic balance templates request /user/balance without a version prefix.
+	group.GET("../user/balance", middlewares.TokenBalanceAuth(), relayApi.TokenBalance)
+	group.GET("/user/balance", middlewares.TokenBalanceAuth(), relayApi.TokenBalance)
 	r.initRelayRoutes(group, "../")
 	r.initRelayRoutes(group, "")
 }

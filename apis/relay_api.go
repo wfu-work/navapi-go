@@ -4,7 +4,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"navapi-go/constants"
 	"navapi-go/domains"
@@ -32,23 +34,38 @@ func (a RelayApi) TokenBalance(c *gin.Context) {
 		openAIError(c, http.StatusUnauthorized, "token is invalid")
 		return
 	}
-	c.JSON(http.StatusOK, buildTokenBalanceResponse(token))
+	wallet, err := userWalletService.Get(token.UserGuid)
+	if err != nil {
+		openAIError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, buildTokenBalanceResponse(token, wallet))
 }
 
-func buildTokenBalanceResponse(token *domains.ApiToken) tokenBalanceResponse {
+func buildTokenBalanceResponse(token *domains.ApiToken, wallet *domains.UserWallet) tokenBalanceResponse {
 	used := services.AmountMicrosToCost(token.UsedAmountMicros)
+	availableMicros := token.BalanceAmountMicros
+	unit := "CNY"
+	if wallet != nil {
+		walletBalance := wallet.BalanceAmountMicros
+		if token.UnlimitedBalance || walletBalance < availableMicros {
+			availableMicros = walletBalance
+		}
+		if currency := strings.TrimSpace(wallet.Currency); currency != "" {
+			unit = currency
+		}
+	}
+	available := services.AmountMicrosToCost(availableMicros)
+	// CCS generic extractors use balance || total, so total is a remaining-balance alias.
+	total := available
 	result := tokenBalanceResponse{
 		IsActive:  token.Status == constants.StatusEnabled,
 		Name:      token.Name,
+		Balance:   &available,
 		Used:      used,
+		Total:     &total,
 		Unlimited: token.UnlimitedBalance,
-		Unit:      "CNY",
-	}
-	if !token.UnlimitedBalance {
-		balance := services.AmountMicrosToCost(token.BalanceAmountMicros)
-		total := balance + used
-		result.Balance = &balance
-		result.Total = &total
+		Unit:      unit,
 	}
 	return result
 }
@@ -110,6 +127,10 @@ func (a RelayApi) Relay(c *gin.Context, endpoint services.RelayEndpoint) {
 		}
 		var relayErr *services.RelayHTTPError
 		if errors.As(err, &relayErr) {
+			if relayErr.RetryAfter > 0 {
+				seconds := int64((relayErr.RetryAfter + time.Second - 1) / time.Second)
+				c.Header("Retry-After", strconv.FormatInt(seconds, 10))
+			}
 			openAIError(c, relayErr.StatusCode, relayErr.Message)
 			return
 		}

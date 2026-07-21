@@ -18,6 +18,10 @@ const (
 	providerProxyTypeHTTP   = "http"
 	providerProxyTypeHTTPS  = "https"
 	providerProxyTypeSOCKS5 = "socks5"
+
+	streamDialTimeout           = 15 * time.Second
+	streamTLSHandshakeTimeout   = 15 * time.Second
+	streamResponseHeaderTimeout = 120 * time.Second
 )
 
 func normalizeProviderProxyConfig(provider *domains.VendorMeta) {
@@ -116,6 +120,18 @@ func providerHTTPClient(provider *domains.VendorMeta, timeout time.Duration) (*h
 	return &http.Client{Timeout: timeout, Transport: transport}, nil
 }
 
+func providerStreamHTTPClient(provider *domains.VendorMeta) (*http.Client, error) {
+	transport, err := providerTransportWithMode(provider, true)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{Transport: transport}, nil
+}
+
+func newStreamHTTPClient() *http.Client {
+	return &http.Client{Transport: cloneStreamTransport()}
+}
+
 func (s RelayService) clientForProvider(provider *domains.VendorMeta) (*http.Client, error) {
 	if !providerProxyEnabled(provider) {
 		return s.client, nil
@@ -123,8 +139,30 @@ func (s RelayService) clientForProvider(provider *domains.VendorMeta) (*http.Cli
 	return providerHTTPClient(provider, s.client.Timeout)
 }
 
+func (s RelayService) streamClientForProvider(provider *domains.VendorMeta) (*http.Client, error) {
+	if !providerProxyEnabled(provider) {
+		if s.streamClient != nil {
+			return s.streamClient, nil
+		}
+		// Tests and explicitly constructed RelayService values may only provide
+		// one client. Production always uses the dedicated streaming client.
+		if s.client != nil {
+			return s.client, nil
+		}
+		return newStreamHTTPClient(), nil
+	}
+	return providerStreamHTTPClient(provider)
+}
+
 func providerTransport(provider *domains.VendorMeta) (*http.Transport, error) {
+	return providerTransportWithMode(provider, false)
+}
+
+func providerTransportWithMode(provider *domains.VendorMeta, streaming bool) (*http.Transport, error) {
 	transport := cloneDefaultTransport()
+	if streaming {
+		transport = cloneStreamTransport()
+	}
 	proxyURL, err := providerProxyURL(provider)
 	if err != nil {
 		return nil, err
@@ -142,6 +180,11 @@ func providerTransport(provider *domains.VendorMeta) (*http.Transport, error) {
 		}
 		transport.Proxy = nil
 		transport.DialContext = func(ctx context.Context, network string, address string) (net.Conn, error) {
+			if streaming {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, streamDialTimeout)
+				defer cancel()
+			}
 			return dialWithContext(ctx, dialer, network, address)
 		}
 	default:
@@ -161,6 +204,17 @@ func cloneDefaultTransport() *http.Transport {
 	transport.MaxIdleConnsPerHost = 50
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.ForceAttemptHTTP2 = true
+	return transport
+}
+
+func cloneStreamTransport() *http.Transport {
+	transport := cloneDefaultTransport()
+	transport.DialContext = (&net.Dialer{
+		Timeout:   streamDialTimeout,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.TLSHandshakeTimeout = streamTLSHandshakeTimeout
+	transport.ResponseHeaderTimeout = streamResponseHeaderTimeout
 	return transport
 }
 
