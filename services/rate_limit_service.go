@@ -12,8 +12,8 @@ type RateLimitService struct {
 }
 
 type rateLimitBucket struct {
-	WindowStart time.Time
-	Count       int64
+	ExpiresAt time.Time
+	Count     int64
 }
 
 var RateLimitServiceApp = &RateLimitService{buckets: map[string]*rateLimitBucket{}, now: time.Now}
@@ -29,21 +29,27 @@ func (s *RateLimitService) Allow(key string, limit int64, window time.Duration) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	bucket := s.buckets[key]
-	if bucket == nil || now.Sub(bucket.WindowStart) >= window {
-		s.buckets[key] = &rateLimitBucket{WindowStart: now, Count: 1}
-		s.cleanupLocked(now, window)
+	if bucket == nil || !now.Before(bucket.ExpiresAt) {
+		s.buckets[key] = &rateLimitBucket{ExpiresAt: now.Add(window), Count: 1}
+		s.cleanupLocked(now)
 		return true, 0
 	}
 	if bucket.Count >= limit {
-		return false, window - now.Sub(bucket.WindowStart)
+		return false, bucket.ExpiresAt.Sub(now)
 	}
 	bucket.Count++
 	return true, 0
 }
 
-func (s *RateLimitService) cleanupLocked(now time.Time, window time.Duration) {
+func (s *RateLimitService) Reset() {
+	s.mu.Lock()
+	s.buckets = map[string]*rateLimitBucket{}
+	s.mu.Unlock()
+}
+
+func (s *RateLimitService) cleanupLocked(now time.Time) {
 	for key, bucket := range s.buckets {
-		if now.Sub(bucket.WindowStart) > window*2 {
+		if bucket == nil || !now.Before(bucket.ExpiresAt) {
 			delete(s.buckets, key)
 		}
 	}

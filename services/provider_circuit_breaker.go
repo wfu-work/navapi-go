@@ -46,12 +46,13 @@ type providerCircuitEntry struct {
 }
 
 type providerCircuitPermit struct {
-	globalKey       providerCircuitKey
-	endpointKey     providerCircuitKey
-	halfOpenKeys    map[providerCircuitKey]struct{}
-	generations     map[providerCircuitKey]uint64
-	settings        providerCircuitSettings
-	circuitDisabled bool
+	globalKey         providerCircuitKey
+	endpointKey       providerCircuitKey
+	halfOpenKeys      map[providerCircuitKey]struct{}
+	generations       map[providerCircuitKey]uint64
+	breakerGeneration uint64
+	settings          providerCircuitSettings
+	circuitDisabled   bool
 }
 
 type providerCircuitOutcomeKind uint8
@@ -70,10 +71,11 @@ type providerCircuitOutcome struct {
 }
 
 type ProviderCircuitBreaker struct {
-	mu       sync.Mutex
-	entries  map[providerCircuitKey]*providerCircuitEntry
-	now      func() time.Time
-	settings func() providerCircuitSettings
+	mu         sync.Mutex
+	entries    map[providerCircuitKey]*providerCircuitEntry
+	generation uint64
+	now        func() time.Time
+	settings   func() providerCircuitSettings
 }
 
 var ProviderCircuitBreakerApp = newProviderCircuitBreaker(providerCircuitSettingsFromOptions)
@@ -100,7 +102,7 @@ func providerCircuitSettingsFromOptions() providerCircuitSettings {
 		maxCooldownSeconds = cooldownSeconds
 	}
 	return providerCircuitSettings{
-		Enabled:          OptionServiceApp.Int64("relay.provider_circuit_enabled", 1) > 0,
+		Enabled:          OptionServiceApp.Bool("relay.provider_circuit_enabled", true),
 		FailureThreshold: int(threshold),
 		Cooldown:         time.Duration(cooldownSeconds) * time.Second,
 		MaxCooldown:      time.Duration(maxCooldownSeconds) * time.Second,
@@ -132,6 +134,7 @@ func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName strin
 	now := b.now()
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	permit.breakerGeneration = b.generation
 	b.pruneLocked(now)
 
 	keys := []providerCircuitKey{permit.globalKey, permit.endpointKey}
@@ -177,6 +180,9 @@ func (b *ProviderCircuitBreaker) Record(permit *providerCircuitPermit, outcome p
 	now := b.now()
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if permit.breakerGeneration != b.generation {
+		return
+	}
 
 	switch outcome.Kind {
 	case providerCircuitHealthy:
@@ -200,6 +206,13 @@ func (b *ProviderCircuitBreaker) Record(permit *providerCircuitPermit, outcome p
 		cooldown = minCircuitDuration(cooldown, permit.settings.MaxCooldown)
 		b.failLocked(permit, permit.globalKey, 1, cooldown, now)
 	}
+}
+
+func (b *ProviderCircuitBreaker) Reset() {
+	b.mu.Lock()
+	b.entries = make(map[providerCircuitKey]*providerCircuitEntry)
+	b.generation++
+	b.mu.Unlock()
 }
 
 func (b *ProviderCircuitBreaker) failLocked(permit *providerCircuitPermit, key providerCircuitKey, threshold int, baseCooldown time.Duration, now time.Time) {

@@ -49,6 +49,10 @@ type WechatPaySettings struct {
 	DescriptionPrefix      string `json:"descriptionPrefix"`
 }
 
+type PaymentStatus struct {
+	WechatPayEnabled bool `json:"wechatPayEnabled"`
+}
+
 func (s *PaymentService) GetWechatPaySettings() WechatPaySettings {
 	settings := WechatPaySettings{
 		Enabled:                OptionServiceApp.Int64(optionWechatPayEnabled, 0) > 0,
@@ -63,6 +67,14 @@ func (s *PaymentService) GetWechatPaySettings() WechatPaySettings {
 	}
 	settings.normalize()
 	return settings
+}
+
+func (s *PaymentService) GetPaymentStatus() PaymentStatus {
+	return paymentStatusFromSettings(s.GetWechatPaySettings())
+}
+
+func paymentStatusFromSettings(settings WechatPaySettings) PaymentStatus {
+	return PaymentStatus{WechatPayEnabled: settings.validateForPrepay() == nil}
 }
 
 func (s *PaymentService) SetWechatPaySettings(settings WechatPaySettings) error {

@@ -53,6 +53,11 @@ type providerAffinityEntry struct {
 	ExpiresAt    time.Time
 }
 
+type providerAffinityKey struct {
+	TokenGuid string
+	ModelName string
+}
+
 type ProviderTestResult struct {
 	OK           bool     `json:"ok"`
 	ResponseTime int64    `json:"responseTime"`
@@ -69,8 +74,8 @@ var providerKeyRotation = struct {
 
 var providerAffinity = struct {
 	sync.Mutex
-	entries map[string]providerAffinityEntry
-}{entries: map[string]providerAffinityEntry{}}
+	entries map[providerAffinityKey]providerAffinityEntry
+}{entries: map[providerAffinityKey]providerAffinityEntry{}}
 
 func (s *ProviderService) WithDB(db *gorm.DB) *ProviderService {
 	cloned := *s
@@ -412,11 +417,10 @@ func (s *ProviderService) filterProvidersForGroup(providers []domains.VendorMeta
 }
 
 func (s *ProviderService) ApplyAffinity(tokenGuid string, modelName string, candidates []domains.VendorMeta) []domains.VendorMeta {
-	ttl := OptionServiceApp.Int64("relay.provider_affinity_seconds", 0)
-	if ttl <= 0 || tokenGuid == "" || modelName == "" || len(candidates) <= 1 {
+	if providerAffinityTTL() <= 0 || tokenGuid == "" || modelName == "" || len(candidates) <= 1 {
 		return candidates
 	}
-	key := tokenGuid + ":" + modelName
+	key := providerAffinityKey{TokenGuid: tokenGuid, ModelName: modelName}
 	providerAffinity.Lock()
 	entry, ok := providerAffinity.entries[key]
 	if !ok || time.Now().After(entry.ExpiresAt) {
@@ -439,15 +443,23 @@ func (s *ProviderService) ApplyAffinity(tokenGuid string, modelName string, cand
 }
 
 func (s *ProviderService) RememberAffinity(tokenGuid string, modelName string, providerGuid string) {
-	ttl := OptionServiceApp.Int64("relay.provider_affinity_seconds", 0)
+	ttl := providerAffinityTTL()
 	if ttl <= 0 || tokenGuid == "" || modelName == "" || providerGuid == "" {
 		return
 	}
-	key := tokenGuid + ":" + modelName
+	now := time.Now()
+	key := providerAffinityKey{TokenGuid: tokenGuid, ModelName: modelName}
 	providerAffinity.Lock()
+	if len(providerAffinity.entries) >= 1024 {
+		for existingKey, entry := range providerAffinity.entries {
+			if !now.Before(entry.ExpiresAt) {
+				delete(providerAffinity.entries, existingKey)
+			}
+		}
+	}
 	providerAffinity.entries[key] = providerAffinityEntry{
 		ProviderGuid: providerGuid,
-		ExpiresAt:    time.Now().Add(time.Duration(ttl) * time.Second),
+		ExpiresAt:    now.Add(ttl),
 	}
 	providerAffinity.Unlock()
 }
@@ -456,12 +468,26 @@ func (s *ProviderService) ForgetAffinity(tokenGuid string, modelName string, pro
 	if tokenGuid == "" || modelName == "" || providerGuid == "" {
 		return
 	}
-	key := tokenGuid + ":" + modelName
+	key := providerAffinityKey{TokenGuid: tokenGuid, ModelName: modelName}
 	providerAffinity.Lock()
 	if entry, ok := providerAffinity.entries[key]; ok && entry.ProviderGuid == providerGuid {
 		delete(providerAffinity.entries, key)
 	}
 	providerAffinity.Unlock()
+}
+
+func (s *ProviderService) ResetAffinity() {
+	providerAffinity.Lock()
+	providerAffinity.entries = map[providerAffinityKey]providerAffinityEntry{}
+	providerAffinity.Unlock()
+}
+
+func providerAffinityTTL() time.Duration {
+	seconds := OptionServiceApp.Int64("relay.provider_affinity_seconds", 0)
+	if seconds <= 0 || !OptionServiceApp.Bool("relay.provider_affinity_enabled", seconds > 0) {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (s *ProviderService) MapModel(provider *domains.VendorMeta, modelName string) string {

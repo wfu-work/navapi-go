@@ -126,10 +126,26 @@ func (s *ModelService) PublicListMeta() ([]domains.ModelMeta, error) {
 	if err := s.DB().Where("enabled = ?", true).Order("sort desc, id desc").Find(&metas).Error; err != nil {
 		return nil, err
 	}
+	enabledGroups, err := s.ListGroups(false)
+	if err != nil {
+		return nil, err
+	}
+	enabledGroupNames := make([]string, 0, len(enabledGroups))
+	for _, group := range enabledGroups {
+		enabledGroupNames = append(enabledGroupNames, normalizeGroup(group.GroupName))
+	}
+	visible := make([]domains.ModelMeta, 0, len(metas))
 	for i := range metas {
 		fillModelMetaGroups(&metas[i])
+		groups := enabledModelGroups(metas[i].Groups, enabledGroupNames)
+		if len(groups) == 0 {
+			continue
+		}
+		metas[i].Groups = groups
+		metas[i].Group = strings.Join(groups, ",")
+		visible = append(visible, metas[i])
 	}
-	return metas, nil
+	return visible, nil
 }
 
 func (s *ModelService) DeleteMeta(guid string) error {
@@ -213,6 +229,39 @@ func (s *ModelService) UpsertGroup(group *domains.ModelGroup) error {
 		}
 		return service.fillModelGroupProvider(group)
 	})
+}
+
+func (s *ModelService) SetGroupEnabled(guid string, enabled bool) (*domains.ModelGroup, error) {
+	guid = strings.TrimSpace(guid)
+	if guid == "" {
+		return nil, errors.New("guid is required")
+	}
+	group, err := s.GroupCrud.GetByGuid(guid)
+	if err != nil {
+		return nil, err
+	}
+	if group == nil {
+		return nil, errors.New("model group not found")
+	}
+	if err := s.GroupCrud.DB().Model(&domains.ModelGroup{}).
+		Where("guid = ?", guid).
+		Updates(map[string]any{
+			"enabled":     enabled,
+			"update_time": time.Now().UnixMilli(),
+		}).Error; err != nil {
+		return nil, err
+	}
+	updated, err := s.GroupCrud.GetByGuid(guid)
+	if err != nil {
+		return nil, err
+	}
+	if updated == nil {
+		return nil, errors.New("model group not found")
+	}
+	if err := s.fillModelGroupProvider(updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 func (s *ModelService) DeleteGroup(guid string) error {
@@ -564,6 +613,16 @@ func normalizeModelGroups(groups []string) []string {
 func modelGroupsContain(groups []string, group string) bool {
 	group = normalizeGroup(group)
 	return containsString(groups, "*") || containsString(groups, group)
+}
+
+func enabledModelGroups(modelGroups []string, enabledGroups []string) []string {
+	visible := make([]string, 0, len(enabledGroups))
+	for _, group := range enabledGroups {
+		if modelGroupsContain(modelGroups, group) {
+			visible = append(visible, group)
+		}
+	}
+	return visible
 }
 
 func (s *ModelService) UpsertVendor(meta *domains.VendorMeta) error {

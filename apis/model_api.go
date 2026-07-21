@@ -9,6 +9,10 @@ import (
 
 type ModelApi struct{}
 
+type modelGroupStatusRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 // List 模型列表
 // @Summary 模型列表
 // @Description 模型列表
@@ -139,6 +143,35 @@ func (a ModelApi) UpsertGroup(c *gin.Context) {
 		return
 	}
 	if err := modelService.UpsertGroup(&group); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(group, c)
+}
+
+// UpdateGroupStatus 更新模型分组启用状态
+// @Summary 更新模型分组启用状态
+// @Description 更新模型分组启用状态
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param guid path string true "GUID"
+// @Param data body modelGroupStatusRequest true "模型分组状态"
+// @Success 200 {object} response.Response{data=domains.ModelGroup,msg=string}
+// @Router /models/groups/{guid}/status [patch]
+func (a ModelApi) UpdateGroupStatus(c *gin.Context) {
+	var request modelGroupStatusRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	if request.Enabled == nil {
+		response.FailWithMessage("enabled is required", c)
+		return
+	}
+	group, err := modelService.SetGroupEnabled(c.Param("guid"), *request.Enabled)
+	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}

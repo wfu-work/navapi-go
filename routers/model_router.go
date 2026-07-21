@@ -20,6 +20,7 @@ func (r ModelRouter) InitModelRouter(privateGroup *gin.RouterGroup, publicGroup 
 		group.GET("/groups", modelApi.Groups)
 		group.POST("/groups", middlewares.AdminOnly(), modelApi.UpsertGroup)
 		group.PUT("/groups", middlewares.AdminOnly(), modelApi.UpsertGroup)
+		group.PATCH("/groups/:guid/status", middlewares.AdminOnly(), modelApi.UpdateGroupStatus)
 		group.DELETE("/groups/:guid", middlewares.AdminOnly(), modelApi.DeleteGroup)
 		group.POST("/", middlewares.AdminOnly(), modelApi.Upsert)
 		group.PUT("/", middlewares.AdminOnly(), modelApi.Upsert)

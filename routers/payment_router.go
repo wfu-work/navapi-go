@@ -16,6 +16,7 @@ func (r PaymentRouter) InitPaymentRouter(privateGroup *gin.RouterGroup, publicGr
 
 	group := privateGroup.Group("payment")
 	{
+		group.GET("/status", paymentApi.Status)
 		group.GET("/list", middlewares.AdminOnly(), paymentApi.List)
 		group.GET("/self/list", paymentApi.Self)
 		group.GET("/wechat/settings", middlewares.AdminOnly(), paymentApi.WechatSettings)

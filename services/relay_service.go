@@ -195,7 +195,6 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	if attempts == 0 {
 		err = providerCircuitUnavailableError(circuitRetryAfter)
 		s.cancelReservation(token, prepared.Reservation, err.Error())
-		_ = LogServiceApp.Create(buildUsageLog(c, token, nil, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, ""))
 		return nil, err
 	}
 	status := "success"
@@ -276,7 +275,6 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	if attempts == 0 {
 		err = providerCircuitUnavailableError(circuitRetryAfter)
 		s.cancelReservation(token, prepared.Reservation, err.Error())
-		_ = LogServiceApp.Create(buildUsageLog(c, token, nil, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, ""))
 		return err
 	}
 	if err != nil {
@@ -329,7 +327,7 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 func checkModelRateLimit(token *domains.ApiToken, modelName string) error {
 	limit := OptionServiceApp.Int64("relay.model_rate_limit_count", 0)
 	windowSeconds := OptionServiceApp.Int64("relay.model_rate_limit_window_seconds", 60)
-	if token == nil || limit <= 0 || windowSeconds <= 0 {
+	if token == nil || !OptionServiceApp.Bool("relay.model_rate_limit_enabled", limit > 0) || limit <= 0 || windowSeconds <= 0 {
 		return nil
 	}
 	key := token.Guid + ":" + strings.TrimSpace(modelName)
@@ -410,7 +408,7 @@ func buildUpstreamRequest(provider *domains.VendorMeta, modelName string, endpoi
 	}
 	forwardBody := rewriteBodyModel(body, upstreamModel, contentType)
 	if endpoint.Format == constants.ProviderTypeOpenAI {
-		forwardBody = ensureOpenAIStreamUsage(forwardBody, contentType)
+		forwardBody = ensureOpenAIStreamUsage(forwardBody, contentType, endpoint.UpstreamPath)
 	}
 	return forwardBody, endpoint.UpstreamPath
 }
@@ -1050,13 +1048,24 @@ func rewriteBodyModel(body []byte, model string, contentType string) []byte {
 	return next
 }
 
-func ensureOpenAIStreamUsage(body []byte, contentType string) []byte {
+func ensureOpenAIStreamUsage(body []byte, contentType string, upstreamPath string) []byte {
 	if contentType != "" && !strings.Contains(contentType, "application/json") {
 		return body
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body
+	}
+	if strings.TrimSpace(upstreamPath) == "/v1/responses" {
+		if _, exists := payload["stream_options"]; !exists {
+			return body
+		}
+		delete(payload, "stream_options")
+		next, err := json.Marshal(payload)
+		if err != nil {
+			return body
+		}
+		return next
 	}
 	stream, ok := payload["stream"].(bool)
 	if !ok || !stream {

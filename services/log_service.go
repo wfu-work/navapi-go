@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"navapi-go/domains"
@@ -167,6 +168,9 @@ type usageDayWindow struct {
 }
 
 func (s *LogService) Create(log *domains.UsageLog) error {
+	if log == nil || strings.TrimSpace(log.ProviderGuid) == "" {
+		return nil
+	}
 	return createWithCrud(&s.CrudService, log)
 }
 

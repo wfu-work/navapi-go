@@ -63,6 +63,19 @@ func (a PaymentApi) Self(c *gin.Context) {
 	response.Ok(result, c)
 }
 
+// Status 当前支付渠道状态
+// @Summary 当前支付渠道状态
+// @Description 返回客户端可使用的支付渠道状态，不包含商户配置
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Success 200 {object} response.Response{data=services.PaymentStatus,msg=string}
+// @Router /payment/status [get]
+func (a PaymentApi) Status(c *gin.Context) {
+	response.Ok(paymentService.GetPaymentStatus(), c)
+}
+
 // Create 创建支付订单
 // @Summary 创建支付订单
 // @Description 创建支付订单

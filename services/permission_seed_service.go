@@ -218,6 +218,7 @@ var navapiAPIPermissionSeeds = []apiPermissionSeed{
 	{Guid: "navapi-api-pricing-delete", Name: "删除价格", Code: "navapi.pricing.delete", Path: "/pricing/:id", Verb: "DELETE", Sort: 653, Group: "计费"},
 
 	{Guid: "navapi-api-payment-list", Name: "支付订单列表", Code: "navapi.payment.list", Path: "/payment/list", Verb: "GET", Sort: 670, Group: "支付"},
+	{Guid: "navapi-api-payment-status", Name: "当前支付渠道状态", Code: "navapi.payment.status", Path: "/payment/status", Verb: "GET", User: true, Sort: 669, Group: "支付"},
 	{Guid: "navapi-api-payment-self-list", Name: "当前用户支付订单", Code: "navapi.payment.self.list", Path: "/payment/self/list", Verb: "GET", User: true, Sort: 671, Group: "支付"},
 	{Guid: "navapi-api-payment-settings", Name: "微信支付设置", Code: "navapi.payment.wechat.settings", Path: "/payment/wechat/settings", Verb: "GET", Sort: 672, Group: "支付"},
 	{Guid: "navapi-api-payment-settings-save", Name: "保存微信支付设置", Code: "navapi.payment.wechat.save", Path: "/payment/wechat/settings", Verb: "PUT", Sort: 673, Group: "支付"},

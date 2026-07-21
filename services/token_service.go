@@ -55,7 +55,7 @@ func (s *TokenService) Create(token *domains.ApiToken) error {
 	token.Key = "sk-" + key
 	token.Status = constants.StatusEnabled
 	token.Group = normalizeGroup(token.Group)
-	if err := ModelServiceApp.ValidateGroup(token.Group); err != nil {
+	if err := ModelServiceApp.WithDB(s.DB()).ValidateGroup(token.Group); err != nil {
 		return err
 	}
 	if token.ExpiredTime == 0 {
@@ -73,7 +73,7 @@ func (s *TokenService) Create(token *domains.ApiToken) error {
 
 func (s *TokenService) Update(token *domains.ApiToken) error {
 	token.Group = normalizeGroup(token.Group)
-	if err := ModelServiceApp.ValidateGroup(token.Group); err != nil {
+	if err := ModelServiceApp.WithDB(s.DB()).ValidateGroup(token.Group); err != nil {
 		return err
 	}
 	existing, err := s.getExisting(token.Id, token.Guid, token.UserGuid)
@@ -208,6 +208,9 @@ func (s *TokenService) Validate(key string, clientIP string) (*domains.ApiToken,
 	if token.Status != constants.StatusEnabled {
 		return nil, errors.New("token is disabled")
 	}
+	if err := ModelServiceApp.WithDB(s.DB()).ValidateGroup(token.Group); err != nil {
+		return nil, err
+	}
 	now := time.Now().Unix()
 	if token.ExpiredTime > 0 && token.ExpiredTime < now {
 		return nil, errors.New("token is expired")
@@ -251,7 +254,7 @@ func (s *TokenService) CheckModel(token *domains.ApiToken, modelName string) err
 	if token == nil {
 		return errors.New("token is required")
 	}
-	if err := ModelServiceApp.ModelAllowedForGroup(modelName, token.Group); err != nil {
+	if err := ModelServiceApp.WithDB(s.DB()).ModelAllowedForGroup(modelName, token.Group); err != nil {
 		return err
 	}
 	if !token.ModelLimitsEnabled {
