@@ -28,8 +28,8 @@ sqlite:
   db-name: navapi
   log-mode: error
   log-zap: false
-  max-idle-conns: 10
-  max-open-conns: 100
+  max-idle-conns: 1
+  max-open-conns: 1
 
 zap:
   level: info

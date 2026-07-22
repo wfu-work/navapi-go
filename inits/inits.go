@@ -40,6 +40,7 @@ func Init() {
 		_ = webs.InitStatic(router)
 	})
 	sysInit.OnOtherInit(func() {
+		configureSQLiteRuntime()
 		_ = services.OptionServiceApp.Load()
 		services.MessageTemplateServiceApp.SeedDefaults()
 		if err := services.ModelServiceApp.EnsureDefaultGroup(); err != nil {
@@ -76,4 +77,26 @@ func Init() {
 		return clearDBs
 	})
 	sysInit.Init()
+}
+
+func configureSQLiteRuntime() {
+	if global.NAV_DB == nil || global.NAV_DB.Dialector.Name() != "sqlite" {
+		return
+	}
+	sqlDB, err := global.NAV_DB.DB()
+	if err != nil {
+		global.NAV_LOG.Warn("configure sqlite connection pool failed", zap.Error(err))
+		return
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	for _, statement := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA busy_timeout=10000",
+	} {
+		if err := global.NAV_DB.Exec(statement).Error; err != nil {
+			global.NAV_LOG.Warn("configure sqlite pragma failed", zap.String("statement", statement), zap.Error(err))
+		}
+	}
 }
