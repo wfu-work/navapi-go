@@ -288,7 +288,7 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 			firstResponseMs = firstResponseTime(result)
 			upstreamRequestID = extractUpstreamRequestID(result)
 		}
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, usage, 0, useTime, firstResponseMs, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, upstreamRequestID))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, usage, 0, useTime, firstResponseMs, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, upstreamRequestID, result))
 		return err
 	}
 	if result == nil {
@@ -303,6 +303,12 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 		}
 		s.cancelReservation(token, prepared.Reservation, string(result.Body))
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", string(result.Body), prepared.Body, extractUpstreamRequestID(result)))
+		return nil
+	}
+	if result.StreamSynthesized {
+		content := synthesizedStreamLogContent(result)
+		s.cancelReservation(token, prepared.Reservation, content)
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "synthesized", content, prepared.Body, extractUpstreamRequestID(result), result))
 		return nil
 	}
 	if provider != nil {
@@ -532,7 +538,10 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 	firstResponseTimeMs := int64(0)
 	streamStarted := false
 	requireResponsesTerminal := strings.TrimSpace(upstreamPath) == "/v1/responses"
-	synthesizeResponsesCompleted := requireResponsesTerminal && responsesSynthesizeCompletedOnEOFEnabled()
+	responsesEOFTerminalPolicy := ""
+	if requireResponsesTerminal {
+		responsesEOFTerminalPolicy = responsesStreamEOFTerminalPolicy()
+	}
 	if responseLimit > 0 && resp.ContentLength > responseLimit {
 		timing := trace.Snapshot(time.Since(requestStart))
 		if timing.ResponseHeaderTimeMs <= 0 {
@@ -575,16 +584,16 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 			}
 		}
 		if readErr == io.EOF {
-			if shouldSynthesizeResponsesCompleted(c, tracker, streamStarted, synthesizeResponsesCompleted) {
-				if writeErr := writeSynthesizedResponsesCompletedEvent(c, tracker, "upstream EOF before response.completed"); writeErr != nil {
+			if shouldSynthesizeResponsesTerminal(c, tracker, streamStarted, responsesEOFTerminalPolicy) {
+				if writeErr := writeSynthesizedResponsesTerminalEvent(c, tracker, responsesEOFTerminalPolicy, "upstream EOF before response terminal event"); writeErr != nil {
 					return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), &downstreamStreamWriteError{err: writeErr}
 				}
 			}
 			break
 		}
 		if readErr != nil {
-			if shouldSynthesizeResponsesCompleted(c, tracker, streamStarted, synthesizeResponsesCompleted) {
-				if writeErr := writeSynthesizedResponsesCompletedEvent(c, tracker, "upstream stream error before response.completed: "+readErr.Error()); writeErr != nil {
+			if shouldSynthesizeResponsesTerminal(c, tracker, streamStarted, responsesEOFTerminalPolicy) {
+				if writeErr := writeSynthesizedResponsesTerminalEvent(c, tracker, responsesEOFTerminalPolicy, "upstream stream error before response terminal event: "+readErr.Error()); writeErr != nil {
 					return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), &downstreamStreamWriteError{err: writeErr}
 				}
 				break
@@ -644,12 +653,53 @@ func finishStreamRelayResult(resp *http.Response, tracker *streamUsageTracker, f
 	}
 }
 
-func responsesSynthesizeCompletedOnEOFEnabled() bool {
-	return OptionServiceApp.Bool("relay.responses_synthesize_completed_on_eof", true)
+const (
+	responsesEOFTerminalPolicyCompleted  = "completed"
+	responsesEOFTerminalPolicyIncomplete = "incomplete"
+	responsesEOFTerminalPolicyFailed     = "failed"
+	responsesEOFTerminalPolicyOff        = "off"
+)
+
+func responsesStreamEOFTerminalPolicy() string {
+	if policy, ok := normalizeResponsesEOFTerminalPolicy(OptionServiceApp.Get("relay.responses_eof_terminal_policy", "")); ok {
+		return policy
+	}
+	if !OptionServiceApp.Bool("relay.responses_synthesize_completed_on_eof", true) {
+		return responsesEOFTerminalPolicyOff
+	}
+	return responsesEOFTerminalPolicyIncomplete
 }
 
-func shouldSynthesizeResponsesCompleted(c *gin.Context, tracker *streamUsageTracker, streamStarted bool, enabled bool) bool {
-	if !enabled || !streamStarted || tracker == nil || tracker.terminal != "" {
+func normalizeResponsesEOFTerminalPolicy(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case responsesEOFTerminalPolicyCompleted:
+		return responsesEOFTerminalPolicyCompleted, true
+	case responsesEOFTerminalPolicyIncomplete:
+		return responsesEOFTerminalPolicyIncomplete, true
+	case responsesEOFTerminalPolicyFailed:
+		return responsesEOFTerminalPolicyFailed, true
+	case responsesEOFTerminalPolicyOff, "none", "disabled", "false":
+		return responsesEOFTerminalPolicyOff, true
+	default:
+		return "", false
+	}
+}
+
+func responsesEOFTerminalEvent(policy string) string {
+	switch policy {
+	case responsesEOFTerminalPolicyCompleted:
+		return "response.completed"
+	case responsesEOFTerminalPolicyFailed:
+		return "response.failed"
+	case responsesEOFTerminalPolicyIncomplete:
+		return "response.incomplete"
+	default:
+		return ""
+	}
+}
+
+func shouldSynthesizeResponsesTerminal(c *gin.Context, tracker *streamUsageTracker, streamStarted bool, policy string) bool {
+	if responsesEOFTerminalEvent(policy) == "" || !streamStarted || tracker == nil || tracker.terminal != "" {
 		return false
 	}
 	if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
@@ -658,26 +708,41 @@ func shouldSynthesizeResponsesCompleted(c *gin.Context, tracker *streamUsageTrac
 	return true
 }
 
-func writeSynthesizedResponsesCompletedEvent(c *gin.Context, tracker *streamUsageTracker, reason string) error {
+func synthesizedStreamLogContent(result *RelayResult) string {
+	reason := ""
+	if result != nil {
+		reason = strings.TrimSpace(result.StreamTerminalError)
+	}
+	if reason == "" {
+		reason = "upstream stream ended before response terminal event"
+	}
+	return "Responses 终止事件已补齐：" + reason
+}
+
+func writeSynthesizedResponsesTerminalEvent(c *gin.Context, tracker *streamUsageTracker, policy string, reason string) error {
 	if c == nil || tracker == nil {
 		return errors.New("stream context is empty")
 	}
-	chunk := synthesizedResponsesCompletedEvent(tracker, time.Now())
+	eventType := responsesEOFTerminalEvent(policy)
+	if eventType == "" {
+		return errors.New("responses EOF terminal policy is disabled")
+	}
+	chunk := synthesizedResponsesTerminalEvent(tracker, eventType, reason, time.Now())
 	if _, err := c.Writer.Write(chunk); err != nil {
 		return err
 	}
 	c.Writer.Flush()
 	tracker.Write(chunk)
-	tracker.terminal = "response.completed"
+	tracker.terminal = eventType
 	tracker.terminalSynthesized = true
 	tracker.terminalError = strings.TrimSpace(reason)
 	return nil
 }
 
-func synthesizedResponsesCompletedEvent(tracker *streamUsageTracker, now time.Time) []byte {
-	response := synthesizedResponsesCompletedResponse(tracker, now)
+func synthesizedResponsesTerminalEvent(tracker *streamUsageTracker, eventType string, reason string, now time.Time) []byte {
+	response := synthesizedResponsesTerminalResponse(tracker, eventType, reason, now)
 	payload := map[string]any{
-		"type":     "response.completed",
+		"type":     eventType,
 		"response": response,
 	}
 	if tracker != nil && tracker.hasSequenceNumber {
@@ -685,12 +750,12 @@ func synthesizedResponsesCompletedEvent(tracker *streamUsageTracker, now time.Ti
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		data = []byte(`{"type":"response.completed","response":{"status":"completed","output":[]}}`)
+		data = []byte(fmt.Sprintf(`{"type":%q,"response":{"status":%q,"output":[]}}`, eventType, responsesTerminalStatus(eventType)))
 	}
-	return []byte("\n\nevent: response.completed\ndata: " + string(data) + "\n\n")
+	return []byte("\n\nevent: " + eventType + "\ndata: " + string(data) + "\n\n")
 }
 
-func synthesizedResponsesCompletedResponse(tracker *streamUsageTracker, now time.Time) map[string]any {
+func synthesizedResponsesTerminalResponse(tracker *streamUsageTracker, eventType string, reason string, now time.Time) map[string]any {
 	response := map[string]any{}
 	if tracker != nil && len(tracker.responseSnapshot) > 0 {
 		_ = json.Unmarshal(tracker.responseSnapshot, &response)
@@ -710,11 +775,58 @@ func synthesizedResponsesCompletedResponse(tracker *streamUsageTracker, now time
 	if _, ok := response["output"]; !ok {
 		response["output"] = []any{}
 	}
-	response["status"] = "completed"
+	status := responsesTerminalStatus(eventType)
+	response["status"] = status
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "upstream stream ended before response terminal event"
+	}
+	switch eventType {
+	case "response.incomplete":
+		response["incomplete_details"] = map[string]any{
+			"reason": "upstream_stream_interrupted",
+		}
+		response["metadata"] = mergeResponsesMetadata(response["metadata"], map[string]string{
+			"navapi_terminal_reason": reason,
+		})
+	case "response.failed":
+		response["error"] = map[string]any{
+			"code":    "upstream_stream_interrupted",
+			"message": reason,
+		}
+	}
 	if tracker != nil && hasUsageTokens(tracker.usage) {
 		response["usage"] = responsesUsagePayload(tracker.usage)
 	}
 	return response
+}
+
+func responsesTerminalStatus(eventType string) string {
+	switch eventType {
+	case "response.completed":
+		return "completed"
+	case "response.failed":
+		return "failed"
+	case "response.incomplete":
+		return "incomplete"
+	default:
+		return ""
+	}
+}
+
+func mergeResponsesMetadata(current any, values map[string]string) map[string]any {
+	metadata := map[string]any{}
+	if existing, ok := current.(map[string]any); ok {
+		for key, value := range existing {
+			metadata[key] = value
+		}
+	}
+	for key, value := range values {
+		if strings.TrimSpace(value) != "" {
+			metadata[key] = value
+		}
+	}
+	return metadata
 }
 
 func responsesUsagePayload(usage vos.Usage) map[string]any {
@@ -1579,7 +1691,7 @@ func usageLogTiming(result *RelayResult, body []byte, attempts int) UpstreamTimi
 	return timing
 }
 
-func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.VendorMeta, modelName string, usage vos.Usage, quota int64, useTimeMs int64, firstResponseTimeMs int64, timing UpstreamTiming, stream bool, status string, content string, body []byte, upstreamRequestID string) *domains.UsageLog {
+func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.VendorMeta, modelName string, usage vos.Usage, quota int64, useTimeMs int64, firstResponseTimeMs int64, timing UpstreamTiming, stream bool, status string, content string, body []byte, upstreamRequestID string, relayResults ...*RelayResult) *domains.UsageLog {
 	if len(content) > 2000 {
 		content = content[:2000]
 	}
@@ -1623,11 +1735,11 @@ func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.Ve
 		UpstreamRequestID:    upstreamRequestID,
 		ClientIP:             c.ClientIP(),
 		Source:               domains.UsageLogSourceUser,
-		Other:                buildUsageLogOther(token, body, detail),
+		Other:                buildUsageLogOther(token, body, detail, relayResults...),
 	}
 }
 
-func buildUsageLogOther(token *domains.ApiToken, body []byte, detail QuotaCalculationDetail) string {
+func buildUsageLogOther(token *domains.ApiToken, body []byte, detail QuotaCalculationDetail, relayResults ...*RelayResult) string {
 	group := normalizeGroup(token.Group)
 	values := map[string]any{
 		"group":               group,
@@ -1664,6 +1776,19 @@ func buildUsageLogOther(token *domains.ApiToken, body []byte, detail QuotaCalcul
 	}
 	if reasoningEffort := extractReasoningEffort(body); reasoningEffort != "" {
 		values["reasoningEffort"] = reasoningEffort
+	}
+	if len(relayResults) > 0 && relayResults[0] != nil {
+		result := relayResults[0]
+		if result.StreamTerminal != "" {
+			values["streamTerminal"] = result.StreamTerminal
+		}
+		if result.StreamTerminalError != "" {
+			values["streamTerminalError"] = result.StreamTerminalError
+		}
+		if result.StreamSynthesized {
+			values["streamSynthesized"] = true
+			values["synthesizedReason"] = synthesizedStreamLogContent(result)
+		}
 	}
 	data, err := json.Marshal(values)
 	if err != nil {

@@ -20,6 +20,7 @@ type RiskControlSettings struct {
 	ProviderCooldownSeconds           int64  `json:"providerCooldownSeconds"`
 	ProviderMaxCooldownSeconds        int64  `json:"providerMaxCooldownSeconds"`
 	ResponsesSynthesizeCompletedOnEOF bool   `json:"responsesSynthesizeCompletedOnEOF"`
+	ResponsesEOFTerminalPolicy        string `json:"responsesEOFTerminalPolicy"`
 	SSRFCheckEnabled                  bool   `json:"ssrfCheckEnabled"`
 	SensitiveWords                    string `json:"sensitiveWords"`
 }
@@ -59,6 +60,7 @@ func (s RiskControlService) Get() RiskControlSettings {
 	if affinitySeconds <= 0 {
 		affinitySeconds = defaultRiskProviderAffinitySeconds
 	}
+	responsesEOFTerminalPolicy := responsesStreamEOFTerminalPolicy()
 	return RiskControlSettings{
 		MaxBodyBytes:                      OptionServiceApp.Int64("relay.max_body_bytes", defaultRiskMaxBodyBytes),
 		MaxUpstreamResponseBytes:          OptionServiceApp.Int64("relay.max_upstream_response_bytes", defaultRiskMaxUpstreamResponseBytes),
@@ -71,7 +73,8 @@ func (s RiskControlService) Get() RiskControlSettings {
 		ProviderFailureThreshold:          OptionServiceApp.Int64("relay.provider_failure_threshold", defaultRiskProviderFailureThreshold),
 		ProviderCooldownSeconds:           OptionServiceApp.Int64("relay.provider_cooldown_seconds", defaultRiskProviderCooldownSeconds),
 		ProviderMaxCooldownSeconds:        OptionServiceApp.Int64("relay.provider_max_cooldown_seconds", defaultRiskProviderMaxCooldownSeconds),
-		ResponsesSynthesizeCompletedOnEOF: OptionServiceApp.Bool("relay.responses_synthesize_completed_on_eof", true),
+		ResponsesSynthesizeCompletedOnEOF: responsesEOFTerminalPolicy != responsesEOFTerminalPolicyOff,
+		ResponsesEOFTerminalPolicy:        responsesEOFTerminalPolicy,
 		SSRFCheckEnabled:                  OptionServiceApp.Bool("relay.ssrf_check_enabled", true),
 		SensitiveWords:                    OptionServiceApp.Get("relay.sensitive_words", ""),
 	}
@@ -98,6 +101,7 @@ func (s RiskControlService) Set(settings RiskControlSettings) error {
 		"relay.provider_cooldown_seconds":             strconv.FormatInt(settings.ProviderCooldownSeconds, 10),
 		"relay.provider_max_cooldown_seconds":         strconv.FormatInt(settings.ProviderMaxCooldownSeconds, 10),
 		"relay.responses_synthesize_completed_on_eof": strconv.FormatBool(settings.ResponsesSynthesizeCompletedOnEOF),
+		"relay.responses_eof_terminal_policy":         settings.ResponsesEOFTerminalPolicy,
 		"relay.ssrf_check_enabled":                    strconv.FormatBool(settings.SSRFCheckEnabled),
 		"relay.sensitive_words":                       settings.SensitiveWords,
 	}
@@ -150,10 +154,30 @@ func validateRiskControlSettings(settings *RiskControlSettings) error {
 	if settings.ProviderMaxCooldownSeconds < settings.ProviderCooldownSeconds || settings.ProviderMaxCooldownSeconds > maximumRiskProviderMaxCooldownSeconds {
 		return fmt.Errorf("providerMaxCooldownSeconds must be between providerCooldownSeconds and %d", maximumRiskProviderMaxCooldownSeconds)
 	}
+	responsesEOFTerminalPolicy, err := normalizeRiskResponsesEOFTerminalPolicy(settings.ResponsesEOFTerminalPolicy, settings.ResponsesSynthesizeCompletedOnEOF)
+	if err != nil {
+		return err
+	}
+	settings.ResponsesEOFTerminalPolicy = responsesEOFTerminalPolicy
+	settings.ResponsesSynthesizeCompletedOnEOF = responsesEOFTerminalPolicy != responsesEOFTerminalPolicyOff
 	if len(settings.SensitiveWords) > maximumRiskSensitiveWordsBytes {
 		return fmt.Errorf("sensitiveWords must not exceed %d bytes", maximumRiskSensitiveWordsBytes)
 	}
 	return nil
+}
+
+func normalizeRiskResponsesEOFTerminalPolicy(value string, legacyEnabled bool) (string, error) {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		if legacyEnabled {
+			return responsesEOFTerminalPolicyIncomplete, nil
+		}
+		return responsesEOFTerminalPolicyOff, nil
+	}
+	if policy, ok := normalizeResponsesEOFTerminalPolicy(raw); ok {
+		return policy, nil
+	}
+	return "", errors.New("responsesEOFTerminalPolicy must be one of completed, incomplete, failed or off")
 }
 
 func normalizeRiskSensitiveWords(raw string) string {
