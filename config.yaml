@@ -1,7 +1,7 @@
 system:
   app-name: navapi-go
   addr: 8888
-  db-type: sqlite
+  db-type: pgsql
   oss-type: local
   router-prefix: /api
   iplimit-count: 15000
@@ -30,6 +30,18 @@ sqlite:
   log-zap: false
   max-idle-conns: 1
   max-open-conns: 1
+
+pgsql:
+  host: 127.0.0.1
+  port: 5432
+  config: "sslmode=disable TimeZone=Asia/Shanghai"
+  db-name: nav_api
+  username: root
+  password: "1qaz@WSX3edc"
+  log-mode: error
+  log-zap: false
+  max-idle-conns: 10
+  max-open-conns: 100
 
 zap:
   level: info

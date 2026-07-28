@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 	"navapi-go/domains"
+	"navapi-go/scheduleds"
 	"navapi-go/utils"
 	"navapi-go/webs"
 	"os"
@@ -29,6 +30,12 @@ func Init() {
 		_, _ = fmt.Fprintf(os.Stderr, "prepare config failed: %v\n", err)
 		os.Exit(1)
 	}
+	cleanupRuntimeConfig, err := utils.PrepareDatabaseEnvConfig()
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "prepare database environment config failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer cleanupRuntimeConfig()
 	sysInit := inits.SysInit{}
 	sysInit.OnTableInit(func() {
 		domains.RegisterTables()
@@ -57,16 +64,11 @@ func Init() {
 		}
 	})
 	sysInit.OnScheInit(func(timers commonScheduleds.Timer, options []cron.Option) {
-		_, _ = timers.AddTaskByFunc("navapi", "@every 1m", func() {
-			_ = services.OptionServiceApp.Load()
-		}, "refresh_navapi_options", options...)
+		scheduleds.Init(timers, options)
 	})
 	sysInit.OnClearInit(func() []commonScheduleds.ClearDB {
-		retentionDays := services.OptionServiceApp.Int64("usage.log_retention_days", defaultUsageLogRetentionDays)
-		if retentionDays > 3650 {
-			retentionDays = 3650
-		}
-		clearDBs := []commonScheduleds.ClearDB{}
+		retentionDays := min(services.OptionServiceApp.Int64("usage.log_retention_days", defaultUsageLogRetentionDays), 3650)
+		var clearDBs []commonScheduleds.ClearDB
 		if retentionDays > 0 {
 			clearDBs = append(clearDBs, commonScheduleds.ClearDB{
 				TableName:    (domains.UsageLog{}).TableName(),

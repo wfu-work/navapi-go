@@ -284,6 +284,16 @@ after relay:
 - 静态配置：`config.yaml`，由 `nav-common-go-lib` 加载。
 - 动态配置：业务 `Option` 表，运行中刷新缓存。
 
+Docker 部署可通过环境变量覆盖 PostgreSQL 配置，无需修改镜像内的 `config.yaml`：
+
+- `NAV_DB_TYPE`
+- `NAV_PGSQL_HOST`、`NAV_PGSQL_PORT`、`NAV_PGSQL_CONFIG`
+- `NAV_PGSQL_DB_NAME`、`NAV_PGSQL_USERNAME`、`NAV_PGSQL_PASSWORD`
+- `NAV_PGSQL_LOG_MODE`、`NAV_PGSQL_LOG_ZAP`
+- `NAV_PGSQL_MAX_IDLE_CONNS`、`NAV_PGSQL_MAX_OPEN_CONNS`
+
+环境变量只会生成权限为 `0600` 的临时运行配置，不会写回或覆盖原始配置文件。Docker Compose 示例位于 `docker/docker-compose-navapi.yml`。
+
 动态配置包括：
 
 - 系统名称、公告、关于信息。

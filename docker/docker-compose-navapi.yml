@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   navapi:
     image: registry.cn-hangzhou.aliyuncs.com/navfirst/navapi:1.0.0
@@ -7,6 +5,13 @@ services:
     hostname: navapi
     ports:
       - "8888:8888"
+    environment:
+      NAV_DB_TYPE: "${NAV_DB_TYPE:-pgsql}"
+      NAV_PGSQL_HOST: "${NAV_PGSQL_HOST:-127.0.0.1}"
+      NAV_PGSQL_PORT: "${NAV_PGSQL_PORT:-5432}"
+      NAV_PGSQL_DB_NAME: "${NAV_PGSQL_DB_NAME:-nav_api}"
+      NAV_PGSQL_USERNAME: "${NAV_PGSQL_USERNAME:-root}"
+      NAV_PGSQL_PASSWORD: "${NAV_PGSQL_PASSWORD:-1qaz@WSX3edc}"
     volumes:
       - ./navapi/logback:/app/navapi/logback
       - ./navapi/data:/app/navapi/data
