@@ -27,14 +27,20 @@ import (
 )
 
 type RelayService struct {
-	client       *http.Client
-	streamClient *http.Client
+	client                  *http.Client
+	streamClient            *http.Client
+	streamHeartbeatInterval time.Duration
 }
 
 var RelayServiceApp = new(RelayService{
 	client:       &http.Client{Timeout: 10 * time.Minute, Transport: cloneDefaultTransport()},
 	streamClient: newStreamHTTPClient(),
 })
+
+const (
+	defaultStreamHeartbeatInterval = 15 * time.Second
+	streamHeartbeatComment         = ": navapi keep-alive\n\n"
+)
 
 type RelayEndpoint struct {
 	UpstreamPath  string
@@ -56,6 +62,22 @@ type RelayResult struct {
 	StreamTerminal      string
 	StreamTerminalError string
 	StreamSynthesized   bool
+}
+
+type RelayAttempt struct {
+	Attempt           int    `json:"attempt"`
+	ProviderGuid      string `json:"providerGuid,omitempty"`
+	ProviderName      string `json:"providerName,omitempty"`
+	RequestedModel    string `json:"requestedModel,omitempty"`
+	UpstreamModel     string `json:"upstreamModel,omitempty"`
+	StatusCode        int    `json:"statusCode,omitempty"`
+	Stage             string `json:"stage"`
+	Status            string `json:"status"`
+	Error             string `json:"error,omitempty"`
+	DurationMs        int64  `json:"durationMs"`
+	Retried           bool   `json:"retried"`
+	StreamStarted     bool   `json:"streamStarted,omitempty"`
+	UpstreamRequestID string `json:"upstreamRequestId,omitempty"`
 }
 
 type preparedRelay struct {
@@ -161,6 +183,7 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	var result *RelayResult
 	var err error
 	attempts := 0
+	routeAttempts := make([]RelayAttempt, 0, len(prepared.Candidates))
 	var circuitRetryAfter time.Duration
 	for i := range prepared.Candidates {
 		current := prepared.Candidates[i]
@@ -169,11 +192,13 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 			if retryAfter > 0 && (circuitRetryAfter <= 0 || retryAfter < circuitRetryAfter) {
 				circuitRetryAfter = retryAfter
 			}
+			routeAttempts = append(routeAttempts, newCircuitSkippedAttempt(&current, prepared.ModelName, retryAfter))
 			continue
 		}
 		attempts++
 		forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
 		provider = &current
+		attemptStart := time.Now()
 		result, err = s.forward(c.Request.Context(), &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery)
 		if result != nil {
 			result.Timing.AttemptCount = attempts
@@ -184,10 +209,12 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 			ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
 		}
 		maybeAutoDisableProvider(&current, result)
-		if err != nil && i < len(prepared.Candidates)-1 {
+		willRetry := (err != nil || (result != nil && shouldRetryRelayStatus(result.StatusCode))) && i < len(prepared.Candidates)-1
+		routeAttempts = append(routeAttempts, newRelayAttempt(attempts, &current, prepared.ModelName, result, err, time.Since(attemptStart), willRetry))
+		if err != nil && willRetry {
 			continue
 		}
-		if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && i < len(prepared.Candidates)-1 {
+		if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && willRetry {
 			continue
 		}
 		break
@@ -196,22 +223,24 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	if attempts == 0 {
 		err = providerCircuitUnavailableError(circuitRetryAfter)
 		s.cancelReservation(token, prepared.Reservation, err.Error())
+		provider = firstRelayProvider(prepared.Candidates)
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts))
 		return nil, err
 	}
 	status := "success"
 	content := ""
 	if err != nil {
 		status = "error"
-		content = err.Error()
+		content = relayFailureMessage(result, err)
 		s.cancelReservation(token, prepared.Reservation, content)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, ""))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, "", routeAttempts, result))
 		return nil, err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
 		status = "error"
-		content = string(result.Body)
+		content = relayFailureMessage(result, nil)
 		s.cancelReservation(token, prepared.Reservation, content)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result)))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 		return result, nil
 	}
 	if provider != nil {
@@ -224,13 +253,13 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 			status = "error"
 			content = err.Error()
 			s.cancelReservation(token, prepared.Reservation, content)
-			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result)))
+			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 			return nil, err
 		}
 	} else {
 		quota = 0
 	}
-	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result)))
+	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 	return result, nil
 }
 
@@ -240,6 +269,7 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	var result *RelayResult
 	var err error
 	attempts := 0
+	routeAttempts := make([]RelayAttempt, 0, len(prepared.Candidates))
 	var circuitRetryAfter time.Duration
 	for i := range prepared.Candidates {
 		current := prepared.Candidates[i]
@@ -248,11 +278,13 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 			if retryAfter > 0 && (circuitRetryAfter <= 0 || retryAfter < circuitRetryAfter) {
 				circuitRetryAfter = retryAfter
 			}
+			routeAttempts = append(routeAttempts, newCircuitSkippedAttempt(&current, prepared.ModelName, retryAfter))
 			continue
 		}
 		attempts++
 		forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
 		provider = &current
+		attemptStart := time.Now()
 		result, err = s.forwardStream(c, &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery, i < len(prepared.Candidates)-1)
 		if result != nil {
 			result.Timing.AttemptCount = attempts
@@ -263,10 +295,12 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 			ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
 		}
 		maybeAutoDisableProvider(&current, result)
-		if err != nil && i < len(prepared.Candidates)-1 && canRetryStreamAttempt(result) {
+		willRetry := i < len(prepared.Candidates)-1 && ((err != nil && canRetryStreamAttempt(result)) || (err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode)))
+		routeAttempts = append(routeAttempts, newRelayAttempt(attempts, &current, prepared.ModelName, result, err, time.Since(attemptStart), willRetry))
+		if err != nil && willRetry {
 			continue
 		}
-		if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && i < len(prepared.Candidates)-1 {
+		if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && willRetry {
 			continue
 		}
 		break
@@ -276,6 +310,8 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	if attempts == 0 {
 		err = providerCircuitUnavailableError(circuitRetryAfter)
 		s.cancelReservation(token, prepared.Reservation, err.Error())
+		provider = firstRelayProvider(prepared.Candidates)
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts))
 		return err
 	}
 	if err != nil {
@@ -288,27 +324,28 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 			firstResponseMs = firstResponseTime(result)
 			upstreamRequestID = extractUpstreamRequestID(result)
 		}
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, usage, 0, useTime, firstResponseMs, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, upstreamRequestID, result))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, usage, 0, useTime, firstResponseMs, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", relayFailureMessage(result, err), prepared.Body, upstreamRequestID, routeAttempts, result))
 		return err
 	}
 	if result == nil {
 		err = errors.New("upstream response is empty")
 		s.cancelReservation(token, prepared.Reservation, err.Error())
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, ""))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts))
 		return err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
 		if !result.StreamStarted {
 			writeBufferedStreamResult(c, result)
 		}
-		s.cancelReservation(token, prepared.Reservation, string(result.Body))
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", string(result.Body), prepared.Body, extractUpstreamRequestID(result)))
+		content := relayFailureMessage(result, nil)
+		s.cancelReservation(token, prepared.Reservation, content)
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", content, prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 		return nil
 	}
 	if result.StreamSynthesized {
 		content := synthesizedStreamLogContent(result)
 		s.cancelReservation(token, prepared.Reservation, content)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "synthesized", content, prepared.Body, extractUpstreamRequestID(result), result))
+		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "synthesized", content, prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 		return nil
 	}
 	if provider != nil {
@@ -323,11 +360,11 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 			// The stream may already be on the wire, so settlement failures are
 			// recorded in logs instead of trying to replace the response body.
 			s.keepReservedCost(token, prepared.Reservation, detail)
-			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, extractUpstreamRequestID(result)))
+			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 			return nil
 		}
 	}
-	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "success", "", prepared.Body, extractUpstreamRequestID(result)))
+	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "success", "", prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 	return nil
 }
 
@@ -359,6 +396,193 @@ func shouldRetryRelayStatus(statusCode int) bool {
 		return true
 	}
 	return statusCode >= http.StatusInternalServerError
+}
+
+func firstRelayProvider(candidates []domains.VendorMeta) *domains.VendorMeta {
+	if len(candidates) == 0 {
+		return nil
+	}
+	provider := candidates[0]
+	return &provider
+}
+
+func relayProviderName(provider *domains.VendorMeta) string {
+	if provider == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(provider.DisplayName); name != "" {
+		return name
+	}
+	return strings.TrimSpace(provider.VendorName)
+}
+
+func newCircuitSkippedAttempt(provider *domains.VendorMeta, modelName string, retryAfter time.Duration) RelayAttempt {
+	message := "provider circuit breaker is cooling down"
+	if retryAfter > 0 {
+		message += ", retry after " + retryAfter.Round(time.Second).String()
+	}
+	return RelayAttempt{
+		ProviderGuid:   provider.Guid,
+		ProviderName:   relayProviderName(provider),
+		RequestedModel: modelName,
+		UpstreamModel:  ProviderServiceApp.MapModel(provider, modelName),
+		Stage:          "circuit_breaker",
+		Status:         "skipped",
+		Error:          message,
+	}
+}
+
+func newRelayAttempt(attempt int, provider *domains.VendorMeta, modelName string, result *RelayResult, err error, duration time.Duration, retried bool) RelayAttempt {
+	item := RelayAttempt{
+		Attempt:        attempt,
+		ProviderGuid:   provider.Guid,
+		ProviderName:   relayProviderName(provider),
+		RequestedModel: modelName,
+		UpstreamModel:  ProviderServiceApp.MapModel(provider, modelName),
+		DurationMs:     duration.Milliseconds(),
+		Retried:        retried,
+		Stage:          "completed",
+		Status:         "success",
+	}
+	if result != nil {
+		item.StatusCode = result.StatusCode
+		item.StreamStarted = result.StreamStarted
+		item.UpstreamRequestID = extractUpstreamRequestID(result)
+	}
+	if err != nil {
+		item.Stage = relayFailureStage(result, err)
+		item.Status = "failed"
+		item.Error = relayFailureMessage(result, err)
+		return item
+	}
+	if result == nil {
+		item.Stage = "upstream_response"
+		item.Status = "failed"
+		item.Error = "upstream response is empty"
+		return item
+	}
+	if result.StreamSynthesized {
+		item.Stage = "stream_terminal"
+		item.Status = "synthesized"
+		item.Error = synthesizedStreamLogContent(result)
+		return item
+	}
+	if result.StatusCode >= http.StatusBadRequest {
+		item.Stage = "upstream_response"
+		item.Status = "failed"
+		item.Error = relayFailureMessage(result, nil)
+	}
+	return item
+}
+
+func relayFailureStage(result *RelayResult, err error) string {
+	if isDownstreamStreamWriteError(err) || errors.Is(err, context.Canceled) {
+		return "client_disconnected"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "upstream_timeout"
+	}
+	if result != nil {
+		if result.StreamTerminal != "" || result.StreamStarted {
+			return "upstream_stream"
+		}
+		if result.StatusCode > 0 {
+			return "upstream_response_read"
+		}
+	}
+	return "upstream_connect"
+}
+
+func relayFailureMessage(result *RelayResult, err error) string {
+	if result != nil && result.StatusCode >= http.StatusBadRequest {
+		message := extractUpstreamErrorMessage(result.Body)
+		if message == "" {
+			message = http.StatusText(result.StatusCode)
+		}
+		if message == "" {
+			message = "unknown upstream error"
+		}
+		return limitRelayLogText(fmt.Sprintf("upstream returned HTTP %d: %s", result.StatusCode, message), 1000)
+	}
+	if result != nil && result.StreamTerminalError != "" {
+		return limitRelayLogText("upstream stream failed: "+result.StreamTerminalError, 1000)
+	}
+	if err == nil {
+		return "upstream request failed"
+	}
+	message := sanitizeRelayLogText(err.Error())
+	switch {
+	case isDownstreamStreamWriteError(err), errors.Is(err, context.Canceled):
+		return limitRelayLogText("client disconnected: "+message, 1000)
+	case errors.Is(err, context.DeadlineExceeded):
+		return limitRelayLogText("upstream request timed out: "+message, 1000)
+	default:
+		return limitRelayLogText("upstream request failed: "+message, 1000)
+	}
+}
+
+func extractUpstreamErrorMessage(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var payload any
+	if json.Unmarshal(body, &payload) == nil {
+		if message := findUpstreamErrorMessage(payload); message != "" {
+			return limitRelayLogText(message, 800)
+		}
+	}
+	return limitRelayLogText(string(body), 800)
+}
+
+func findUpstreamErrorMessage(value any) string {
+	switch item := value.(type) {
+	case map[string]any:
+		for _, key := range []string{"error", "message", "detail", "reason"} {
+			child, ok := item[key]
+			if !ok {
+				continue
+			}
+			if text, ok := child.(string); ok && strings.TrimSpace(text) != "" {
+				return text
+			}
+			if message := findUpstreamErrorMessage(child); message != "" {
+				return message
+			}
+		}
+		for _, key := range []string{"code", "type"} {
+			if text, ok := item[key].(string); ok && strings.TrimSpace(text) != "" {
+				return text
+			}
+		}
+	case []any:
+		for _, child := range item {
+			if message := findUpstreamErrorMessage(child); message != "" {
+				return message
+			}
+		}
+	}
+	return ""
+}
+
+var relaySecretPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+`),
+	regexp.MustCompile(`(?i)((?:api[_-]?key|access[_-]?token|key)\s*[:=]\s*)[^&\s,;]+`),
+}
+
+func sanitizeRelayLogText(value string) string {
+	value = strings.TrimSpace(value)
+	for _, pattern := range relaySecretPatterns {
+		value = pattern.ReplaceAllString(value, `${1}***`)
+	}
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func limitRelayLogText(value string, limit int) string {
+	value = sanitizeRelayLogText(value)
+	if limit > 0 && len(value) > limit {
+		return value[:limit]
+	}
+	return value
 }
 
 func canRetryStreamAttempt(result *RelayResult) bool {
@@ -428,7 +652,7 @@ func (s RelayService) forward(ctx context.Context, provider *domains.VendorMeta,
 	if baseURL == "" {
 		baseURL = defaultBaseURL(provider.Type)
 	}
-	targetURL := baseURL + upstreamPath
+	targetURL := joinProviderEndpoint(baseURL, upstreamPath)
 	if rawQuery != "" && provider.Type != constants.ProviderTypeGemini {
 		targetURL += "?" + rawQuery
 	}
@@ -479,7 +703,7 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 	if baseURL == "" {
 		baseURL = defaultBaseURL(provider.Type)
 	}
-	targetURL := baseURL + upstreamPath
+	targetURL := joinProviderEndpoint(baseURL, upstreamPath)
 	if rawQuery != "" && provider.Type != constants.ProviderTypeGemini {
 		targetURL += "?" + rawQuery
 	}
@@ -554,58 +778,140 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 			Timing:              timing,
 		}, upstreamResponseTooLargeError(responseLimit)
 	}
+	copyResponseHeaders(c.Writer.Header(), resp.Header)
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Status(resp.StatusCode)
+	c.Writer.Flush()
+	streamStarted = true
+
 	streamedResponseBytes := int64(0)
-	buf := make([]byte, 32*1024)
+	readContext, cancelReads := context.WithCancel(c.Request.Context())
+	defer cancelReads()
+	reads := streamBodyReads(readContext, resp.Body)
+	heartbeatInterval := s.streamHeartbeatInterval
+	if heartbeatInterval <= 0 {
+		heartbeatInterval = defaultStreamHeartbeatInterval
+	}
+	var heartbeat *time.Timer
+	var heartbeatC <-chan time.Time
+	if isEventStreamResponse(resp.Header) && heartbeatInterval > 0 {
+		heartbeat = time.NewTimer(heartbeatInterval)
+		defer heartbeat.Stop()
+		heartbeatC = heartbeat.C
+	}
+streamLoop:
 	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			if responseLimit > 0 && int64(n) > responseLimit-streamedResponseBytes {
-				return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), upstreamResponseTooLargeError(responseLimit)
+		select {
+		case read, ok := <-reads:
+			if !ok {
+				if err := readContext.Err(); err != nil {
+					return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), err
+				}
+				break streamLoop
 			}
-			streamedResponseBytes += int64(n)
-			if !streamStarted {
-				copyResponseHeaders(c.Writer.Header(), resp.Header)
-				c.Writer.Header().Set("Cache-Control", "no-cache")
-				c.Writer.Header().Set("X-Accel-Buffering", "no")
-				c.Status(resp.StatusCode)
-				streamStarted = true
+			if len(read.Chunk) > 0 {
+				if responseLimit > 0 && int64(len(read.Chunk)) > responseLimit-streamedResponseBytes {
+					return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), upstreamResponseTooLargeError(responseLimit)
+				}
+				streamedResponseBytes += int64(len(read.Chunk))
+				if firstResponseTimeMs <= 0 {
+					firstResponseTimeMs = time.Since(requestStart).Milliseconds()
+				}
+				tracker.Write(read.Chunk)
+				if _, writeErr := c.Writer.Write(read.Chunk); writeErr != nil {
+					return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), &downstreamStreamWriteError{err: writeErr}
+				}
+				c.Writer.Flush()
+				resetStreamHeartbeat(heartbeat, heartbeatInterval)
+				if requireResponsesTerminal && tracker.terminal != "" {
+					break streamLoop
+				}
 			}
-			if firstResponseTimeMs <= 0 {
-				firstResponseTimeMs = time.Since(requestStart).Milliseconds()
+			if read.Err == io.EOF {
+				if shouldSynthesizeResponsesTerminal(c, tracker, streamStarted, responsesEOFTerminalPolicy) {
+					if writeErr := writeSynthesizedResponsesTerminalEvent(c, tracker, responsesEOFTerminalPolicy, "upstream EOF before response terminal event"); writeErr != nil {
+						return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), &downstreamStreamWriteError{err: writeErr}
+					}
+				}
+				break streamLoop
 			}
-			chunk := buf[:n]
-			tracker.Write(chunk)
-			if _, writeErr := c.Writer.Write(chunk); writeErr != nil {
+			if read.Err != nil {
+				if shouldSynthesizeResponsesTerminal(c, tracker, streamStarted, responsesEOFTerminalPolicy) {
+					if writeErr := writeSynthesizedResponsesTerminalEvent(c, tracker, responsesEOFTerminalPolicy, "upstream stream error before response terminal event: "+read.Err.Error()); writeErr != nil {
+						return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), &downstreamStreamWriteError{err: writeErr}
+					}
+					break streamLoop
+				}
+				return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), read.Err
+			}
+		case <-heartbeatC:
+			if _, writeErr := io.WriteString(c.Writer, streamHeartbeatComment); writeErr != nil {
 				return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), &downstreamStreamWriteError{err: writeErr}
 			}
 			c.Writer.Flush()
-			if requireResponsesTerminal && tracker.terminal != "" {
-				break
-			}
-		}
-		if readErr == io.EOF {
-			if shouldSynthesizeResponsesTerminal(c, tracker, streamStarted, responsesEOFTerminalPolicy) {
-				if writeErr := writeSynthesizedResponsesTerminalEvent(c, tracker, responsesEOFTerminalPolicy, "upstream EOF before response terminal event"); writeErr != nil {
-					return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), &downstreamStreamWriteError{err: writeErr}
-				}
-			}
-			break
-		}
-		if readErr != nil {
-			if shouldSynthesizeResponsesTerminal(c, tracker, streamStarted, responsesEOFTerminalPolicy) {
-				if writeErr := writeSynthesizedResponsesTerminalEvent(c, tracker, responsesEOFTerminalPolicy, "upstream stream error before response terminal event: "+readErr.Error()); writeErr != nil {
-					return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), &downstreamStreamWriteError{err: writeErr}
-				}
-				break
-			}
-			return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), readErr
+			resetStreamHeartbeat(heartbeat, heartbeatInterval)
+		case <-readContext.Done():
+			return finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted), readContext.Err()
 		}
 	}
 	result := finishStreamRelayResult(resp, tracker, firstResponseTimeMs, headerResponseTimeMs, requestStart, trace, streamStarted)
 	if !requireResponsesTerminal {
 		return result, nil
 	}
+	if responsesEOFTerminalPolicy == responsesEOFTerminalPolicyOff && result.StreamTerminal == "" {
+		return result, nil
+	}
 	return result, responsesStreamTerminalError(result)
+}
+
+type streamBodyRead struct {
+	Chunk []byte
+	Err   error
+}
+
+func streamBodyReads(ctx context.Context, reader io.Reader) <-chan streamBodyRead {
+	reads := make(chan streamBodyRead, 1)
+	go func() {
+		defer close(reads)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := reader.Read(buf)
+			if n == 0 && err == nil {
+				continue
+			}
+			read := streamBodyRead{Err: err}
+			if n > 0 {
+				read.Chunk = append([]byte(nil), buf[:n]...)
+			}
+			select {
+			case reads <- read:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return reads
+}
+
+func isEventStreamResponse(header http.Header) bool {
+	return strings.Contains(strings.ToLower(header.Get("Content-Type")), "text/event-stream")
+}
+
+func resetStreamHeartbeat(timer *time.Timer, interval time.Duration) {
+	if timer == nil || interval <= 0 {
+		return
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(interval)
 }
 
 func responsesStreamTerminalError(result *RelayResult) error {
@@ -661,13 +967,21 @@ const (
 )
 
 func responsesStreamEOFTerminalPolicy() string {
-	if policy, ok := normalizeResponsesEOFTerminalPolicy(OptionServiceApp.Get("relay.responses_eof_terminal_policy", "")); ok {
+	return resolveResponsesStreamEOFTerminalPolicy(
+		OptionServiceApp.Get("relay.responses_eof_terminal_policy", ""),
+		OptionServiceApp.Get("relay.responses_synthesize_completed_on_eof", ""),
+	)
+}
+
+func resolveResponsesStreamEOFTerminalPolicy(configuredPolicy string, legacyEnabled string) string {
+	if policy, ok := normalizeResponsesEOFTerminalPolicy(configuredPolicy); ok {
 		return policy
 	}
-	if !OptionServiceApp.Bool("relay.responses_synthesize_completed_on_eof", true) {
-		return responsesEOFTerminalPolicyOff
+	switch strings.ToLower(strings.TrimSpace(legacyEnabled)) {
+	case "1", "true", "yes", "on":
+		return responsesEOFTerminalPolicyIncomplete
 	}
-	return responsesEOFTerminalPolicyIncomplete
+	return responsesEOFTerminalPolicyOff
 }
 
 func normalizeResponsesEOFTerminalPolicy(value string) (string, bool) {
@@ -1691,7 +2005,7 @@ func usageLogTiming(result *RelayResult, body []byte, attempts int) UpstreamTimi
 	return timing
 }
 
-func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.VendorMeta, modelName string, usage vos.Usage, quota int64, useTimeMs int64, firstResponseTimeMs int64, timing UpstreamTiming, stream bool, status string, content string, body []byte, upstreamRequestID string, relayResults ...*RelayResult) *domains.UsageLog {
+func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.VendorMeta, modelName string, usage vos.Usage, quota int64, useTimeMs int64, firstResponseTimeMs int64, timing UpstreamTiming, stream bool, status string, content string, body []byte, upstreamRequestID string, routeAttempts []RelayAttempt, relayResults ...*RelayResult) *domains.UsageLog {
 	if len(content) > 2000 {
 		content = content[:2000]
 	}
@@ -1706,6 +2020,7 @@ func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.Ve
 	}
 	detail := PricingServiceApp.CalculateQuotaDetail(modelName, token.Group, usage, estimateQuotaFromBody(body))
 	detail.Quota = quota
+	detail = usageLogBillingDetail(status, detail)
 	return &domains.UsageLog{
 		UserGuid:             token.UserGuid,
 		TokenGuid:            token.Guid,
@@ -1735,11 +2050,18 @@ func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.Ve
 		UpstreamRequestID:    upstreamRequestID,
 		ClientIP:             c.ClientIP(),
 		Source:               domains.UsageLogSourceUser,
-		Other:                buildUsageLogOther(token, body, detail, relayResults...),
+		Other:                buildUsageLogOther(token, body, detail, routeAttempts, relayResults...),
 	}
 }
 
-func buildUsageLogOther(token *domains.ApiToken, body []byte, detail QuotaCalculationDetail, relayResults ...*RelayResult) string {
+func usageLogBillingDetail(status string, detail QuotaCalculationDetail) QuotaCalculationDetail {
+	if status != "success" && status != "ok" {
+		detail.FinalCost = 0
+	}
+	return detail
+}
+
+func buildUsageLogOther(token *domains.ApiToken, body []byte, detail QuotaCalculationDetail, routeAttempts []RelayAttempt, relayResults ...*RelayResult) string {
 	group := normalizeGroup(token.Group)
 	values := map[string]any{
 		"group":               group,
@@ -1777,6 +2099,24 @@ func buildUsageLogOther(token *domains.ApiToken, body []byte, detail QuotaCalcul
 	if reasoningEffort := extractReasoningEffort(body); reasoningEffort != "" {
 		values["reasoningEffort"] = reasoningEffort
 	}
+	if len(routeAttempts) > 0 {
+		values["relayAttempts"] = routeAttempts
+		values["retryCount"] = relayRetryCount(routeAttempts)
+		providerFallback := relayProviderFallback(routeAttempts)
+		values["providerFallback"] = providerFallback
+		values["modelDowngraded"] = false
+		values["upstreamModelChanged"] = relayUpstreamModelChanged(routeAttempts)
+		values["routingType"] = "provider"
+		if providerFallback {
+			values["routingType"] = "provider_fallback"
+		}
+		if finalAttempt, ok := finalRelayAttempt(routeAttempts); ok {
+			values["finalProviderGuid"] = finalAttempt.ProviderGuid
+			values["finalProviderName"] = finalAttempt.ProviderName
+			values["finalUpstreamModel"] = finalAttempt.UpstreamModel
+			values["modelMapped"] = finalAttempt.UpstreamModel != "" && finalAttempt.UpstreamModel != finalAttempt.RequestedModel
+		}
+	}
 	if len(relayResults) > 0 && relayResults[0] != nil {
 		result := relayResults[0]
 		if result.StreamTerminal != "" {
@@ -1795,6 +2135,53 @@ func buildUsageLogOther(token *domains.ApiToken, body []byte, detail QuotaCalcul
 		return ""
 	}
 	return string(data)
+}
+
+func relayRetryCount(attempts []RelayAttempt) int {
+	count := 0
+	for _, attempt := range attempts {
+		if attempt.Attempt > 0 {
+			count++
+		}
+	}
+	if count <= 1 {
+		return 0
+	}
+	return count - 1
+}
+
+func relayProviderFallback(attempts []RelayAttempt) bool {
+	providers := map[string]struct{}{}
+	for _, attempt := range attempts {
+		if attempt.Attempt <= 0 || attempt.ProviderGuid == "" {
+			continue
+		}
+		providers[attempt.ProviderGuid] = struct{}{}
+	}
+	return len(providers) > 1
+}
+
+func relayUpstreamModelChanged(attempts []RelayAttempt) bool {
+	models := map[string]struct{}{}
+	for _, attempt := range attempts {
+		if attempt.Attempt <= 0 {
+			continue
+		}
+		model := strings.TrimSpace(attempt.UpstreamModel)
+		if model != "" {
+			models[model] = struct{}{}
+		}
+	}
+	return len(models) > 1
+}
+
+func finalRelayAttempt(attempts []RelayAttempt) (RelayAttempt, bool) {
+	for i := len(attempts) - 1; i >= 0; i-- {
+		if attempts[i].Attempt > 0 {
+			return attempts[i], true
+		}
+	}
+	return RelayAttempt{}, false
 }
 
 func marshalBillingMeta(detail QuotaCalculationDetail, amountMicros int64) string {

@@ -407,13 +407,21 @@ func (s *ProviderService) filterProvidersForGroup(providers []domains.VendorMeta
 	if scope == constants.ModelGroupProviderScopeAll {
 		return providers, nil
 	}
-	filtered := make([]domains.VendorMeta, 0, len(providers))
+	return providersInConfiguredOrder(providers, allowed), nil
+}
+
+func providersInConfiguredOrder(providers []domains.VendorMeta, providerGuids []string) []domains.VendorMeta {
+	providersByGuid := make(map[string]domains.VendorMeta, len(providers))
 	for _, provider := range providers {
-		if _, ok := allowed[provider.Guid]; ok {
+		providersByGuid[provider.Guid] = provider
+	}
+	filtered := make([]domains.VendorMeta, 0, len(providerGuids))
+	for _, providerGuid := range providerGuids {
+		if provider, ok := providersByGuid[providerGuid]; ok {
 			filtered = append(filtered, provider)
 		}
 	}
-	return filtered, nil
+	return filtered
 }
 
 func (s *ProviderService) ApplyAffinity(tokenGuid string, modelName string, candidates []domains.VendorMeta) []domains.VendorMeta {
@@ -697,11 +705,11 @@ func (s *ProviderService) fetchModels(provider *domains.VendorMeta) ([]string, e
 	case constants.ProviderTypeGemini:
 		path = "/v1beta/models"
 	}
-	targetURL := strings.TrimRight(provider.BaseURL, "/")
-	if targetURL == "" {
-		targetURL = defaultBaseURL(provider.Type)
+	baseURL := strings.TrimRight(provider.BaseURL, "/")
+	if baseURL == "" {
+		baseURL = defaultBaseURL(provider.Type)
 	}
-	targetURL += path
+	targetURL := joinProviderEndpoint(baseURL, path)
 	if provider.Type == constants.ProviderTypeGemini {
 		targetURL = attachGeminiKey(targetURL, provider.Key, "")
 	}

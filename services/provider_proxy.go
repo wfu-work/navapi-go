@@ -21,7 +21,7 @@ const (
 
 	streamDialTimeout           = 15 * time.Second
 	streamTLSHandshakeTimeout   = 15 * time.Second
-	streamResponseHeaderTimeout = 120 * time.Second
+	streamResponseHeaderTimeout = 10 * time.Minute
 )
 
 func normalizeProviderProxyConfig(provider *domains.VendorMeta) {

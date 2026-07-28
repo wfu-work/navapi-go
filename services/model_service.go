@@ -394,7 +394,7 @@ func (s *ModelService) GroupQuotaMultiplier(group string) float64 {
 	return modelGroup.QuotaMultiplier
 }
 
-func (s *ModelService) AllowedProviderGuidsForGroup(group string) (string, map[string]struct{}, error) {
+func (s *ModelService) AllowedProviderGuidsForGroup(group string) (string, []string, error) {
 	group = normalizeGroup(group)
 	if group == "*" {
 		return constants.ModelGroupProviderScopeAll, nil, nil
@@ -423,11 +423,7 @@ func (s *ModelService) AllowedProviderGuidsForGroup(group string) (string, map[s
 		Pluck("provider_guid", &providerGuids).Error; err != nil {
 		return "", nil, err
 	}
-	allowed := make(map[string]struct{}, len(providerGuids))
-	for _, providerGuid := range providerGuids {
-		allowed[providerGuid] = struct{}{}
-	}
-	return scope, allowed, nil
+	return scope, providerGuids, nil
 }
 
 func (s *ModelService) groupByName(group string) (*domains.ModelGroup, error) {
