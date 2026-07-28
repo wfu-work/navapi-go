@@ -12,6 +12,8 @@ services:
       NAV_PGSQL_DB_NAME: "${NAV_PGSQL_DB_NAME:-nav_api}"
       NAV_PGSQL_USERNAME: "${NAV_PGSQL_USERNAME:-root}"
       NAV_PGSQL_PASSWORD: "${NAV_PGSQL_PASSWORD:-1qaz@WSX3edc}"
+      NAV_PGSQL_MAX_IDLE_CONNS: "${NAV_PGSQL_MAX_IDLE_CONNS:-10}"
+      NAV_PGSQL_MAX_OPEN_CONNS: "${NAV_PGSQL_MAX_OPEN_CONNS:-50}"
     volumes:
       - ./navapi/logback:/app/navapi/logback
       - ./navapi/data:/app/navapi/data

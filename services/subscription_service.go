@@ -44,7 +44,7 @@ func (s *SubscriptionService) ListPlans(query vos.PageQuery, enabledOnly bool) (
 		db = db.Where("status = ?", constants.StatusEnabled)
 	}
 	if query.Q != "" {
-		db = db.Where("name LIKE ? OR code LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+		db = db.Where("name ILIKE ? OR code ILIKE ? OR remark ILIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err
@@ -174,7 +174,7 @@ func (s *SubscriptionService) ListUserSubscriptions(userGuid string, query vos.P
 	if query.Q != "" {
 		keyword := "%" + query.Q + "%"
 		db = db.Where(
-			"user_guid LIKE ? OR plan_name LIKE ? OR plan_code LIKE ? OR status LIKE ? OR payment_guid LIKE ? OR remark LIKE ?",
+			"user_guid ILIKE ? OR plan_name ILIKE ? OR plan_code ILIKE ? OR status ILIKE ? OR payment_guid ILIKE ? OR remark ILIKE ?",
 			keyword,
 			keyword,
 			keyword,

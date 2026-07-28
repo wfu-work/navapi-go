@@ -260,7 +260,7 @@ func (s *UserWalletService) ListBalanceAccounts(query vos.PageQuery) (vos.PageRe
 	db := s.DB().Model(&domains.UserWallet{})
 	if query.Q != "" {
 		keyword := "%" + strings.TrimSpace(query.Q) + "%"
-		db = db.Where("user_guid LIKE ? OR currency LIKE ?", keyword, keyword)
+		db = db.Where("user_guid ILIKE ? OR currency ILIKE ?", keyword, keyword)
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err
@@ -315,7 +315,7 @@ func (s *UserWalletService) ListRecords(userGuid string, query WalletRecordQuery
 	db := s.RecordCrud.DB().Model(&domains.UserWalletRecord{}).Where("user_guid = ?", userGuid)
 	if query.Q != "" {
 		keyword := "%" + query.Q + "%"
-		db = db.Where("type LIKE ? OR source LIKE ? OR title LIKE ? OR order_no LIKE ? OR remark LIKE ?", keyword, keyword, keyword, keyword, keyword)
+		db = db.Where("type ILIKE ? OR source ILIKE ? OR title ILIKE ? OR order_no ILIKE ? OR remark ILIKE ?", keyword, keyword, keyword, keyword, keyword)
 	}
 	if query.Type != "" {
 		db = db.Where("type = ?", query.Type)
@@ -386,7 +386,7 @@ type walletAPIConsumeAggregate struct {
 }
 
 func (s *UserWalletService) listAPIConsumeActivities(userGuid string, query WalletActivityQuery) ([]WalletActivityItem, error) {
-	hourExpr := walletHourBucketExpr(s.RecordCrud.DB())
+	hourExpr := walletHourBucketExpr()
 	db := s.RecordCrud.DB().
 		Model(&domains.UserWalletRecord{}).
 		Select(fmt.Sprintf("%s AS hour_start, COUNT(*) AS count, COALESCE(SUM(request_count_delta), 0) AS request_count, COALESCE(SUM(amount_micros_delta), 0) AS amount_micros_delta", hourExpr)).
@@ -1011,13 +1011,8 @@ func walletAPIConsumeSQL() string {
 	return "(amount_micros_delta < 0 AND (type = 'consume' OR source = 'relay' OR LOWER(title) LIKE '%api%'))"
 }
 
-func walletHourBucketExpr(db *gorm.DB) string {
-	switch db.Dialector.Name() {
-	case "mysql", "postgres":
-		return "(FLOOR(occurred_at / 3600) * 3600)"
-	default:
-		return "((occurred_at / 3600) * 3600)"
-	}
+func walletHourBucketExpr() string {
+	return "((occurred_at / 3600) * 3600)"
 }
 
 func walletTotalIncomeAmountMicros(wallet *domains.UserWallet) int64 {

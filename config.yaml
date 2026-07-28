@@ -23,14 +23,6 @@ local:
   cache-path: ./data/cache.json
   ip2geo-path: ./data/ip2geo
 
-sqlite:
-  path: ./data/
-  db-name: navapi
-  log-mode: error
-  log-zap: false
-  max-idle-conns: 1
-  max-open-conns: 1
-
 pgsql:
   host: 127.0.0.1
   port: 5432
@@ -41,7 +33,7 @@ pgsql:
   log-mode: error
   log-zap: false
   max-idle-conns: 10
-  max-open-conns: 100
+  max-open-conns: 50
 
 zap:
   level: info

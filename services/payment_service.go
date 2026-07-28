@@ -52,7 +52,7 @@ func (s *PaymentService) List(userGuid string, query vos.PageQuery) (vos.PageRes
 		db = db.Where("user_guid = ?", userGuid)
 	}
 	if query.Q != "" {
-		db = db.Where("order_no LIKE ? OR type LIKE ? OR status LIKE ? OR provider LIKE ? OR transaction_id LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+		db = db.Where("order_no ILIKE ? OR type ILIKE ? OR status ILIKE ? OR provider ILIKE ? OR transaction_id ILIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err

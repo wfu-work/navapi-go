@@ -33,6 +33,8 @@ const (
 	balanceTemplateCustom  = "custom"
 
 	balanceAuthProviderBearer = "provider_bearer"
+	providerKeyPresentSQL     = `btrim(COALESCE("key", '')) <> ''`
+	providerKeyMissingSQL     = `btrim(COALESCE("key", '')) = ''`
 )
 
 type ProviderRecord struct {
@@ -103,7 +105,7 @@ func (s *ProviderService) List(query ProviderListQuery) (vos.PageResult, error) 
 	}
 	db = db.Model(&domains.VendorMeta{})
 	if query.Q != "" {
-		db = db.Where("vendor_name LIKE ? OR display_name LIKE ? OR type LIKE ? OR base_url LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+		db = db.Where("vendor_name ILIKE ? OR display_name ILIKE ? OR type ILIKE ? OR base_url ILIKE ? OR remark ILIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	providerType := strings.TrimSpace(query.Type)
 	if providerType != "" {
@@ -117,9 +119,9 @@ func (s *ProviderService) List(query ProviderListQuery) (vos.PageResult, error) 
 	}
 	switch strings.TrimSpace(query.KeyStatus) {
 	case "set":
-		db = db.Where("TRIM(COALESCE(`key`, '')) <> ''")
+		db = db.Where(providerKeyPresentSQL)
 	case "missing":
-		db = db.Where("TRIM(COALESCE(`key`, '')) = ''")
+		db = db.Where(providerKeyMissingSQL)
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err
@@ -686,7 +688,7 @@ func (s *ProviderService) NextKey(provider *domains.VendorMeta) string {
 
 func (s *ProviderService) enabledProviders(providerType string) ([]domains.VendorMeta, error) {
 	var providers []domains.VendorMeta
-	db := s.DB().Where("enabled = ? AND TRIM(COALESCE(`key`, '')) <> ''", true)
+	db := s.DB().Where("enabled = ?", true).Where(providerKeyPresentSQL)
 	if strings.TrimSpace(providerType) != "" {
 		db = db.Where("type = ?", strings.TrimSpace(providerType))
 	}

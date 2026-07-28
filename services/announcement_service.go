@@ -59,7 +59,7 @@ func (s *AnnouncementService) List(query AnnouncementQuery, activeOnly bool) (vo
 		db = db.Where("popup = ?", *query.Popup)
 	}
 	if query.Q != "" {
-		db = db.Where("title LIKE ? OR content LIKE ? OR level LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+		db = db.Where("title ILIKE ? OR content ILIKE ? OR level ILIKE ? OR remark ILIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err

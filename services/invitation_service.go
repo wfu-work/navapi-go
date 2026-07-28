@@ -88,7 +88,7 @@ func (s *InvitationService) ListCodes(ownerUserGuid string, query vos.PageQuery)
 		db = db.Where("owner_user_guid = ?", ownerUserGuid)
 	}
 	if query.Q != "" {
-		db = db.Where("code LIKE ? OR owner_user_guid LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+		db = db.Where("code ILIKE ? OR owner_user_guid ILIKE ? OR remark ILIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err
@@ -108,7 +108,7 @@ func (s *InvitationService) ListRelations(userGuid string, query vos.PageQuery) 
 		db = db.Where("inviter_user_guid = ? OR invitee_user_guid = ?", userGuid, userGuid)
 	}
 	if query.Q != "" {
-		db = db.Where("code LIKE ? OR inviter_user_guid LIKE ? OR invitee_user_guid LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+		db = db.Where("code ILIKE ? OR inviter_user_guid ILIKE ? OR invitee_user_guid ILIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err

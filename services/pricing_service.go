@@ -60,7 +60,7 @@ func (s *PricingService) List(query vos.PageQuery) (vos.PageResult, error) {
 	}
 	db = db.Model(&domains.Pricing{})
 	if query.Q != "" {
-		db = db.Where("model_name LIKE ? OR group_name LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+		db = db.Where("model_name ILIKE ? OR group_name ILIKE ? OR remark ILIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err

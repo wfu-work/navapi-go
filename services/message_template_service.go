@@ -45,7 +45,7 @@ func (s *MessageTemplateService) List(query vos.PageQuery, channel string, statu
 	db := s.DB().Model(&domains.MessageTemplate{})
 	if query.Q != "" {
 		keyword := "%" + query.Q + "%"
-		db = db.Where("code LIKE ? OR name LIKE ? OR subject LIKE ? OR description LIKE ?", keyword, keyword, keyword, keyword)
+		db = db.Where("code ILIKE ? OR name ILIKE ? OR subject ILIKE ? OR description ILIKE ?", keyword, keyword, keyword, keyword)
 	}
 	if strings.TrimSpace(channel) != "" {
 		db = db.Where("channel = ?", strings.TrimSpace(channel))

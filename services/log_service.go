@@ -174,51 +174,6 @@ func (s *LogService) Create(log *domains.UsageLog) error {
 	return createWithCrud(&s.CrudService, log)
 }
 
-func (s *LogService) EnsureIndexes() error {
-	db := s.DB()
-	if err := normalizeLegacyUsageLogSources(db); err != nil {
-		return err
-	}
-	indexes := []struct {
-		name string
-		sql  string
-	}{
-		{name: "idx_nav_api_usage_logs_create_time", sql: "CREATE INDEX idx_nav_api_usage_logs_create_time ON nav_api_usage_logs(create_time)"},
-		{name: "idx_nav_api_usage_logs_user_time", sql: "CREATE INDEX idx_nav_api_usage_logs_user_time ON nav_api_usage_logs(user_guid, create_time)"},
-		{name: "idx_nav_api_usage_logs_model_time", sql: "CREATE INDEX idx_nav_api_usage_logs_model_time ON nav_api_usage_logs(model_name, create_time)"},
-		{name: "idx_nav_api_usage_logs_status_time", sql: "CREATE INDEX idx_nav_api_usage_logs_status_time ON nav_api_usage_logs(status, create_time)"},
-		{name: "idx_nav_api_usage_logs_user_status_time", sql: "CREATE INDEX idx_nav_api_usage_logs_user_status_time ON nav_api_usage_logs(user_guid, status, create_time)"},
-		{name: "idx_nav_api_usage_logs_time_token", sql: "CREATE INDEX idx_nav_api_usage_logs_time_token ON nav_api_usage_logs(create_time, token_guid)"},
-		{name: "idx_nav_api_usage_logs_time_channel", sql: "CREATE INDEX idx_nav_api_usage_logs_time_channel ON nav_api_usage_logs(create_time, channel_guid)"},
-		{name: "idx_nav_api_usage_logs_source_time", sql: "CREATE INDEX idx_nav_api_usage_logs_source_time ON nav_api_usage_logs(source, create_time)"},
-		{name: "idx_nav_api_usage_logs_user_source_time_id_active", sql: usageLogListIndexSQL(db)},
-	}
-	for _, index := range indexes {
-		if db.Migrator().HasIndex(&domains.UsageLog{}, index.name) {
-			continue
-		}
-		if err := db.Exec(index.sql).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func normalizeLegacyUsageLogSources(db *gorm.DB) error {
-	return db.Exec(
-		"UPDATE nav_api_usage_logs SET source = ? WHERE source IS NULL OR source = ''",
-		domains.UsageLogSourceUser,
-	).Error
-}
-
-func usageLogListIndexSQL(db *gorm.DB) string {
-	const name = "idx_nav_api_usage_logs_user_source_time_id_active"
-	if db != nil && db.Dialector.Name() == "mysql" {
-		return "CREATE INDEX " + name + " ON nav_api_usage_logs(user_guid, source, deleted_time, create_time DESC, id DESC)"
-	}
-	return "CREATE INDEX " + name + " ON nav_api_usage_logs(user_guid, source, create_time DESC, id DESC) WHERE deleted_time IS NULL"
-}
-
 func (s *LogService) List(userGuid string, query UsageLogQuery) (vos.PageResult, error) {
 	query.PageQuery.Normalize()
 	var logs []domains.UsageLog
@@ -245,8 +200,8 @@ func applyUsageLogFilters(db *gorm.DB, userGuid string, query UsageLogQuery) *go
 		userSubQuery := db.Session(&gorm.Session{NewDB: true}).
 			Model(&commonDomains.SysUser{}).
 			Select("guid").
-			Where("username LIKE ? OR email LIKE ? OR nick_name LIKE ? OR guid LIKE ?", keyword, keyword, keyword, keyword)
-		db = db.Where("model_name LIKE ? OR token_name LIKE ? OR channel_name LIKE ? OR user_guid LIKE ? OR username LIKE ? OR request_id LIKE ? OR upstream_request_id LIKE ? OR user_guid IN (?)", keyword, keyword, keyword, keyword, keyword, keyword, keyword, userSubQuery)
+			Where("username ILIKE ? OR email ILIKE ? OR nick_name ILIKE ? OR guid ILIKE ?", keyword, keyword, keyword, keyword)
+		db = db.Where("model_name ILIKE ? OR token_name ILIKE ? OR channel_name ILIKE ? OR user_guid ILIKE ? OR username ILIKE ? OR request_id ILIKE ? OR upstream_request_id ILIKE ? OR user_guid IN (?)", keyword, keyword, keyword, keyword, keyword, keyword, keyword, userSubQuery)
 	}
 	if query.Status != "" {
 		db = db.Where("status = ?", query.Status)
@@ -633,7 +588,7 @@ func (s *LogService) usageRangeDB(userGuid string, query UsageSummaryQuery) *gor
 
 func (s *LogService) dailyUsageStats(userGuid string, query UsageSummaryQuery) (usageDailyStatsResult, error) {
 	db := s.usageRangeDB(userGuid, query)
-	dateExpr := usageDateExprSQL(db)
+	dateExpr := usageDateExprSQL()
 	selectSQL := fmt.Sprintf(`
 		%s as usage_date,
 		COUNT(*) as requests,
@@ -646,7 +601,7 @@ func (s *LogService) dailyUsageStats(userGuid string, query UsageSummaryQuery) (
 		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
 		%s as first_response_time_ms,
 		COALESCE(SUM(CASE WHEN is_stream THEN 1 ELSE 0 END), 0) as stream_requests
-		`, dateExpr, usageCostSumSQL(db), usageFirstResponseTimeSumSQL())
+		`, dateExpr, usageCostSumSQL(), usageFirstResponseTimeSumSQL())
 	var rows []usageDailyAggregateRow
 	if err := db.Select(selectSQL).Group(dateExpr).Scan(&rows).Error; err != nil {
 		return usageDailyStatsResult{}, err
@@ -693,7 +648,7 @@ func (s *LogService) aggregateUsage(db *gorm.DB) (usageAggregateRow, error) {
 		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
 		%s as first_response_time_ms,
 		COALESCE(SUM(CASE WHEN is_stream THEN 1 ELSE 0 END), 0) as stream_requests
-		`, usageCostSumSQL(db), usageFirstResponseTimeSumSQL())
+		`, usageCostSumSQL(), usageFirstResponseTimeSumSQL())
 	return row, db.Select(selectSQL).Scan(&row).Error
 }
 
@@ -715,11 +670,11 @@ func (s *LogService) usageDimensionStats(userGuid string, query UsageSummaryQuer
 		COALESCE(SUM(completion_tokens), 0) as completion_tokens,
 		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
 		%s as first_response_time_ms
-		`, keyExpr, nameExpr, extra, usageCostSumSQL(db), usageFirstResponseTimeSumSQL())
+		`, keyExpr, nameExpr, extra, usageCostSumSQL(), usageFirstResponseTimeSumSQL())
 	var rows []usageDimensionAggregateRow
 	if err := db.Select(selectSQL).
 		Group(keyExpr + ", " + nameExpr).
-		Order(usageCostSumSQL(db) + " DESC").
+		Order(usageCostSumSQL() + " DESC").
 		Order("COALESCE(SUM(quota), 0) DESC").
 		Order("COUNT(*) DESC").
 		Limit(query.TopN).
@@ -754,7 +709,7 @@ func (s *LogService) usageModelSeries(userGuid string, query UsageSummaryQuery, 
 	}
 	seriesByModel := map[string]map[string]*DailyUsageData{}
 	db := s.usageRangeDB(userGuid, query).Where("model_name IN ?", modelNames)
-	dateExpr := usageDateExprSQL(db)
+	dateExpr := usageDateExprSQL()
 	selectSQL := fmt.Sprintf(`
 		%s as usage_date,
 		model_name,
@@ -765,7 +720,7 @@ func (s *LogService) usageModelSeries(userGuid string, query UsageSummaryQuery, 
 		%s as cost,
 		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
 		COALESCE(SUM(completion_tokens), 0) as completion_tokens
-	`, dateExpr, usageCostSumSQL(db))
+	`, dateExpr, usageCostSumSQL())
 	var rows []usageModelDailyAggregateRow
 	if err := db.Select(selectSQL).Group(dateExpr + ", model_name").Scan(&rows).Error; err != nil {
 		return nil, err
@@ -959,28 +914,12 @@ func buildDailyUsageSeries(userGuid string, windows []usageDayWindow, byDate map
 	return out
 }
 
-func usageCostSumSQL(db *gorm.DB) string {
-	switch db.Dialector.Name() {
-	case "sqlite":
-		return "COALESCE(SUM(CASE WHEN COALESCE(cost, 0) > 0 THEN cost WHEN TRIM(COALESCE(other, '')) <> '' AND json_valid(other) THEN COALESCE(CAST(json_extract(other, '$.finalCost') AS REAL), 0) ELSE 0 END), 0)"
-	case "mysql":
-		return "COALESCE(SUM(CASE WHEN COALESCE(cost, 0) > 0 THEN cost WHEN TRIM(COALESCE(other, '')) <> '' AND JSON_VALID(other) THEN COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(other, '$.finalCost')) AS DECIMAL(20,10)), 0) ELSE 0 END), 0)"
-	case "postgres":
-		return "COALESCE(SUM(CASE WHEN COALESCE(cost, 0) > 0 THEN cost WHEN btrim(COALESCE(other, '')) <> '' THEN COALESCE((other::jsonb ->> 'finalCost')::double precision, 0) ELSE 0 END), 0)"
-	default:
-		return "COALESCE(SUM(cost), 0)"
-	}
+func usageCostSumSQL() string {
+	return "COALESCE(SUM(cost), 0)"
 }
 
-func usageDateExprSQL(db *gorm.DB) string {
-	switch db.Dialector.Name() {
-	case "mysql":
-		return "DATE_FORMAT(FROM_UNIXTIME(create_time / 1000), '%Y-%m-%d')"
-	case "postgres":
-		return "TO_CHAR(TO_TIMESTAMP(create_time / 1000.0), 'YYYY-MM-DD')"
-	default:
-		return "DATE(create_time / 1000, 'unixepoch', 'localtime')"
-	}
+func usageDateExprSQL() string {
+	return "TO_CHAR(TO_TIMESTAMP(create_time / 1000.0), 'YYYY-MM-DD')"
 }
 
 func buildModelSeries(seriesByModel map[string]map[string]*DailyUsageData, rankedModels []UsageDimensionStat, dates []DailyUsageData) []UsageNamedSeries {

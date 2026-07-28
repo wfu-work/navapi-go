@@ -124,7 +124,6 @@ func (m DefaultConfigManager) MaterializeDefaultConfig(baseDir string) ([]byte, 
 	}
 
 	dataDir := filepath.Join(baseDir, "data")
-	setConfigPath(cfg, []string{"sqlite", "path"}, dataDir)
 	setConfigPath(cfg, []string{"local", "oss-path"}, filepath.Join(dataDir, "oss"))
 	setConfigPath(cfg, []string{"local", "cache-path"}, filepath.Join(dataDir, "cache.json"))
 	setConfigPath(cfg, []string{"local", "ip2geo-path"}, filepath.Join(dataDir, "ip2geo"))
@@ -152,7 +151,6 @@ func (m DefaultConfigManager) EnsurePortableConfig(configPath string) error {
 	baseDir := filepath.Dir(configPath)
 	dataDir := filepath.Join(baseDir, "data")
 	changed := false
-	changed = upgradeLegacyConfigPath(cfg, []string{"sqlite", "path"}, dataDir) || changed
 	changed = upgradeLegacyConfigPath(cfg, []string{"local", "oss-path"}, filepath.Join(dataDir, "oss")) || changed
 	changed = upgradeLegacyConfigPath(cfg, []string{"local", "cache-path"}, filepath.Join(dataDir, "cache.json")) || changed
 	changed = upgradeLegacyConfigPath(cfg, []string{"local", "ip2geo-path"}, filepath.Join(dataDir, "ip2geo")) || changed

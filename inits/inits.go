@@ -1,6 +1,7 @@
 package inits
 
 import (
+	"context"
 	_ "embed"
 	"fmt"
 	"navapi-go/domains"
@@ -8,6 +9,7 @@ import (
 	"navapi-go/utils"
 	"navapi-go/webs"
 	"os"
+	"time"
 
 	"navapi-go/routers"
 	"navapi-go/services"
@@ -47,15 +49,18 @@ func Init() {
 		_ = webs.InitStatic(router)
 	})
 	sysInit.OnOtherInit(func() {
-		configureSQLiteRuntime()
+		if err := configurePostgresRuntime(); err != nil {
+			global.NAV_LOG.Error("configure postgres runtime failed", zap.Error(err))
+			os.Exit(1)
+		}
 		_ = services.OptionServiceApp.Load()
+		if err := services.PostgresServiceApp.Ensure(global.NAV_DB); err != nil {
+			global.NAV_LOG.Error("ensure postgres migrations failed", zap.Error(err))
+			os.Exit(1)
+		}
 		services.MessageTemplateServiceApp.SeedDefaults()
 		if err := services.ModelServiceApp.EnsureDefaultGroup(); err != nil {
 			global.NAV_LOG.Error("ensure default model group failed", zap.Error(err))
-			os.Exit(1)
-		}
-		if err := services.LogServiceApp.EnsureIndexes(); err != nil {
-			global.NAV_LOG.Error("ensure usage log indexes failed", zap.Error(err))
 			os.Exit(1)
 		}
 		if err := services.PermissionSeedServiceApp.Ensure(); err != nil {
@@ -81,24 +86,20 @@ func Init() {
 	sysInit.Init()
 }
 
-func configureSQLiteRuntime() {
-	if global.NAV_DB == nil || global.NAV_DB.Dialector.Name() != "sqlite" {
-		return
+func configurePostgresRuntime() error {
+	if global.NAV_DB == nil {
+		return fmt.Errorf("database is not initialized")
+	}
+	if dialect := global.NAV_DB.Dialector.Name(); dialect != "postgres" {
+		return fmt.Errorf("postgres database is required, got %q", dialect)
 	}
 	sqlDB, err := global.NAV_DB.DB()
 	if err != nil {
-		global.NAV_LOG.Warn("configure sqlite connection pool failed", zap.Error(err))
-		return
+		return err
 	}
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
-	for _, statement := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA busy_timeout=10000",
-	} {
-		if err := global.NAV_DB.Exec(statement).Error; err != nil {
-			global.NAV_LOG.Warn("configure sqlite pragma failed", zap.String("statement", statement), zap.Error(err))
-		}
-	}
+	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return sqlDB.PingContext(ctx)
 }

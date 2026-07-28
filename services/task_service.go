@@ -82,7 +82,7 @@ func (s *TaskService) List(userGuid string, query vos.PageQuery) (vos.PageResult
 		db = db.Where("user_guid = ?", userGuid)
 	}
 	if query.Q != "" {
-		db = db.Where("task_id LIKE ? OR model_name LIKE ? OR action LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+		db = db.Where("task_id ILIKE ? OR model_name ILIKE ? OR action ILIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err

@@ -78,7 +78,7 @@ func (s *CheckinService) List(userGuid string, query vos.PageQuery) (vos.PageRes
 		db = db.Where("user_guid = ?", userGuid)
 	}
 	if query.Q != "" {
-		db = db.Where("user_guid LIKE ? OR date LIKE ? OR status LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
+		db = db.Where("user_guid ILIKE ? OR date ILIKE ? OR status ILIKE ?", "%"+query.Q+"%", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	if err := db.Count(&total).Error; err != nil {
 		return vos.PageResult{}, err

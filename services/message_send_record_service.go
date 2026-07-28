@@ -31,7 +31,7 @@ func (s *MessageSendRecordService) List(query vos.PageQuery, sendStatus string, 
 	db := s.DB().Model(&domains.MessageSendRecord{})
 	if query.Q != "" {
 		keyword := "%" + query.Q + "%"
-		db = db.Where("subject LIKE ? OR template_code LIKE ? OR template_name LIKE ? OR recipient_email LIKE ? OR error_message LIKE ? OR batch_guid LIKE ?", keyword, keyword, keyword, keyword, keyword, keyword)
+		db = db.Where("subject ILIKE ? OR template_code ILIKE ? OR template_name ILIKE ? OR recipient_email ILIKE ? OR error_message ILIKE ? OR batch_guid ILIKE ?", keyword, keyword, keyword, keyword, keyword, keyword)
 	}
 	if strings.TrimSpace(sendStatus) != "" {
 		db = db.Where("send_status = ?", strings.TrimSpace(sendStatus))

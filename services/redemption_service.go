@@ -143,7 +143,7 @@ func (s *RedemptionService) List(query RedemptionListQuery) (vos.PageResult, err
 	var total int64
 	db := s.DB().Model(&domains.Redemption{})
 	if query.Q != "" {
-		db = db.Where("code LIKE ? OR remark LIKE ?", "%"+query.Q+"%", "%"+query.Q+"%")
+		db = db.Where("code ILIKE ? OR remark ILIKE ?", "%"+query.Q+"%", "%"+query.Q+"%")
 	}
 	switch query.UsageStatus {
 	case "used":

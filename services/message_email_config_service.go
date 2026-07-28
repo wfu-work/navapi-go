@@ -48,7 +48,7 @@ func (s *MessageEmailConfigService) List(query vos.PageQuery, status string) (vo
 	db := s.DB().Model(&domains.MessageEmailConfig{})
 	if query.Q != "" {
 		keyword := "%" + query.Q + "%"
-		db = db.Where("name LIKE ? OR host LIKE ? OR username LIKE ? OR from_email LIKE ? OR remark LIKE ?", keyword, keyword, keyword, keyword, keyword)
+		db = db.Where("name ILIKE ? OR host ILIKE ? OR username ILIKE ? OR from_email ILIKE ? OR remark ILIKE ?", keyword, keyword, keyword, keyword, keyword)
 	}
 	if strings.TrimSpace(status) != "" {
 		value, err := strconv.Atoi(strings.TrimSpace(status))

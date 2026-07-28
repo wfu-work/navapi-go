@@ -50,7 +50,7 @@ func (s *ClientUserService) List(query ClientUserListQuery) (vos.PageResult, err
 		phoneLike := "%" + keyword + "%"
 		// 管理端用户列表需要支持按用户名、邮箱检索；手机号、昵称和 GUID 保留为兼容搜索入口。
 		db = db.Where(
-			"LOWER(username) LIKE ? OR LOWER(email) LIKE ? OR phone LIKE ? OR LOWER(nick_name) LIKE ? OR LOWER(guid) LIKE ?",
+			"username ILIKE ? OR email ILIKE ? OR phone ILIKE ? OR nick_name ILIKE ? OR guid ILIKE ?",
 			like,
 			like,
 			phoneLike,

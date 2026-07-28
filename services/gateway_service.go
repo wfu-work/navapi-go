@@ -219,7 +219,7 @@ func (s GatewayService) recentUsageBuckets(start time.Time, end time.Time, model
 	if spanMS <= 0 {
 		spanMS = 1
 	}
-	bucketExpr := serviceStatusBucketExprSQL(global.NAV_DB.Dialector.Name(), startMS, spanMS)
+	bucketExpr := serviceStatusBucketExprSQL(startMS, spanMS)
 	selectSQL := fmt.Sprintf(`
 		%s as bucket_index,
 		model_name,
@@ -236,7 +236,7 @@ func (s GatewayService) recentUsageBuckets(start time.Time, end time.Time, model
 		Select(selectSQL).
 		Where("create_time >= ? AND create_time < ?", startMS, endExclusive).
 		Where("model_name IN ?", modelNames).
-		Where("source IS NULL OR source = '' OR source = ?", domains.UsageLogSourceUser).
+		Where("source = ?", domains.UsageLogSourceUser).
 		Group(bucketExpr + ", model_name").
 		Scan(&rows).Error
 	if err != nil {
@@ -262,19 +262,12 @@ func publicModelNames(models []domains.ModelMeta) []string {
 	return modelNames
 }
 
-func serviceStatusBucketExprSQL(dialect string, startMS int64, spanMS int64) string {
+func serviceStatusBucketExprSQL(startMS int64, spanMS int64) string {
 	if spanMS <= 0 {
 		spanMS = 1
 	}
 	lastBucket := serviceStatusSegmentCount - 1
-	switch dialect {
-	case "mysql":
-		return fmt.Sprintf("LEAST(FLOOR((create_time - %d) / %d), %d)", startMS, spanMS, lastBucket)
-	case "postgres":
-		return fmt.Sprintf("LEAST(FLOOR((create_time - %d)::numeric / %d), %d)", startMS, spanMS, lastBucket)
-	default:
-		return fmt.Sprintf("MIN(CAST((create_time - %d) / %d AS INTEGER), %d)", startMS, spanMS, lastBucket)
-	}
+	return fmt.Sprintf("LEAST((create_time - %d) / %d, %d)", startMS, spanMS, lastBucket)
 }
 
 func databaseHealthStatus() string {
