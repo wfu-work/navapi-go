@@ -6,6 +6,7 @@ import (
 
 	"navapi-go/domains"
 	"navapi-go/middlewares"
+	"navapi-go/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wfu-work/nav-common-go-lib/response"
@@ -37,6 +38,43 @@ func (a TokenApi) List(c *gin.Context) {
 // @Router /token/self/list [get]
 func (a TokenApi) SelfList(c *gin.Context) {
 	a.list(c, middlewares.ScopedUserGuid(c))
+}
+
+// Concurrency API 密钥当前并发
+// @Summary API 密钥当前并发
+// @Description 返回所有 API 密钥当前正在处理的请求数
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Produce json
+// @Success 200 {object} response.Response{data=map[string]int,msg=string}
+// @Router /token/concurrency [get]
+func (a TokenApi) Concurrency(c *gin.Context) {
+	a.concurrency(c, "")
+}
+
+// SelfConcurrency 当前用户 API 密钥当前并发
+// @Summary 当前用户 API 密钥当前并发
+// @Description 返回当前用户各 API 密钥正在处理的请求数
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Produce json
+// @Success 200 {object} response.Response{data=map[string]int,msg=string}
+// @Router /token/self/concurrency [get]
+func (a TokenApi) SelfConcurrency(c *gin.Context) {
+	a.concurrency(c, middlewares.ScopedUserGuid(c))
+}
+
+func (a TokenApi) concurrency(c *gin.Context, userGuid string) {
+	tokens, err := tokenService.List(userGuid)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	tokenGuids := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		tokenGuids = append(tokenGuids, token.Guid)
+	}
+	response.Ok(services.UserConcurrencyServiceApp.ActiveTokenCounts(tokenGuids), c)
 }
 
 func (a TokenApi) list(c *gin.Context, userGuid string) {

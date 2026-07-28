@@ -14,6 +14,7 @@ func (r TokenRouter) InitTokenRouter(router *gin.RouterGroup) {
 	group := router.Group("token")
 	{
 		group.GET("/self/list", tokenApi.SelfList)
+		group.GET("/self/concurrency", tokenApi.SelfConcurrency)
 		group.GET("/self/:id", tokenApi.SelfGet)
 		group.POST("/self", tokenApi.CreateSelf)
 		group.PUT("/self", tokenApi.UpdateSelf)
@@ -21,6 +22,7 @@ func (r TokenRouter) InitTokenRouter(router *gin.RouterGroup) {
 		group.POST("/self/:id/key", tokenApi.KeySelf)
 
 		group.GET("/list", middlewares.AdminOnly(), tokenApi.List)
+		group.GET("/concurrency", middlewares.AdminOnly(), tokenApi.Concurrency)
 		group.GET("/:id", middlewares.AdminOnly(), tokenApi.Get)
 		group.POST("/", middlewares.AdminOnly(), tokenApi.Create)
 		group.PUT("/", middlewares.AdminOnly(), tokenApi.Update)

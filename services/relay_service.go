@@ -111,7 +111,7 @@ func (s RelayService) RelayHTTP(c *gin.Context, token *domains.ApiToken, endpoin
 	if token == nil {
 		return nil, false, &RelayHTTPError{StatusCode: http.StatusUnauthorized, Message: "token is invalid"}
 	}
-	release, err := UserConcurrencyServiceApp.Acquire(token.UserGuid)
+	release, err := UserConcurrencyServiceApp.Acquire(token.UserGuid, token.Guid)
 	if err != nil {
 		return nil, false, err
 	}
