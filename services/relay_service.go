@@ -1599,10 +1599,14 @@ func ensureOpenAIStreamUsage(body []byte, contentType string, upstreamPath strin
 		return body
 	}
 	if strings.TrimSpace(upstreamPath) == "/v1/responses" {
-		if _, exists := payload["stream_options"]; !exists {
+		changed := sanitizeResponsesInputMessageIDs(payload["input"])
+		if _, exists := payload["stream_options"]; exists {
+			delete(payload, "stream_options")
+			changed = true
+		}
+		if !changed {
 			return body
 		}
-		delete(payload, "stream_options")
 		next, err := json.Marshal(payload)
 		if err != nil {
 			return body
@@ -1627,6 +1631,52 @@ func ensureOpenAIStreamUsage(body []byte, contentType string, upstreamPath strin
 		return body
 	}
 	return next
+}
+
+func sanitizeResponsesInputMessageIDs(input any) bool {
+	changed := false
+	switch typed := input.(type) {
+	case []any:
+		for _, item := range typed {
+			changed = sanitizeResponsesInputMessageID(item) || changed
+		}
+	case map[string]any:
+		changed = sanitizeResponsesInputMessageID(typed)
+	}
+	return changed
+}
+
+func sanitizeResponsesInputMessageID(value any) bool {
+	item, ok := value.(map[string]any)
+	if !ok || !isResponsesInputMessage(item) {
+		return false
+	}
+	idValue, exists := item["id"]
+	if !exists {
+		return false
+	}
+	id, ok := idValue.(string)
+	if ok && strings.HasPrefix(id, "msg_") {
+		return false
+	}
+	delete(item, "id")
+	return true
+}
+
+func isResponsesInputMessage(item map[string]any) bool {
+	itemType := strings.ToLower(strings.TrimSpace(fmt.Sprint(item["type"])))
+	if itemType == "message" {
+		return true
+	}
+	if itemType != "" && itemType != "<nil>" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(fmt.Sprint(item["role"]))) {
+	case "user", "assistant", "system", "developer":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseUsage(body []byte, contentType string) vos.Usage {
