@@ -343,8 +343,9 @@ func (s *TokenService) Usage(userGuid string) ([]TokenUsage, error) {
 			PromptTokens     int64
 			CompletionTokens int64
 		}
+		requestWeight := usageRequestCountSQL()
 		db := s.DB().Model(&domains.UsageLog{}).
-			Select("token_guid, COUNT(*) AS total_requests, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END),0) AS success_requests, COALESCE(SUM(quota),0) AS quota, COALESCE(SUM(prompt_tokens),0) AS prompt_tokens, COALESCE(SUM(completion_tokens),0) AS completion_tokens").
+			Select("token_guid, COALESCE(SUM("+requestWeight+"),0) AS total_requests, COALESCE(SUM(CASE WHEN status = 'success' THEN "+requestWeight+" ELSE 0 END),0) AS success_requests, COALESCE(SUM(quota),0) AS quota, COALESCE(SUM(prompt_tokens),0) AS prompt_tokens, COALESCE(SUM(completion_tokens),0) AS completion_tokens").
 			Where("token_guid IN ?", tokenGuids)
 		db = applyUserUsageLogSourceFilter(db)
 		if userGuid != "" {

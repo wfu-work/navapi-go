@@ -2,6 +2,7 @@ package apis
 
 import (
 	"strconv"
+	"strings"
 
 	"navapi-go/middlewares"
 	"navapi-go/services"
@@ -173,6 +174,34 @@ func (a UsageLogApi) UsageSummary(c *gin.Context) {
 // @Router /usage/self/summary [get]
 func (a UsageLogApi) SelfUsageSummary(c *gin.Context) {
 	summary, err := logService.UsageSummaryByQuery(middlewares.ScopedUserGuid(c), parseUsageSummaryQuery(c))
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(summary, c)
+}
+
+// UserUsageSummary 管理端单用户用量汇总
+// @Summary 管理端单用户用量汇总
+// @Description 按指定用户汇总请求、Tokens、模型和 API 密钥用量
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param userGuid path string true "用户 GUID"
+// @Param days query int false "统计天数"
+// @Param startTime query int false "开始时间"
+// @Param endTime query int false "结束时间"
+// @Param top query int false "返回数量"
+// @Success 200 {object} response.Response{data=object,msg=string}
+// @Router /usage/users/{userGuid}/summary [get]
+func (a UsageLogApi) UserUsageSummary(c *gin.Context) {
+	userGuid := strings.TrimSpace(c.Param("userGuid"))
+	if userGuid == "" {
+		response.FailWithMessage("用户 GUID 不能为空", c)
+		return
+	}
+	summary, err := logService.UsageSummaryByQuery(userGuid, parseUsageSummaryQuery(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

@@ -154,6 +154,7 @@ var navapiAPIPermissionSeeds = []apiPermissionSeed{
 	{Guid: "navapi-api-usage-list", Name: "用量日志", Code: "navapi.usage.list", Path: "/usage/list", Verb: "GET", Sort: 405, Group: "用量"},
 	{Guid: "navapi-api-usage-stat", Name: "用量统计", Code: "navapi.usage.stat", Path: "/usage/stat", Verb: "GET", Sort: 406, Group: "用量"},
 	{Guid: "navapi-api-usage-summary", Name: "用量汇总", Code: "navapi.usage.summary", Path: "/usage/summary", Verb: "GET", Sort: 407, Group: "用量"},
+	{Guid: "navapi-api-usage-user-summary", Name: "用户用量汇总", Code: "navapi.usage.user.summary", Path: "/usage/users/:userGuid/summary", Verb: "GET", Sort: 408, Group: "用量"},
 
 	{Guid: "navapi-api-balance-self", Name: "当前用户余额", Code: "navapi.balance.self", Path: "/balance/self", Verb: "GET", User: true, Sort: 500, Group: "客户"},
 	{Guid: "navapi-api-balance-list", Name: "客户余额列表", Code: "navapi.balance.list", Path: "/balance/list", Verb: "GET", Sort: 501, Group: "客户"},

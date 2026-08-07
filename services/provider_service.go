@@ -218,6 +218,7 @@ func (s *ProviderService) Save(provider *domains.VendorMeta) error {
 		return err
 	}
 	if existing == nil {
+		resetProviderBalanceSnapshot(provider)
 		if err := createWithCrud(&s.CrudService, provider); err != nil {
 			return err
 		}
@@ -232,6 +233,14 @@ func (s *ProviderService) Save(provider *domains.VendorMeta) error {
 	}
 	if provider.ProxyPassword == "" {
 		provider.ProxyPassword = existing.ProxyPassword
+	}
+	if provider.BalanceAccessToken == "" {
+		provider.BalanceAccessToken = existing.BalanceAccessToken
+	}
+	balanceConfigChanged := providerBalanceConfigChanged(existing, provider)
+	copyProviderBalanceSnapshot(provider, existing)
+	if balanceConfigChanged && provider.BalanceCheckEnabled {
+		resetProviderBalanceSnapshot(provider)
 	}
 	provider.Id = existing.Id
 	provider.UpdateTime = time.Now().UnixMilli()
@@ -316,6 +325,61 @@ func normalizeProviderBalanceConfig(provider *domains.VendorMeta) {
 	provider.BalancePlanPath = strings.TrimSpace(provider.BalancePlanPath)
 	provider.BalanceValidPath = strings.TrimSpace(provider.BalanceValidPath)
 	provider.BalanceErrorPath = strings.TrimSpace(provider.BalanceErrorPath)
+}
+
+func providerBalanceConfigChanged(existing *domains.VendorMeta, next *domains.VendorMeta) bool {
+	if existing == nil || next == nil {
+		return true
+	}
+	return existing.BalanceCheckEnabled != next.BalanceCheckEnabled ||
+		existing.BalanceTemplate != next.BalanceTemplate ||
+		existing.BalanceBaseURL != next.BalanceBaseURL ||
+		existing.BalanceAccessToken != next.BalanceAccessToken ||
+		existing.BalanceUserID != next.BalanceUserID ||
+		existing.BalanceCustomPath != next.BalanceCustomPath ||
+		existing.BalanceAuthType != next.BalanceAuthType ||
+		existing.BalanceRemainingPath != next.BalanceRemainingPath ||
+		existing.BalanceMultiplier != next.BalanceMultiplier ||
+		existing.BalanceUnit != next.BalanceUnit ||
+		existing.BalanceTotalPath != next.BalanceTotalPath ||
+		existing.BalanceUsedPath != next.BalanceUsedPath ||
+		existing.BalancePlanPath != next.BalancePlanPath ||
+		existing.BalanceValidPath != next.BalanceValidPath ||
+		existing.BalanceErrorPath != next.BalanceErrorPath
+}
+
+func copyProviderBalanceSnapshot(target *domains.VendorMeta, source *domains.VendorMeta) {
+	if target == nil || source == nil {
+		return
+	}
+	target.BalanceQueryOK = source.BalanceQueryOK
+	target.BalanceRemaining = source.BalanceRemaining
+	target.BalanceTotal = source.BalanceTotal
+	target.BalanceUsed = source.BalanceUsed
+	target.BalanceSnapshotUnit = source.BalanceSnapshotUnit
+	target.BalanceSnapshotPlan = source.BalanceSnapshotPlan
+	target.BalanceQueryMessage = source.BalanceQueryMessage
+	target.BalanceStatusCode = source.BalanceStatusCode
+	target.BalanceResponseTime = source.BalanceResponseTime
+	target.BalanceCheckedTime = source.BalanceCheckedTime
+	target.BalanceSuccessTime = source.BalanceSuccessTime
+}
+
+func resetProviderBalanceSnapshot(provider *domains.VendorMeta) {
+	if provider == nil {
+		return
+	}
+	provider.BalanceQueryOK = false
+	provider.BalanceRemaining = nil
+	provider.BalanceTotal = nil
+	provider.BalanceUsed = nil
+	provider.BalanceSnapshotUnit = ""
+	provider.BalanceSnapshotPlan = ""
+	provider.BalanceQueryMessage = ""
+	provider.BalanceStatusCode = 0
+	provider.BalanceResponseTime = 0
+	provider.BalanceCheckedTime = 0
+	provider.BalanceSuccessTime = 0
 }
 
 func (s *ProviderService) ListEnabledModels() ([]string, error) {

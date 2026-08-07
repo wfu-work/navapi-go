@@ -81,11 +81,10 @@ type RelayAttempt struct {
 }
 
 type preparedRelay struct {
-	Body        []byte
-	ModelName   string
-	Candidates  []domains.VendorMeta
-	IsStream    bool
-	Reservation *billingReservation
+	Body       []byte
+	ModelName  string
+	Candidates []domains.VendorMeta
+	IsStream   bool
 }
 
 type RelayHTTPError struct {
@@ -161,19 +160,11 @@ func (s RelayService) prepareRelay(c *gin.Context, token *domains.ApiToken, endp
 		return nil, err
 	}
 	candidates = ProviderServiceApp.ApplyAffinity(token.Guid, modelName, candidates)
-	var reservation *billingReservation
-	if !endpoint.NoBilling {
-		reservation, err = s.preauthorizeCost(token, endpoint, modelName, body)
-		if err != nil {
-			return nil, err
-		}
-	}
 	return &preparedRelay{
-		Body:        body,
-		ModelName:   modelName,
-		Candidates:  candidates,
-		IsStream:    isStreamRequest(body),
-		Reservation: reservation,
+		Body:       body,
+		ModelName:  modelName,
+		Candidates: candidates,
+		IsStream:   isStreamRequest(body),
 	}, nil
 }
 
@@ -182,49 +173,84 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	var provider *domains.VendorMeta
 	var result *RelayResult
 	var err error
+	var reservation *billingReservation
+	preauthorized := endpoint.NoBilling
 	attempts := 0
 	routeAttempts := make([]RelayAttempt, 0, len(prepared.Candidates))
 	var circuitRetryAfter time.Duration
-	for i := range prepared.Candidates {
-		current := prepared.Candidates[i]
-		permit, retryAfter, available := ProviderCircuitBreakerApp.TryAcquire(current.Guid, prepared.ModelName, endpoint.UpstreamPath)
-		if !available {
-			if retryAfter > 0 && (circuitRetryAfter <= 0 || retryAfter < circuitRetryAfter) {
-				circuitRetryAfter = retryAfter
+	var probeDone <-chan struct{}
+	for pass := 0; pass < 2; pass++ {
+		for i := range prepared.Candidates {
+			current := prepared.Candidates[i]
+			permit, retryAfter, currentProbeDone, available := ProviderCircuitBreakerApp.TryAcquire(current.Guid, prepared.ModelName, endpoint.UpstreamPath)
+			if !available {
+				if retryAfter > 0 && (circuitRetryAfter <= 0 || retryAfter < circuitRetryAfter) {
+					circuitRetryAfter = retryAfter
+				}
+				if probeDone == nil && currentProbeDone != nil {
+					probeDone = currentProbeDone
+				}
+				routeAttempts = append(routeAttempts, newCircuitSkippedAttempt(&current, prepared.ModelName, retryAfter))
+				continue
 			}
-			routeAttempts = append(routeAttempts, newCircuitSkippedAttempt(&current, prepared.ModelName, retryAfter))
-			continue
+			if !preauthorized {
+				reservation, err = s.preauthorizeCost(token, endpoint, prepared.ModelName, prepared.Body)
+				if err != nil {
+					ProviderCircuitBreakerApp.Record(permit, providerCircuitOutcome{Kind: providerCircuitIgnored})
+					return nil, err
+				}
+				preauthorized = true
+			}
+			attempts++
+			forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
+			provider = &current
+			attemptStart := time.Now()
+			result, err = s.forward(c.Request.Context(), &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery)
+			if result != nil {
+				result.Timing.AttemptCount = attempts
+			}
+			outcome := classifyProviderCircuitOutcome(c.Request.Context(), result, err, time.Now())
+			ProviderCircuitBreakerApp.Record(permit, outcome)
+			if shouldForgetProviderAffinity(outcome, result, err) {
+				ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
+			}
+			maybeAutoDisableProvider(&current, result)
+			willRetry := (err != nil || (result != nil && shouldRetryRelayStatus(result.StatusCode))) && i < len(prepared.Candidates)-1
+			routeAttempts = append(routeAttempts, newRelayAttempt(attempts, &current, prepared.ModelName, result, err, time.Since(attemptStart), willRetry))
+			if err != nil && willRetry {
+				continue
+			}
+			if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && willRetry {
+				continue
+			}
+			break
 		}
-		attempts++
-		forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
-		provider = &current
-		attemptStart := time.Now()
-		result, err = s.forward(c.Request.Context(), &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery)
-		if result != nil {
-			result.Timing.AttemptCount = attempts
+		if attempts > 0 || probeDone == nil || pass == 1 {
+			break
 		}
-		outcome := classifyProviderCircuitOutcome(c.Request.Context(), result, err, time.Now())
-		ProviderCircuitBreakerApp.Record(permit, outcome)
-		if shouldForgetProviderAffinity(outcome, result, err) {
-			ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
+		probeCompleted, waitErr := waitForProviderProbe(c.Request.Context(), probeDone)
+		if waitErr != nil {
+			err = waitErr
+			useTime := time.Since(start).Milliseconds()
+			provider = firstRelayProvider(prepared.Candidates)
+			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts))
+			return nil, err
 		}
-		maybeAutoDisableProvider(&current, result)
-		willRetry := (err != nil || (result != nil && shouldRetryRelayStatus(result.StatusCode))) && i < len(prepared.Candidates)-1
-		routeAttempts = append(routeAttempts, newRelayAttempt(attempts, &current, prepared.ModelName, result, err, time.Since(attemptStart), willRetry))
-		if err != nil && willRetry {
-			continue
+		if !probeCompleted {
+			if circuitRetryAfter < defaultProviderProbeWait {
+				circuitRetryAfter = defaultProviderProbeWait
+			}
+			break
 		}
-		if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && willRetry {
-			continue
-		}
-		break
+		routeAttempts = routeAttempts[:0]
+		circuitRetryAfter = 0
+		probeDone = nil
 	}
 	useTime := time.Since(start).Milliseconds()
 	if attempts == 0 {
 		err = providerCircuitUnavailableError(circuitRetryAfter)
-		s.cancelReservation(token, prepared.Reservation, err.Error())
 		provider = firstRelayProvider(prepared.Candidates)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts))
+		_ = LogServiceApp.CreateCircuitRejection(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts), endpoint.UpstreamPath)
 		return nil, err
 	}
 	status := "success"
@@ -232,14 +258,14 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	if err != nil {
 		status = "error"
 		content = relayFailureMessage(result, err)
-		s.cancelReservation(token, prepared.Reservation, content)
+		s.cancelReservation(token, reservation, content)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, "", routeAttempts, result))
 		return nil, err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
 		status = "error"
 		content = relayFailureMessage(result, nil)
-		s.cancelReservation(token, prepared.Reservation, content)
+		s.cancelReservation(token, reservation, content)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 		return result, nil
 	}
@@ -249,10 +275,10 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	quota := calculateFinalQuota(prepared.ModelName, token.Group, result.Usage, prepared.Body, 0)
 	if !endpoint.NoBilling {
 		detail := PricingServiceApp.CalculateQuotaDetail(prepared.ModelName, token.Group, result.Usage, estimateQuotaFromBody(prepared.Body))
-		if err := s.settleCost(token, prepared.Reservation, CostToAmountMicros(detail.FinalCost), detail); err != nil {
+		if err := s.settleCost(token, reservation, CostToAmountMicros(detail.FinalCost), detail); err != nil {
 			status = "error"
 			content = err.Error()
-			s.cancelReservation(token, prepared.Reservation, content)
+			s.cancelReservation(token, reservation, content)
 			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 			return nil, err
 		}
@@ -268,54 +294,89 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	var provider *domains.VendorMeta
 	var result *RelayResult
 	var err error
+	var reservation *billingReservation
+	preauthorized := endpoint.NoBilling
 	attempts := 0
 	routeAttempts := make([]RelayAttempt, 0, len(prepared.Candidates))
 	var circuitRetryAfter time.Duration
-	for i := range prepared.Candidates {
-		current := prepared.Candidates[i]
-		permit, retryAfter, available := ProviderCircuitBreakerApp.TryAcquire(current.Guid, prepared.ModelName, endpoint.UpstreamPath)
-		if !available {
-			if retryAfter > 0 && (circuitRetryAfter <= 0 || retryAfter < circuitRetryAfter) {
-				circuitRetryAfter = retryAfter
+	var probeDone <-chan struct{}
+	for pass := 0; pass < 2; pass++ {
+		for i := range prepared.Candidates {
+			current := prepared.Candidates[i]
+			permit, retryAfter, currentProbeDone, available := ProviderCircuitBreakerApp.TryAcquire(current.Guid, prepared.ModelName, endpoint.UpstreamPath)
+			if !available {
+				if retryAfter > 0 && (circuitRetryAfter <= 0 || retryAfter < circuitRetryAfter) {
+					circuitRetryAfter = retryAfter
+				}
+				if probeDone == nil && currentProbeDone != nil {
+					probeDone = currentProbeDone
+				}
+				routeAttempts = append(routeAttempts, newCircuitSkippedAttempt(&current, prepared.ModelName, retryAfter))
+				continue
 			}
-			routeAttempts = append(routeAttempts, newCircuitSkippedAttempt(&current, prepared.ModelName, retryAfter))
-			continue
+			if !preauthorized {
+				reservation, err = s.preauthorizeCost(token, endpoint, prepared.ModelName, prepared.Body)
+				if err != nil {
+					ProviderCircuitBreakerApp.Record(permit, providerCircuitOutcome{Kind: providerCircuitIgnored})
+					return err
+				}
+				preauthorized = true
+			}
+			attempts++
+			forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
+			provider = &current
+			attemptStart := time.Now()
+			result, err = s.forwardStream(c, &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery, i < len(prepared.Candidates)-1)
+			if result != nil {
+				result.Timing.AttemptCount = attempts
+			}
+			outcome := classifyProviderCircuitOutcome(c.Request.Context(), result, err, time.Now())
+			ProviderCircuitBreakerApp.Record(permit, outcome)
+			if shouldForgetProviderAffinity(outcome, result, err) {
+				ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
+			}
+			maybeAutoDisableProvider(&current, result)
+			willRetry := i < len(prepared.Candidates)-1 && ((err != nil && canRetryStreamAttempt(result)) || (err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode)))
+			routeAttempts = append(routeAttempts, newRelayAttempt(attempts, &current, prepared.ModelName, result, err, time.Since(attemptStart), willRetry))
+			if err != nil && willRetry {
+				continue
+			}
+			if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && willRetry {
+				continue
+			}
+			break
 		}
-		attempts++
-		forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
-		provider = &current
-		attemptStart := time.Now()
-		result, err = s.forwardStream(c, &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery, i < len(prepared.Candidates)-1)
-		if result != nil {
-			result.Timing.AttemptCount = attempts
+		if attempts > 0 || probeDone == nil || pass == 1 {
+			break
 		}
-		outcome := classifyProviderCircuitOutcome(c.Request.Context(), result, err, time.Now())
-		ProviderCircuitBreakerApp.Record(permit, outcome)
-		if shouldForgetProviderAffinity(outcome, result, err) {
-			ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
+		probeCompleted, waitErr := waitForProviderProbe(c.Request.Context(), probeDone)
+		if waitErr != nil {
+			err = waitErr
+			useTime := time.Since(start).Milliseconds()
+			provider = firstRelayProvider(prepared.Candidates)
+			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts))
+			return err
 		}
-		maybeAutoDisableProvider(&current, result)
-		willRetry := i < len(prepared.Candidates)-1 && ((err != nil && canRetryStreamAttempt(result)) || (err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode)))
-		routeAttempts = append(routeAttempts, newRelayAttempt(attempts, &current, prepared.ModelName, result, err, time.Since(attemptStart), willRetry))
-		if err != nil && willRetry {
-			continue
+		if !probeCompleted {
+			if circuitRetryAfter < defaultProviderProbeWait {
+				circuitRetryAfter = defaultProviderProbeWait
+			}
+			break
 		}
-		if err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode) && willRetry {
-			continue
-		}
-		break
+		routeAttempts = routeAttempts[:0]
+		circuitRetryAfter = 0
+		probeDone = nil
 	}
 
 	useTime := time.Since(start).Milliseconds()
 	if attempts == 0 {
 		err = providerCircuitUnavailableError(circuitRetryAfter)
-		s.cancelReservation(token, prepared.Reservation, err.Error())
 		provider = firstRelayProvider(prepared.Candidates)
-		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts))
+		_ = LogServiceApp.CreateCircuitRejection(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts), endpoint.UpstreamPath)
 		return err
 	}
 	if err != nil {
-		s.cancelReservation(token, prepared.Reservation, err.Error())
+		s.cancelReservation(token, reservation, err.Error())
 		usage := vos.Usage{}
 		firstResponseMs := int64(0)
 		upstreamRequestID := ""
@@ -329,7 +390,7 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	}
 	if result == nil {
 		err = errors.New("upstream response is empty")
-		s.cancelReservation(token, prepared.Reservation, err.Error())
+		s.cancelReservation(token, reservation, err.Error())
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts))
 		return err
 	}
@@ -338,13 +399,13 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 			writeBufferedStreamResult(c, result)
 		}
 		content := relayFailureMessage(result, nil)
-		s.cancelReservation(token, prepared.Reservation, content)
+		s.cancelReservation(token, reservation, content)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", content, prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 		return nil
 	}
 	if result.StreamSynthesized {
 		content := synthesizedStreamLogContent(result)
-		s.cancelReservation(token, prepared.Reservation, content)
+		s.cancelReservation(token, reservation, content)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "synthesized", content, prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 		return nil
 	}
@@ -356,16 +417,32 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 		quota = 0
 	} else {
 		detail := PricingServiceApp.CalculateQuotaDetail(prepared.ModelName, token.Group, result.Usage, estimateQuotaFromBody(prepared.Body))
-		if err := s.settleCost(token, prepared.Reservation, CostToAmountMicros(detail.FinalCost), detail); err != nil {
+		if err := s.settleCost(token, reservation, CostToAmountMicros(detail.FinalCost), detail); err != nil {
 			// The stream may already be on the wire, so settlement failures are
 			// recorded in logs instead of trying to replace the response body.
-			s.keepReservedCost(token, prepared.Reservation, detail)
+			s.keepReservedCost(token, reservation, detail)
 			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 			return nil
 		}
 	}
 	_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, quota, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "success", "", prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 	return nil
+}
+
+func waitForProviderProbe(ctx context.Context, probeDone <-chan struct{}) (bool, error) {
+	if probeDone == nil {
+		return false, nil
+	}
+	timer := time.NewTimer(defaultProviderProbeWait)
+	defer timer.Stop()
+	select {
+	case <-probeDone:
+		return true, nil
+	case <-timer.C:
+		return false, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 }
 
 func checkModelRateLimit(token *domains.ApiToken, modelName string) error {

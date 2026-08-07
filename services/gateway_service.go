@@ -220,16 +220,17 @@ func (s GatewayService) recentUsageBuckets(start time.Time, end time.Time, model
 		spanMS = 1
 	}
 	bucketExpr := serviceStatusBucketExprSQL(startMS, spanMS)
+	requestWeight := usageRequestCountSQL()
 	selectSQL := fmt.Sprintf(`
 		%s as bucket_index,
 		model_name,
-		COUNT(*) as requests,
-		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success_requests,
-		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as error_requests,
+		COALESCE(SUM(%s), 0) as requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN %s ELSE 0 END), 0) as success_requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE %s END), 0) as error_requests,
 		COALESCE(SUM(CASE WHEN first_response_time_ms > 0 THEN first_response_time_ms ELSE 0 END), 0) as latency_total_ms,
 		COALESCE(SUM(CASE WHEN first_response_time_ms > 0 THEN 1 ELSE 0 END), 0) as latency_samples,
 		COALESCE(MAX(create_time), 0) as last_request_at
-	`, bucketExpr)
+	`, bucketExpr, requestWeight, requestWeight, requestWeight)
 	var rows []serviceUsageBucketRow
 	err := global.NAV_DB.
 		Model(&domains.UsageLog{}).

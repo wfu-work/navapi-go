@@ -169,7 +169,7 @@ func (a ProviderApi) DebugRequest(c *gin.Context) {
 // @Success 200 {object} response.Response{data=services.ProviderBalanceResult,msg=string}
 // @Router /provider/{guid}/balance [get]
 func (a ProviderApi) Balance(c *gin.Context) {
-	result, err := providerService.Balance(providerGuidParam(c))
+	result, err := providerService.BalanceContext(c.Request.Context(), providerGuidParam(c))
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return

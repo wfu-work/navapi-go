@@ -20,5 +20,6 @@ func (r LogRouter) InitLogRouter(router *gin.RouterGroup) {
 		group.GET("/list", middlewares.AdminOnly(), logApi.List)
 		group.GET("/stat", middlewares.AdminOnly(), logApi.Stats)
 		group.GET("/summary", middlewares.AdminOnly(), logApi.UsageSummary)
+		group.GET("/users/:userGuid/summary", middlewares.AdminOnly(), logApi.UserUsageSummary)
 	}
 }

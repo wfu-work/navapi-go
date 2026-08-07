@@ -27,6 +27,7 @@ const (
 const (
 	defaultProviderNotFoundCooldown = 5 * time.Minute
 	defaultProviderThrottleCooldown = time.Minute
+	defaultProviderProbeWait        = 5 * time.Second
 )
 
 type providerCircuitKey struct {
@@ -42,6 +43,7 @@ type providerCircuitEntry struct {
 	Generation    uint64
 	OpenUntil     time.Time
 	ProbeInFlight bool
+	ProbeDone     chan struct{}
 	UpdatedAt     time.Time
 }
 
@@ -109,7 +111,7 @@ func providerCircuitSettingsFromOptions() providerCircuitSettings {
 	}
 }
 
-func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName string, endpoint string) (*providerCircuitPermit, time.Duration, bool) {
+func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName string, endpoint string) (*providerCircuitPermit, time.Duration, <-chan struct{}, bool) {
 	settings := b.settings()
 	permit := &providerCircuitPermit{
 		globalKey: providerCircuitKey{
@@ -128,7 +130,7 @@ func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName strin
 	}
 	if !settings.Enabled || permit.globalKey.ProviderGuid == "" {
 		permit.circuitDisabled = true
-		return permit, 0, true
+		return permit, 0, nil, true
 	}
 
 	now := b.now()
@@ -139,6 +141,7 @@ func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName strin
 
 	keys := []providerCircuitKey{permit.globalKey, permit.endpointKey}
 	var retryAfter time.Duration
+	var probeDone <-chan struct{}
 	for _, key := range keys {
 		entry := b.entries[key]
 		if entry == nil || entry.OpenUntil.IsZero() {
@@ -150,12 +153,17 @@ func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName strin
 			}
 			continue
 		}
-		if entry.ProbeInFlight && retryAfter < time.Second {
-			retryAfter = time.Second
+		if entry.ProbeInFlight {
+			if retryAfter < defaultProviderProbeWait {
+				retryAfter = defaultProviderProbeWait
+			}
+			if probeDone == nil {
+				probeDone = entry.ProbeDone
+			}
 		}
 	}
 	if retryAfter > 0 {
-		return nil, retryAfter, false
+		return nil, retryAfter, probeDone, false
 	}
 
 	for _, key := range keys {
@@ -167,10 +175,11 @@ func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName strin
 			continue
 		}
 		entry.ProbeInFlight = true
+		entry.ProbeDone = make(chan struct{})
 		entry.UpdatedAt = now
 		permit.halfOpenKeys[key] = struct{}{}
 	}
-	return permit, 0, true
+	return permit, 0, nil, true
 }
 
 func (b *ProviderCircuitBreaker) Record(permit *providerCircuitPermit, outcome providerCircuitOutcome) {
@@ -210,6 +219,9 @@ func (b *ProviderCircuitBreaker) Record(permit *providerCircuitPermit, outcome p
 
 func (b *ProviderCircuitBreaker) Reset() {
 	b.mu.Lock()
+	for _, entry := range b.entries {
+		finishProviderProbeLocked(entry)
+	}
 	b.entries = make(map[providerCircuitKey]*providerCircuitEntry)
 	b.generation++
 	b.mu.Unlock()
@@ -226,7 +238,7 @@ func (b *ProviderCircuitBreaker) failLocked(permit *providerCircuitPermit, key p
 		b.entries[key] = entry
 	}
 	_, wasHalfOpen := permit.halfOpenKeys[key]
-	entry.ProbeInFlight = false
+	finishProviderProbeLocked(entry)
 	entry.Failures++
 	entry.UpdatedAt = now
 	if !wasHalfOpen && entry.Failures < threshold {
@@ -246,6 +258,7 @@ func (b *ProviderCircuitBreaker) clearLocked(permit *providerCircuitPermit, key 
 	if entry == nil || entry.Generation != permit.generations[key] {
 		return
 	}
+	finishProviderProbeLocked(entry)
 	delete(b.entries, key)
 }
 
@@ -263,8 +276,19 @@ func (b *ProviderCircuitBreaker) releaseHalfOpenKeyLocked(permit *providerCircui
 		if entry.Generation != permit.generations[key] {
 			return
 		}
-		entry.ProbeInFlight = false
+		finishProviderProbeLocked(entry)
 		entry.UpdatedAt = now
+	}
+}
+
+func finishProviderProbeLocked(entry *providerCircuitEntry) {
+	if entry == nil {
+		return
+	}
+	entry.ProbeInFlight = false
+	if entry.ProbeDone != nil {
+		close(entry.ProbeDone)
+		entry.ProbeDone = nil
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"navapi-go/domains"
@@ -16,13 +17,42 @@ import (
 
 type LogService struct {
 	commonServices.CrudService[domains.UsageLog]
+	failureAggregator *failureLogAggregator
 }
 
-var LogServiceApp = new(LogService)
+const (
+	providerCoolingFailureCode = "provider_cooling_down"
+	failureAggregationWindow   = 30 * time.Second
+)
+
+type failureAggregateEntry struct {
+	ID        uint
+	FirstSeen time.Time
+}
+
+type failureLogAggregator struct {
+	mu      sync.Mutex
+	entries map[string]failureAggregateEntry
+	now     func() time.Time
+	window  time.Duration
+}
+
+func newFailureLogAggregator() *failureLogAggregator {
+	return &failureLogAggregator{
+		entries: make(map[string]failureAggregateEntry),
+		now:     time.Now,
+		window:  failureAggregationWindow,
+	}
+}
+
+var LogServiceApp = &LogService{failureAggregator: newFailureLogAggregator()}
 
 func (s *LogService) WithDB(db *gorm.DB) *LogService {
 	cloned := *s
 	cloned.CrudService = *s.CrudService.WithDB(db)
+	if cloned.failureAggregator == nil {
+		cloned.failureAggregator = newFailureLogAggregator()
+	}
 	return &cloned
 }
 
@@ -172,6 +202,72 @@ func (s *LogService) Create(log *domains.UsageLog) error {
 		return nil
 	}
 	return createWithCrud(&s.CrudService, log)
+}
+
+func (s *LogService) CreateCircuitRejection(log *domains.UsageLog, endpoint string) error {
+	if log == nil || log.AttemptCount != 0 || strings.TrimSpace(log.ProviderGuid) == "" {
+		return s.Create(log)
+	}
+	aggregator := s.failureAggregator
+	if aggregator == nil {
+		aggregator = newFailureLogAggregator()
+		s.failureAggregator = aggregator
+	}
+	now := aggregator.now()
+	if aggregator.window <= 0 {
+		aggregator.window = failureAggregationWindow
+	}
+	nowMillis := now.UnixMilli()
+	log.FailureCode = providerCoolingFailureCode
+	log.RepeatCount = 1
+	log.FirstSeenTime = nowMillis
+	log.LastSeenTime = nowMillis
+	key := circuitRejectionAggregateKey(log, endpoint)
+
+	aggregator.mu.Lock()
+	defer aggregator.mu.Unlock()
+	for cachedKey, entry := range aggregator.entries {
+		if now.Sub(entry.FirstSeen) >= aggregator.window {
+			delete(aggregator.entries, cachedKey)
+		}
+	}
+	if entry, ok := aggregator.entries[key]; ok && now.Sub(entry.FirstSeen) < aggregator.window {
+		result := s.DB().Model(&domains.UsageLog{}).
+			Where("id = ? AND failure_code = ?", entry.ID, providerCoolingFailureCode).
+			Updates(map[string]any{
+				"repeat_count":   gorm.Expr("CASE WHEN repeat_count > 0 THEN repeat_count + 1 ELSE 2 END"),
+				"use_time_ms":    gorm.Expr("COALESCE(use_time_ms, 0) + ?", log.UseTimeMs),
+				"last_seen_time": nowMillis,
+				"content":        log.Content,
+				"request_id":     log.RequestID,
+				"other":          log.Other,
+				"update_time":    nowMillis,
+			})
+		if result.Error != nil {
+			delete(aggregator.entries, key)
+			return result.Error
+		}
+		if result.RowsAffected > 0 {
+			return nil
+		}
+		delete(aggregator.entries, key)
+	}
+	if err := createWithCrud(&s.CrudService, log); err != nil {
+		return err
+	}
+	aggregator.entries[key] = failureAggregateEntry{ID: log.Id, FirstSeen: now}
+	return nil
+}
+
+func circuitRejectionAggregateKey(log *domains.UsageLog, endpoint string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(log.TokenGuid),
+		strings.TrimSpace(log.ModelName),
+		strings.TrimSpace(endpoint),
+		strings.TrimSpace(log.ProviderGuid),
+		strings.TrimSpace(log.ClientIP),
+		fmt.Sprint(log.IsStream),
+	}, "\x1f")
 }
 
 func (s *LogService) List(userGuid string, query UsageLogQuery) (vos.PageResult, error) {
@@ -589,19 +685,20 @@ func (s *LogService) usageRangeDB(userGuid string, query UsageSummaryQuery) *gor
 func (s *LogService) dailyUsageStats(userGuid string, query UsageSummaryQuery) (usageDailyStatsResult, error) {
 	db := s.usageRangeDB(userGuid, query)
 	dateExpr := usageDateExprSQL()
+	requestWeight := usageRequestCountSQL()
 	selectSQL := fmt.Sprintf(`
 		%s as usage_date,
-		COUNT(*) as requests,
-		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success,
-		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as errors,
+		COALESCE(SUM(%s), 0) as requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN %s ELSE 0 END), 0) as success,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE %s END), 0) as errors,
 		COALESCE(SUM(quota), 0) as quota,
 		%s as cost,
 		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
 		COALESCE(SUM(completion_tokens), 0) as completion_tokens,
 		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
 		%s as first_response_time_ms,
-		COALESCE(SUM(CASE WHEN is_stream THEN 1 ELSE 0 END), 0) as stream_requests
-		`, dateExpr, usageCostSumSQL(), usageFirstResponseTimeSumSQL())
+		COALESCE(SUM(CASE WHEN is_stream THEN %s ELSE 0 END), 0) as stream_requests
+		`, dateExpr, requestWeight, requestWeight, requestWeight, usageCostSumSQL(), usageFirstResponseTimeSumSQL(), requestWeight)
 	var rows []usageDailyAggregateRow
 	if err := db.Select(selectSQL).Group(dateExpr).Scan(&rows).Error; err != nil {
 		return usageDailyStatsResult{}, err
@@ -637,18 +734,19 @@ func (s *LogService) dailyUsageStats(userGuid string, query UsageSummaryQuery) (
 
 func (s *LogService) aggregateUsage(db *gorm.DB) (usageAggregateRow, error) {
 	var row usageAggregateRow
+	requestWeight := usageRequestCountSQL()
 	selectSQL := fmt.Sprintf(`
-		COUNT(*) as requests,
-		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success,
-		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as errors,
+		COALESCE(SUM(%s), 0) as requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN %s ELSE 0 END), 0) as success,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE %s END), 0) as errors,
 		COALESCE(SUM(quota), 0) as quota,
 		%s as cost,
 		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
 		COALESCE(SUM(completion_tokens), 0) as completion_tokens,
 		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
 		%s as first_response_time_ms,
-		COALESCE(SUM(CASE WHEN is_stream THEN 1 ELSE 0 END), 0) as stream_requests
-		`, usageCostSumSQL(), usageFirstResponseTimeSumSQL())
+		COALESCE(SUM(CASE WHEN is_stream THEN %s ELSE 0 END), 0) as stream_requests
+		`, requestWeight, requestWeight, requestWeight, usageCostSumSQL(), usageFirstResponseTimeSumSQL(), requestWeight)
 	return row, db.Select(selectSQL).Scan(&row).Error
 }
 
@@ -658,25 +756,26 @@ func (s *LogService) usageDimensionStats(userGuid string, query UsageSummaryQuer
 	if extraSelect != "" {
 		extra = ", " + extraSelect
 	}
+	requestWeight := usageRequestCountSQL()
 	selectSQL := fmt.Sprintf(`
 		%s as stat_key,
 		%s as name%s,
-		COUNT(*) as requests,
-		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success,
-		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as errors,
+		COALESCE(SUM(%s), 0) as requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN %s ELSE 0 END), 0) as success,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE %s END), 0) as errors,
 		COALESCE(SUM(quota), 0) as quota,
 		%s as cost,
 		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
 		COALESCE(SUM(completion_tokens), 0) as completion_tokens,
 		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
 		%s as first_response_time_ms
-		`, keyExpr, nameExpr, extra, usageCostSumSQL(), usageFirstResponseTimeSumSQL())
+		`, keyExpr, nameExpr, extra, requestWeight, requestWeight, requestWeight, usageCostSumSQL(), usageFirstResponseTimeSumSQL())
 	var rows []usageDimensionAggregateRow
 	if err := db.Select(selectSQL).
 		Group(keyExpr + ", " + nameExpr).
 		Order(usageCostSumSQL() + " DESC").
 		Order("COALESCE(SUM(quota), 0) DESC").
-		Order("COUNT(*) DESC").
+		Order("COALESCE(SUM(" + requestWeight + "), 0) DESC").
 		Limit(query.TopN).
 		Scan(&rows).Error; err != nil {
 		return nil, err
@@ -710,17 +809,18 @@ func (s *LogService) usageModelSeries(userGuid string, query UsageSummaryQuery, 
 	seriesByModel := map[string]map[string]*DailyUsageData{}
 	db := s.usageRangeDB(userGuid, query).Where("model_name IN ?", modelNames)
 	dateExpr := usageDateExprSQL()
+	requestWeight := usageRequestCountSQL()
 	selectSQL := fmt.Sprintf(`
 		%s as usage_date,
 		model_name,
-		COUNT(*) as requests,
-		COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success,
-		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE 1 END), 0) as errors,
+		COALESCE(SUM(%s), 0) as requests,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN %s ELSE 0 END), 0) as success,
+		COALESCE(SUM(CASE WHEN status = 'success' THEN 0 ELSE %s END), 0) as errors,
 		COALESCE(SUM(quota), 0) as quota,
 		%s as cost,
 		COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
 		COALESCE(SUM(completion_tokens), 0) as completion_tokens
-	`, dateExpr, usageCostSumSQL())
+	`, dateExpr, requestWeight, requestWeight, requestWeight, usageCostSumSQL())
 	var rows []usageModelDailyAggregateRow
 	if err := db.Select(selectSQL).Group(dateExpr + ", model_name").Scan(&rows).Error; err != nil {
 		return nil, err
@@ -789,6 +889,10 @@ func avgFirstResponseTime(total int64, count int64) int64 {
 		return 0
 	}
 	return total / count
+}
+
+func usageRequestCountSQL() string {
+	return "CASE WHEN repeat_count > 0 THEN repeat_count ELSE 1 END"
 }
 
 func usageFirstResponseTimeSumSQL() string {

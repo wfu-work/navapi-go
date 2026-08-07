@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"navapi-go/domains"
@@ -21,7 +24,9 @@ const (
 	balanceAuthAccessToken = "access_token"
 	balanceAuthNone        = "none"
 
-	defaultNewAPIQuotaMultiplier = 1.0 / 500000.0
+	defaultNewAPIQuotaMultiplier  = 1.0 / 500000.0
+	defaultBalanceRefreshInterval = 5 * time.Minute
+	defaultBalanceRefreshWorkers  = 4
 )
 
 type ProviderBalanceResult struct {
@@ -39,15 +44,30 @@ type ProviderBalanceResult struct {
 	Plan             string   `json:"plan,omitempty"`
 	Valid            *bool    `json:"valid,omitempty"`
 	Message          string   `json:"message,omitempty"`
+	CheckedTime      int64    `json:"checkedTime,omitempty"`
+	SuccessTime      int64    `json:"successTime,omitempty"`
 	htmlResponse     bool
 }
 
+type ProviderBalanceRefreshSummary struct {
+	Due       int
+	Succeeded int
+	Failed    int
+	Skipped   bool
+}
+
+var providerBalanceRefreshRunning atomic.Bool
+
 func (s *ProviderService) Balance(guid string) (*ProviderBalanceResult, error) {
+	return s.BalanceContext(context.Background(), guid)
+}
+
+func (s *ProviderService) BalanceContext(ctx context.Context, guid string) (*ProviderBalanceResult, error) {
 	provider, err := s.GetByGUID(guid)
 	if err != nil {
 		return nil, err
 	}
-	return s.queryBalance(provider)
+	return s.refreshProviderBalance(ctx, provider)
 }
 
 func (s *ProviderService) TestBalance(provider *domains.VendorMeta) (*ProviderBalanceResult, error) {
@@ -55,7 +75,7 @@ func (s *ProviderService) TestBalance(provider *domains.VendorMeta) (*ProviderBa
 		return nil, errors.New("provider is required")
 	}
 	s.fillProviderSecretFields(provider)
-	result, err := s.queryBalance(provider)
+	result, err := s.queryBalance(context.Background(), provider)
 	if err != nil || !shouldProbeSub2Balance(provider, result) {
 		return result, err
 	}
@@ -67,7 +87,7 @@ func (s *ProviderService) TestBalance(provider *domains.VendorMeta) (*ProviderBa
 		return result, nil
 	}
 	sub2Provider.BalanceCustomPath = sub2TargetURL
-	detected, detectErr := s.queryBalance(&sub2Provider)
+	detected, detectErr := s.queryBalance(context.Background(), &sub2Provider)
 	if detectErr == nil && detected.OK {
 		detected.DetectedTemplate = balanceTemplateSub2
 		return detected, nil
@@ -75,7 +95,7 @@ func (s *ProviderService) TestBalance(provider *domains.VendorMeta) (*ProviderBa
 	return result, nil
 }
 
-func (s *ProviderService) queryBalance(provider *domains.VendorMeta) (*ProviderBalanceResult, error) {
+func (s *ProviderService) queryBalance(ctx context.Context, provider *domains.VendorMeta) (*ProviderBalanceResult, error) {
 	if provider == nil {
 		return nil, errors.New("provider is required")
 	}
@@ -88,7 +108,10 @@ func (s *ProviderService) queryBalance(provider *domains.VendorMeta) (*ProviderB
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodGet, targetURL, nil)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +189,152 @@ func (s *ProviderService) queryBalance(provider *domains.VendorMeta) (*ProviderB
 		result.Message = "balance query succeeded"
 	}
 	return result, nil
+}
+
+func (s *ProviderService) RefreshDueBalances(ctx context.Context) (ProviderBalanceRefreshSummary, error) {
+	if !providerBalanceRefreshRunning.CompareAndSwap(false, true) {
+		return ProviderBalanceRefreshSummary{Skipped: true}, nil
+	}
+	defer providerBalanceRefreshRunning.Store(false)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	intervalSeconds := OptionServiceApp.Int64("provider.balance_refresh_interval_seconds", int64(defaultBalanceRefreshInterval/time.Second))
+	if intervalSeconds <= 0 {
+		intervalSeconds = int64(defaultBalanceRefreshInterval / time.Second)
+	}
+	workers := OptionServiceApp.Int64("provider.balance_refresh_workers", defaultBalanceRefreshWorkers)
+	if workers <= 0 {
+		workers = defaultBalanceRefreshWorkers
+	}
+	if workers > 16 {
+		workers = 16
+	}
+	cutoff := time.Now().Add(-time.Duration(intervalSeconds) * time.Second).UnixMilli()
+	db := s.DB()
+	if db == nil {
+		return ProviderBalanceRefreshSummary{}, errors.New("database is not initialized")
+	}
+	var providers []domains.VendorMeta
+	if err := db.
+		Where("balance_check_enabled = ? AND (balance_checked_time = 0 OR balance_checked_time <= ?)", true, cutoff).
+		Order("balance_checked_time asc, id asc").
+		Find(&providers).Error; err != nil {
+		return ProviderBalanceRefreshSummary{}, err
+	}
+	summary := ProviderBalanceRefreshSummary{Due: len(providers)}
+	if len(providers) == 0 {
+		return summary, nil
+	}
+	jobs := make(chan *domains.VendorMeta)
+	var waitGroup sync.WaitGroup
+	var mu sync.Mutex
+	for range workers {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for provider := range jobs {
+				result, err := s.refreshProviderBalance(ctx, provider)
+				mu.Lock()
+				if err == nil && result != nil && result.OK {
+					summary.Succeeded++
+				} else {
+					summary.Failed++
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for i := range providers {
+		select {
+		case jobs <- &providers[i]:
+		case <-ctx.Done():
+			close(jobs)
+			waitGroup.Wait()
+			return summary, ctx.Err()
+		}
+	}
+	close(jobs)
+	waitGroup.Wait()
+	return summary, nil
+}
+
+func (s *ProviderService) refreshProviderBalance(ctx context.Context, provider *domains.VendorMeta) (*ProviderBalanceResult, error) {
+	if provider == nil {
+		return nil, errors.New("provider is required")
+	}
+	if !provider.BalanceCheckEnabled {
+		return nil, errors.New("provider balance check is disabled")
+	}
+	db := s.DB()
+	if db == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	result, queryErr := s.queryBalance(ctx, provider)
+	checkedTime := time.Now().UnixMilli()
+	if result == nil {
+		result = &ProviderBalanceResult{
+			OK:          false,
+			Template:    provider.BalanceTemplate,
+			Message:     errorMessage(queryErr),
+			CheckedTime: checkedTime,
+		}
+	}
+	result.CheckedTime = checkedTime
+	updates := providerBalanceSnapshotUpdates(provider, result)
+	if queryErr != nil && result.Message == "" {
+		result.Message = queryErr.Error()
+		updates["balance_query_message"] = clipBalanceMessage(queryErr.Error())
+	}
+	if err := db.Model(&domains.VendorMeta{}).Where("id = ?", provider.Id).Updates(updates).Error; err != nil {
+		return result, err
+	}
+	if result.OK {
+		result.SuccessTime = checkedTime
+	} else {
+		result.SuccessTime = provider.BalanceSuccessTime
+	}
+	return result, queryErr
+}
+
+func providerBalanceSnapshotUpdates(provider *domains.VendorMeta, result *ProviderBalanceResult) map[string]any {
+	checkedTime := result.CheckedTime
+	if checkedTime <= 0 {
+		checkedTime = time.Now().UnixMilli()
+	}
+	updates := map[string]any{
+		"balance_query_ok":         result.OK,
+		"balance_query_message":    clipBalanceMessage(result.Message),
+		"balance_status_code":      result.StatusCode,
+		"balance_response_time_ms": result.ResponseTime,
+		"balance_checked_time":     checkedTime,
+	}
+	if result.OK {
+		updates["balance_remaining"] = result.Remaining
+		updates["balance_total"] = result.Total
+		updates["balance_used"] = result.Used
+		updates["balance_snapshot_unit"] = strings.TrimSpace(result.Unit)
+		updates["balance_snapshot_plan"] = clipBalancePlan(result.Plan)
+		updates["balance_success_time"] = checkedTime
+	} else if provider.BalanceSuccessTime <= 0 {
+		updates["balance_remaining"] = nil
+		updates["balance_total"] = nil
+		updates["balance_used"] = nil
+		updates["balance_snapshot_unit"] = ""
+		updates["balance_snapshot_plan"] = ""
+	}
+	return updates
+}
+
+func errorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func clipBalancePlan(plan string) string {
+	return clipBalanceText(plan, 255)
 }
 
 func shouldProbeSub2Balance(provider *domains.VendorMeta, result *ProviderBalanceResult) bool {
@@ -516,11 +685,16 @@ func stringifyJSONValue(value any) string {
 }
 
 func clipBalanceMessage(message string) string {
-	message = strings.TrimSpace(message)
-	if len(message) > 500 {
-		return message[:500]
+	return clipBalanceText(message, 500)
+}
+
+func clipBalanceText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if limit > 0 && len(runes) > limit {
+		return string(runes[:limit])
 	}
-	return message
+	return value
 }
 
 func defaultBalancePath(template string) string {

@@ -31,6 +31,10 @@ type UsageLog struct {
 	AttemptCount         int     `json:"attemptCount" gorm:"column:attempt_count;default:0;comment:上游转发尝试次数"`
 	IsStream             bool    `json:"isStream" gorm:"column:is_stream;default:false;comment:是否流式"`
 	Status               string  `json:"status" gorm:"column:status;size:30;index;comment:success/error"`
+	FailureCode          string  `json:"failureCode,omitempty" gorm:"column:failure_code;size:60;index;comment:失败分类"`
+	RepeatCount          int64   `json:"repeatCount" gorm:"column:repeat_count;default:1;comment:聚合请求次数"`
+	FirstSeenTime        int64   `json:"firstSeenTime,omitempty" gorm:"column:first_seen_time;default:0;comment:首次出现时间"`
+	LastSeenTime         int64   `json:"lastSeenTime,omitempty" gorm:"column:last_seen_time;default:0;comment:最后出现时间"`
 	Content              string  `json:"content" gorm:"column:content;type:text;comment:摘要或错误内容"`
 	RequestID            string  `json:"requestId" gorm:"column:request_id;size:100;index;comment:请求 ID"`
 	UpstreamRequestID    string  `json:"upstreamRequestId" gorm:"column:upstream_request_id;size:100;index;comment:上游请求 ID"`
