@@ -417,26 +417,13 @@ func (s *ProviderService) FindCandidatesForModelAndType(modelName, group string,
 // the existing provider type and model filters. Responses support is opt-in
 // because many OpenAI-compatible upstreams do not implement that API.
 func (s *ProviderService) FindCandidatesForEndpointAndType(modelName, group string, providerType string, endpointPath string) ([]domains.VendorMeta, error) {
-	providers, err := s.enabledProviders(providerType)
+	plan, err := s.FindRoutePlanForEndpointAndType(modelName, group, providerType, endpointPath)
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]domains.VendorMeta, 0, len(providers))
-	for _, provider := range providers {
-		if len(splitCSV(provider.Models)) > 0 && !containsString(splitCSV(provider.Models), modelName) {
-			continue
-		}
-		if !providerSupportsEndpoint(&provider, endpointPath) {
-			continue
-		}
-		candidates = append(candidates, provider)
-	}
-	candidates, err = s.filterProvidersForGroup(candidates, group)
-	if err != nil {
-		return nil, err
-	}
-	if len(candidates) == 0 {
-		return nil, gorm.ErrRecordNotFound
+	candidates := make([]domains.VendorMeta, 0, len(plan.Candidates))
+	for _, candidate := range plan.Candidates {
+		candidates = append(candidates, candidate.Provider)
 	}
 	return candidates, nil
 }
@@ -508,6 +495,32 @@ func (s *ProviderService) ApplyAffinity(tokenGuid string, modelName string, cand
 			continue
 		}
 		out := make([]domains.VendorMeta, 0, len(candidates))
+		out = append(out, candidate)
+		out = append(out, candidates[:i]...)
+		out = append(out, candidates[i+1:]...)
+		return out
+	}
+	return candidates
+}
+
+func (s *ProviderService) ApplyRouteAffinity(tokenGuid string, modelName string, candidates []ProviderRouteCandidate) []ProviderRouteCandidate {
+	if providerAffinityTTL() <= 0 || tokenGuid == "" || modelName == "" || len(candidates) <= 1 {
+		return candidates
+	}
+	key := providerAffinityKey{TokenGuid: tokenGuid, ModelName: modelName}
+	providerAffinity.Lock()
+	entry, ok := providerAffinity.entries[key]
+	if !ok || time.Now().After(entry.ExpiresAt) {
+		delete(providerAffinity.entries, key)
+		providerAffinity.Unlock()
+		return candidates
+	}
+	providerAffinity.Unlock()
+	for i, candidate := range candidates {
+		if candidate.Provider.Guid != entry.ProviderGuid {
+			continue
+		}
+		out := make([]ProviderRouteCandidate, 0, len(candidates))
 		out = append(out, candidate)
 		out = append(out, candidates[:i]...)
 		out = append(out, candidates[i+1:]...)

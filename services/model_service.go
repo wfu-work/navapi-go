@@ -182,17 +182,22 @@ func (s *ModelService) ListGroups(includeDisabled bool) ([]domains.ModelGroup, e
 }
 
 func (s *ModelService) UpsertGroup(group *domains.ModelGroup) error {
+	routesProvided := len(group.ProviderRoutes) > 0
 	normalizeModelGroup(group)
 	providerScope := group.ProviderScope
 	providerGuids := append([]string(nil), group.ProviderGuids...)
+	providerRoutes := append([]domains.ModelGroupProviderRoute(nil), group.ProviderRoutes...)
 	if providerScope == constants.ModelGroupProviderScopeSelected && len(providerGuids) == 0 {
 		return errors.New("at least one provider is required for selected provider scope")
+	}
+	if providerScope == constants.ModelGroupProviderScopeSelected && !hasEnabledProviderRoute(providerRoutes) {
+		return errors.New("at least one provider route must be enabled")
 	}
 	db := s.GroupCrud.DB()
 	if db == nil {
 		return errors.New("database is not initialized")
 	}
-	return db.Transaction(func(tx *gorm.DB) error {
+	err := db.Transaction(func(tx *gorm.DB) error {
 		service := s.WithDB(tx)
 		if err := service.validateGroupProviders(providerGuids); err != nil {
 			return err
@@ -217,6 +222,14 @@ func (s *ModelService) UpsertGroup(group *domains.ModelGroup) error {
 			group.Creater = existing.Creater
 			group.Updater = existing.Updater
 			group.UpdateTime = time.Now().UnixMilli()
+			if !routesProvided && providerScope == constants.ModelGroupProviderScopeSelected {
+				existingRoutes, err := service.groupProviderRoutes(group.Guid)
+				if err != nil {
+					return err
+				}
+				providerRoutes = mergeProviderRoutes(providerGuids, existingRoutes)
+				group.ProviderRoutes = append([]domains.ModelGroupProviderRoute(nil), providerRoutes...)
+			}
 			if err := service.GroupCrud.DB().Save(group).Error; err != nil {
 				return err
 			}
@@ -224,11 +237,15 @@ func (s *ModelService) UpsertGroup(group *domains.ModelGroup) error {
 				return err
 			}
 		}
-		if err := service.replaceGroupProviders(group.Guid, providerScope, providerGuids); err != nil {
+		if err := service.replaceGroupProviders(group.Guid, providerScope, providerRoutes); err != nil {
 			return err
 		}
 		return service.fillModelGroupProvider(group)
 	})
+	if err == nil {
+		ProviderRouterApp.ResetScheduling(group.Guid, group.GroupName)
+	}
+	return err
 }
 
 func (s *ModelService) SetGroupEnabled(guid string, enabled bool) (*domains.ModelGroup, error) {
@@ -323,6 +340,7 @@ func (s *ModelService) EnsureDefaultGroup() error {
 		DisplayName:     "默认分组",
 		QuotaMultiplier: 1,
 		ProviderScope:   constants.ModelGroupProviderScopeAll,
+		RoutingStrategy: constants.ProviderRoutingFailover,
 		Enabled:         true,
 	}
 	return createWithCrud(&s.GroupCrud, &group)
@@ -419,11 +437,58 @@ func (s *ModelService) AllowedProviderGuidsForGroup(group string) (string, []str
 	var providerGuids []string
 	if err := s.GroupCrud.DB().Model(&domains.ModelGroupProvider{}).
 		Where("group_guid = ?", modelGroup.Guid).
+		Where("routing_enabled = ?", true).
 		Order("sort asc, id asc").
 		Pluck("provider_guid", &providerGuids).Error; err != nil {
 		return "", nil, err
 	}
 	return scope, providerGuids, nil
+}
+
+type ModelGroupRoutingProfile struct {
+	GroupGuid       string
+	GroupName       string
+	ProviderScope   string
+	RoutingStrategy string
+	ProviderRoutes  []domains.ModelGroupProviderRoute
+}
+
+func (s *ModelService) RoutingProfileForGroup(group string) (*ModelGroupRoutingProfile, error) {
+	group = normalizeGroup(group)
+	if group == "*" {
+		return &ModelGroupRoutingProfile{
+			GroupName:       group,
+			ProviderScope:   constants.ModelGroupProviderScopeAll,
+			RoutingStrategy: constants.ProviderRoutingFailover,
+		}, nil
+	}
+	if err := s.EnsureDefaultGroup(); err != nil {
+		return nil, err
+	}
+	modelGroup, err := s.groupByName(group)
+	if err != nil {
+		return nil, err
+	}
+	if modelGroup == nil {
+		return nil, errors.New("model group not found")
+	}
+	if !modelGroup.Enabled {
+		return nil, errors.New("model group is disabled")
+	}
+	profile := &ModelGroupRoutingProfile{
+		GroupGuid:       modelGroup.Guid,
+		GroupName:       modelGroup.GroupName,
+		ProviderScope:   normalizeProviderScope(modelGroup.ProviderScope),
+		RoutingStrategy: normalizeProviderRoutingStrategy(modelGroup.RoutingStrategy),
+	}
+	if profile.ProviderScope == constants.ModelGroupProviderScopeSelected {
+		routes, err := s.groupProviderRoutes(modelGroup.Guid)
+		if err != nil {
+			return nil, err
+		}
+		profile.ProviderRoutes = routes
+	}
+	return profile, nil
 }
 
 func (s *ModelService) groupByName(group string) (*domains.ModelGroup, error) {
@@ -445,15 +510,32 @@ func normalizeModelGroup(group *domains.ModelGroup) {
 	group.DisplayName = strings.TrimSpace(group.DisplayName)
 	group.Remark = strings.TrimSpace(group.Remark)
 	group.ProviderScope = normalizeProviderScope(group.ProviderScope)
+	group.RoutingStrategy = normalizeProviderRoutingStrategy(group.RoutingStrategy)
 	group.ProviderGuids = normalizeProviderGuids(group.ProviderGuids)
 	if group.ProviderScope == constants.ModelGroupProviderScopeAll {
 		group.ProviderGuids = nil
+		group.ProviderRoutes = nil
+	} else {
+		group.ProviderRoutes = mergeProviderRoutes(group.ProviderGuids, group.ProviderRoutes)
 	}
 	if group.DisplayName == "" {
 		group.DisplayName = group.GroupName
 	}
 	if group.QuotaMultiplier <= 0 {
 		group.QuotaMultiplier = 1
+	}
+}
+
+func normalizeProviderRoutingStrategy(strategy string) string {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case constants.ProviderRoutingRoundRobin:
+		return constants.ProviderRoutingRoundRobin
+	case constants.ProviderRoutingWeightedRoundRobin:
+		return constants.ProviderRoutingWeightedRoundRobin
+	case constants.ProviderRoutingLeastInflight:
+		return constants.ProviderRoutingLeastInflight
+	default:
+		return constants.ProviderRoutingFailover
 	}
 }
 
@@ -495,19 +577,24 @@ func (s *ModelService) validateGroupProviders(providerGuids []string) error {
 	return nil
 }
 
-func (s *ModelService) replaceGroupProviders(groupGuid string, scope string, providerGuids []string) error {
+func (s *ModelService) replaceGroupProviders(groupGuid string, scope string, providerRoutes []domains.ModelGroupProviderRoute) error {
 	if err := s.DB().Unscoped().Where("group_guid = ?", groupGuid).Delete(&domains.ModelGroupProvider{}).Error; err != nil {
 		return err
 	}
 	if scope != constants.ModelGroupProviderScopeSelected {
 		return nil
 	}
-	relations := make([]domains.ModelGroupProvider, 0, len(providerGuids))
-	for index, providerGuid := range providerGuids {
+	relations := make([]domains.ModelGroupProvider, 0, len(providerRoutes))
+	for index, route := range providerRoutes {
+		routingEnabled := route.RoutingEnabled
 		relations = append(relations, domains.ModelGroupProvider{
-			GroupGuid:    groupGuid,
-			ProviderGuid: providerGuid,
-			Sort:         index,
+			GroupGuid:      groupGuid,
+			ProviderGuid:   route.ProviderGuid,
+			Sort:           index,
+			Priority:       route.Priority,
+			Weight:         route.Weight,
+			MaxConcurrency: route.MaxConcurrency,
+			RoutingEnabled: &routingEnabled,
 		})
 	}
 	return s.DB().Create(&relations).Error
@@ -531,10 +618,78 @@ func (s *ModelService) fillModelGroupProviders(groups []domains.ModelGroup) erro
 	for _, relation := range relations {
 		if group := groupByGuid[relation.GroupGuid]; group != nil {
 			group.ProviderGuids = append(group.ProviderGuids, relation.ProviderGuid)
+			group.ProviderRoutes = append(group.ProviderRoutes, providerRouteFromRelation(relation))
 			group.ProviderCount++
 		}
 	}
 	return nil
+}
+
+func (s *ModelService) groupProviderRoutes(groupGuid string) ([]domains.ModelGroupProviderRoute, error) {
+	var relations []domains.ModelGroupProvider
+	if err := s.GroupCrud.DB().Where("group_guid = ?", groupGuid).Order("sort asc, id asc").Find(&relations).Error; err != nil {
+		return nil, err
+	}
+	routes := make([]domains.ModelGroupProviderRoute, 0, len(relations))
+	for _, relation := range relations {
+		routes = append(routes, providerRouteFromRelation(relation))
+	}
+	return routes, nil
+}
+
+func providerRouteFromRelation(relation domains.ModelGroupProvider) domains.ModelGroupProviderRoute {
+	weight := relation.Weight
+	if weight <= 0 {
+		weight = 100
+	}
+	routingEnabled := true
+	if relation.RoutingEnabled != nil {
+		routingEnabled = *relation.RoutingEnabled
+	}
+	return domains.ModelGroupProviderRoute{
+		ProviderGuid:   strings.TrimSpace(relation.ProviderGuid),
+		Sort:           relation.Sort,
+		Priority:       max(0, relation.Priority),
+		Weight:         weight,
+		MaxConcurrency: max(0, relation.MaxConcurrency),
+		RoutingEnabled: routingEnabled,
+	}
+}
+
+func mergeProviderRoutes(providerGuids []string, routes []domains.ModelGroupProviderRoute) []domains.ModelGroupProviderRoute {
+	byProvider := make(map[string]domains.ModelGroupProviderRoute, len(routes))
+	for _, route := range routes {
+		guid := strings.TrimSpace(route.ProviderGuid)
+		if guid != "" {
+			byProvider[guid] = route
+		}
+	}
+	merged := make([]domains.ModelGroupProviderRoute, 0, len(providerGuids))
+	for index, guid := range providerGuids {
+		route, exists := byProvider[guid]
+		if !exists {
+			route = domains.ModelGroupProviderRoute{ProviderGuid: guid, Weight: 100, RoutingEnabled: true}
+		}
+		route.ProviderGuid = guid
+		route.Sort = index
+		route.Priority = max(0, min(route.Priority, 1000))
+		if route.Weight <= 0 {
+			route.Weight = 100
+		}
+		route.Weight = min(route.Weight, 10000)
+		route.MaxConcurrency = max(0, min(route.MaxConcurrency, 1_000_000))
+		merged = append(merged, route)
+	}
+	return merged
+}
+
+func hasEnabledProviderRoute(routes []domains.ModelGroupProviderRoute) bool {
+	for _, route := range routes {
+		if route.RoutingEnabled {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ModelService) fillModelGroupProvider(group *domains.ModelGroup) error {
