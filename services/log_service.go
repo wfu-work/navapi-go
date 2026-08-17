@@ -95,6 +95,7 @@ type UsageDimensionStat struct {
 
 type UsageSummary struct {
 	Days                   int                  `json:"days"`
+	Granularity            string               `json:"granularity"`
 	StartTime              int64                `json:"startTime,omitempty"`
 	EndTime                int64                `json:"endTime,omitempty"`
 	TotalRequests          int64                `json:"totalRequests"`
@@ -196,6 +197,13 @@ type usageDailyStatsResult struct {
 type usageDayWindow struct {
 	Date string
 }
+
+type usageSeriesGranularity string
+
+const (
+	usageSeriesGranularityHour usageSeriesGranularity = "hour"
+	usageSeriesGranularityDay  usageSeriesGranularity = "day"
+)
 
 func (s *LogService) Create(log *domains.UsageLog) error {
 	if log == nil || strings.TrimSpace(log.ProviderGuid) == "" {
@@ -638,18 +646,29 @@ func (s *LogService) UsageSummaryByQuery(userGuid string, query UsageSummaryQuer
 	if cached, ok := usageSummaryCacheGet(cacheKey, now); ok {
 		return cached, nil
 	}
-	dailyStats, err := s.dailyUsageStats(userGuid, normalized)
+	granularity := usageSummaryGranularity(normalized.StartTime, normalized.EndTime)
+	usageStats, err := s.usageStats(userGuid, normalized, granularity)
 	if err != nil {
 		return UsageSummary{}, err
 	}
-	series := buildDailyUsageSeries(userGuid, buildUsageDayWindows(normalized.StartTime, normalized.EndTime), dailyStats.ByDate)
-	summary := UsageSummary{Days: normalized.Days, StartTime: normalized.StartTime, EndTime: normalized.EndTime, Series: series}
-	applyAggregateToSummary(&summary, dailyStats.Aggregate)
+	series := buildDailyUsageSeries(
+		userGuid,
+		buildUsageSeriesWindows(normalized.StartTime, normalized.EndTime, granularity),
+		usageStats.ByDate,
+	)
+	summary := UsageSummary{
+		Days:        normalized.Days,
+		Granularity: string(granularity),
+		StartTime:   normalized.StartTime,
+		EndTime:     normalized.EndTime,
+		Series:      series,
+	}
+	applyAggregateToSummary(&summary, usageStats.Aggregate)
 	summary.ByModel, err = s.usageDimensionStats(userGuid, normalized, "COALESCE(NULLIF(model_name, ''), 'unknown')", "COALESCE(NULLIF(model_name, ''), 'unknown')", "MAX(model_name) as model_name")
 	if err != nil {
 		return UsageSummary{}, err
 	}
-	summary.SeriesByModel, err = s.usageModelSeries(userGuid, normalized, summary.ByModel, series)
+	summary.SeriesByModel, err = s.usageModelSeries(userGuid, normalized, summary.ByModel, series, granularity)
 	if err != nil {
 		return UsageSummary{}, err
 	}
@@ -683,8 +702,12 @@ func (s *LogService) usageRangeDB(userGuid string, query UsageSummaryQuery) *gor
 }
 
 func (s *LogService) dailyUsageStats(userGuid string, query UsageSummaryQuery) (usageDailyStatsResult, error) {
+	return s.usageStats(userGuid, query, usageSeriesGranularityDay)
+}
+
+func (s *LogService) usageStats(userGuid string, query UsageSummaryQuery, granularity usageSeriesGranularity) (usageDailyStatsResult, error) {
 	db := s.usageRangeDB(userGuid, query)
-	dateExpr := usageDateExprSQL()
+	dateExpr := usageSeriesDateExprSQL(granularity)
 	requestWeight := usageRequestCountSQL()
 	selectSQL := fmt.Sprintf(`
 		%s as usage_date,
@@ -792,7 +815,7 @@ func (s *LogService) usageDimensionStats(userGuid string, query UsageSummaryQuer
 	return out, nil
 }
 
-func (s *LogService) usageModelSeries(userGuid string, query UsageSummaryQuery, rankedModels []UsageDimensionStat, dates []DailyUsageData) ([]UsageNamedSeries, error) {
+func (s *LogService) usageModelSeries(userGuid string, query UsageSummaryQuery, rankedModels []UsageDimensionStat, dates []DailyUsageData, granularity usageSeriesGranularity) ([]UsageNamedSeries, error) {
 	modelNames := make([]string, 0, len(rankedModels))
 	seen := map[string]bool{}
 	for _, model := range rankedModels {
@@ -808,7 +831,7 @@ func (s *LogService) usageModelSeries(userGuid string, query UsageSummaryQuery, 
 	}
 	seriesByModel := map[string]map[string]*DailyUsageData{}
 	db := s.usageRangeDB(userGuid, query).Where("model_name IN ?", modelNames)
-	dateExpr := usageDateExprSQL()
+	dateExpr := usageSeriesDateExprSQL(granularity)
 	requestWeight := usageRequestCountSQL()
 	selectSQL := fmt.Sprintf(`
 		%s as usage_date,
@@ -1005,6 +1028,28 @@ func buildUsageDayWindows(startTime int64, endTime int64) []usageDayWindow {
 	return windows
 }
 
+func buildUsageSeriesWindows(startTime int64, endTime int64, granularity usageSeriesGranularity) []usageDayWindow {
+	if granularity != usageSeriesGranularityHour {
+		return buildUsageDayWindows(startTime, endTime)
+	}
+	if startTime > endTime {
+		startTime, endTime = endTime, startTime
+	}
+	start := beginningOfHour(time.UnixMilli(startTime))
+	end := beginningOfHour(time.UnixMilli(endTime))
+	hours := int(end.Sub(start)/time.Hour) + 1
+	if hours <= 0 {
+		hours = 1
+	}
+	windows := make([]usageDayWindow, 0, hours)
+	for i := 0; i < hours; i++ {
+		windows = append(windows, usageDayWindow{
+			Date: start.Add(time.Duration(i) * time.Hour).Format("2006-01-02 15:00"),
+		})
+	}
+	return windows
+}
+
 func buildDailyUsageSeries(userGuid string, windows []usageDayWindow, byDate map[string]DailyUsageData) []DailyUsageData {
 	out := make([]DailyUsageData, 0, len(windows))
 	for _, window := range windows {
@@ -1024,6 +1069,23 @@ func usageCostSumSQL() string {
 
 func usageDateExprSQL() string {
 	return "TO_CHAR(TO_TIMESTAMP(create_time / 1000.0), 'YYYY-MM-DD')"
+}
+
+func usageSeriesDateExprSQL(granularity usageSeriesGranularity) string {
+	if granularity == usageSeriesGranularityHour {
+		return "TO_CHAR(TO_TIMESTAMP(create_time / 1000.0), 'YYYY-MM-DD HH24:00')"
+	}
+	return usageDateExprSQL()
+}
+
+func usageSummaryGranularity(startTime int64, endTime int64) usageSeriesGranularity {
+	if startTime > endTime {
+		startTime, endTime = endTime, startTime
+	}
+	if endTime-startTime <= int64(24*time.Hour/time.Millisecond) {
+		return usageSeriesGranularityHour
+	}
+	return usageSeriesGranularityDay
 }
 
 func buildModelSeries(seriesByModel map[string]map[string]*DailyUsageData, rankedModels []UsageDimensionStat, dates []DailyUsageData) []UsageNamedSeries {
@@ -1073,4 +1135,9 @@ func fallbackName(primary string, fallback string) string {
 func beginningOfDay(t time.Time) time.Time {
 	year, month, day := t.Date()
 	return time.Date(year, month, day, 0, 0, 0, 0, t.Location())
+}
+
+func beginningOfHour(t time.Time) time.Time {
+	year, month, day := t.Date()
+	return time.Date(year, month, day, t.Hour(), 0, 0, 0, t.Location())
 }
