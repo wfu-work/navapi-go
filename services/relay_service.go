@@ -135,13 +135,23 @@ func (s RelayService) RelayHTTP(c *gin.Context, token *domains.ApiToken, endpoin
 }
 
 func (s RelayService) prepareRelay(c *gin.Context, token *domains.ApiToken, endpoint RelayEndpoint) (*preparedRelay, error) {
-	body, err := io.ReadAll(c.Request.Body)
+	limit := OptionServiceApp.Int64("relay.max_body_bytes", defaultRiskMaxBodyBytes)
+	if limit <= 0 {
+		limit = defaultRiskMaxBodyBytes
+	}
+	if c.Request.ContentLength > limit {
+		return nil, &RelayHTTPError{StatusCode: http.StatusRequestEntityTooLarge, Message: "request body is too large"}
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, limit+1))
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			return nil, &RelayHTTPError{StatusCode: http.StatusRequestEntityTooLarge, Message: "request body is too large"}
 		}
 		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, &RelayHTTPError{StatusCode: http.StatusRequestEntityTooLarge, Message: "request body is too large"}
 	}
 	modelName := extractModelName(c, endpoint, body)
 	if strings.TrimSpace(modelName) == "" {
@@ -1895,7 +1905,7 @@ func parseStreamUsage(body []byte) vos.Usage {
 }
 
 type streamUsageTracker struct {
-	pending             string
+	pending             bytes.Buffer
 	eventType           string
 	usage               vos.Usage
 	terminal            string
@@ -1909,24 +1919,31 @@ type streamUsageTracker struct {
 // Write incrementally parses SSE "data:" lines while bytes are being proxied.
 // This keeps streaming live without waiting to buffer the entire upstream body.
 func (t *streamUsageTracker) Write(chunk []byte) {
-	t.pending += string(chunk)
+	if len(chunk) == 0 {
+		return
+	}
+	_, _ = t.pending.Write(chunk)
 	for {
-		idx := strings.IndexByte(t.pending, '\n')
+		idx := bytes.IndexByte(t.pending.Bytes(), '\n')
 		if idx < 0 {
-			if len(t.pending) > 1<<20 {
-				t.pending = t.pending[len(t.pending)-(1<<20):]
+			if t.pending.Len() > 1<<20 {
+				pending := t.pending.Bytes()
+				pending = pending[len(pending)-(1<<20):]
+				t.pending.Reset()
+				_, _ = t.pending.Write(pending)
 			}
 			return
 		}
-		t.consumeLine(t.pending[:idx])
-		t.pending = t.pending[idx+1:]
+		line := append([]byte(nil), t.pending.Bytes()[:idx]...)
+		t.pending.Next(idx + 1)
+		t.consumeLine(string(line))
 	}
 }
 
 func (t *streamUsageTracker) Finish() vos.Usage {
-	if strings.TrimSpace(t.pending) != "" {
-		t.consumeLine(t.pending)
-		t.pending = ""
+	if pending := strings.TrimSpace(t.pending.String()); pending != "" {
+		t.consumeLine(pending)
+		t.pending.Reset()
 	}
 	if t.terminal == "" && isResponsesTerminalEvent(t.eventType) {
 		t.terminal = t.eventType

@@ -159,6 +159,7 @@ var navapiAPIPermissionSeeds = []apiPermissionSeed{
 	{Guid: "navapi-api-balance-self", Name: "当前用户余额", Code: "navapi.balance.self", Path: "/balance/self", Verb: "GET", User: true, Sort: 500, Group: "客户"},
 	{Guid: "navapi-api-balance-list", Name: "客户余额列表", Code: "navapi.balance.list", Path: "/balance/list", Verb: "GET", Sort: 501, Group: "客户"},
 	{Guid: "navapi-api-balance-update", Name: "更新客户余额", Code: "navapi.balance.update", Path: "/balance/", Verb: "PUT", Sort: 502, Group: "客户"},
+	{Guid: "navapi-api-balance-recharge", Name: "管理员客户充值", Code: "navapi.balance.recharge", Path: "/balance/recharge", Verb: "POST", Sort: 503, Group: "客户"},
 	{Guid: "navapi-api-user-settings-self", Name: "当前用户设置", Code: "navapi.user.settings.self", Path: "/user-settings/self", Verb: "GET", User: true, Sort: 520, Group: "客户"},
 	{Guid: "navapi-api-user-settings-save", Name: "保存当前用户设置", Code: "navapi.user.settings.save", Path: "/user-settings/self", Verb: "PUT", User: true, Sort: 521, Group: "客户"},
 	{Guid: "navapi-api-user-settings-get", Name: "用户配置详情", Code: "navapi.user.settings.get", Path: "/user-settings/admin/:userGuid", Verb: "GET", Sort: 522, Group: "客户"},
@@ -230,6 +231,7 @@ var navapiAPIPermissionSeeds = []apiPermissionSeed{
 	{Guid: "navapi-api-wallet-self", Name: "当前用户钱包", Code: "navapi.wallet.self", Path: "/wallet/self", Verb: "GET", User: true, Sort: 680, Group: "钱包"},
 	{Guid: "navapi-api-wallet-self-records", Name: "当前用户钱包流水", Code: "navapi.wallet.self.records", Path: "/wallet/self/records", Verb: "GET", User: true, Sort: 681, Group: "钱包"},
 	{Guid: "navapi-api-wallet-self-activities", Name: "当前用户钱包活动", Code: "navapi.wallet.self.activities", Path: "/wallet/self/activities", Verb: "GET", User: true, Sort: 682, Group: "钱包"},
+	{Guid: "navapi-api-wallet-records", Name: "管理员钱包流水", Code: "navapi.wallet.records", Path: "/wallet/records", Verb: "GET", Sort: 683, Group: "钱包"},
 
 	{Guid: "navapi-api-sub-plans", Name: "订阅套餐列表", Code: "navapi.subscription.plans", Path: "/subscription/plans", Verb: "GET", User: true, Sort: 700, Group: "订阅"},
 	{Guid: "navapi-api-sub-plan-get", Name: "订阅套餐详情", Code: "navapi.subscription.plan.get", Path: "/subscription/plan/:id", Verb: "GET", User: true, Sort: 701, Group: "订阅"},

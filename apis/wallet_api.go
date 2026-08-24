@@ -1,6 +1,7 @@
 package apis
 
 import (
+	"navapi-go/domains"
 	"navapi-go/services"
 
 	"github.com/gin-gonic/gin"
@@ -9,6 +10,33 @@ import (
 )
 
 type WalletApi struct{}
+
+// Records 管理员钱包流水
+// @Summary 管理员钱包流水
+// @Description 跨用户查询钱包流水，支持按用户、来源和流水类型筛选
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param page query int false "页码"
+// @Param size query int false "每页数量"
+// @Param q query string false "关键词"
+// @Param type query string false "流水类型"
+// @Success 200 {object} response.Response{data=vos.PageResult,msg=string}
+// @Router /wallet/records [get]
+func (a WalletApi) Records(c *gin.Context) {
+	var query services.WalletRecordQuery
+	_ = c.ShouldBindQuery(&query)
+	if query.Type == "" {
+		query.Type = domains.WalletRecordTypeRecharge
+	}
+	result, err := userWalletService.ListAdminRecords(query)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(result, c)
+}
 
 // Self 当前用户钱包
 // @Summary 当前用户钱包

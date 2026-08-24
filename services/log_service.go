@@ -97,6 +97,7 @@ type UsageSummary struct {
 	Days                   int                  `json:"days"`
 	StartTime              int64                `json:"startTime,omitempty"`
 	EndTime                int64                `json:"endTime,omitempty"`
+	Granularity            string               `json:"granularity"`
 	TotalRequests          int64                `json:"totalRequests"`
 	SuccessRequests        int64                `json:"successRequests"`
 	ErrorRequests          int64                `json:"errorRequests"`
@@ -638,13 +639,38 @@ func (s *LogService) UsageSummaryByQuery(userGuid string, query UsageSummaryQuer
 	if cached, ok := usageSummaryCacheGet(cacheKey, now); ok {
 		return cached, nil
 	}
-	dailyStats, err := s.dailyUsageStats(userGuid, normalized)
+	hourly := isHourlyUsageQuery(normalized)
+	var stats usageDailyStatsResult
+	var series []DailyUsageData
+	var err error
+	granularity := "day"
+	if hourly {
+		stats, err = s.hourlyUsageStats(userGuid, normalized)
+		series = buildHourlyUsageSeries(
+			userGuid,
+			buildUsageHourWindows(normalized.StartTime, normalized.EndTime),
+			stats.ByDate,
+		)
+		granularity = "hour"
+	} else {
+		stats, err = s.dailyUsageStats(userGuid, normalized)
+		series = buildDailyUsageSeries(
+			userGuid,
+			buildUsageDayWindows(normalized.StartTime, normalized.EndTime),
+			stats.ByDate,
+		)
+	}
 	if err != nil {
 		return UsageSummary{}, err
 	}
-	series := buildDailyUsageSeries(userGuid, buildUsageDayWindows(normalized.StartTime, normalized.EndTime), dailyStats.ByDate)
-	summary := UsageSummary{Days: normalized.Days, StartTime: normalized.StartTime, EndTime: normalized.EndTime, Series: series}
-	applyAggregateToSummary(&summary, dailyStats.Aggregate)
+	summary := UsageSummary{
+		Days:        normalized.Days,
+		StartTime:   normalized.StartTime,
+		EndTime:     normalized.EndTime,
+		Granularity: granularity,
+		Series:      series,
+	}
+	applyAggregateToSummary(&summary, stats.Aggregate)
 	summary.ByModel, err = s.usageDimensionStats(userGuid, normalized, "COALESCE(NULLIF(model_name, ''), 'unknown')", "COALESCE(NULLIF(model_name, ''), 'unknown')", "MAX(model_name) as model_name")
 	if err != nil {
 		return UsageSummary{}, err
@@ -683,8 +709,15 @@ func (s *LogService) usageRangeDB(userGuid string, query UsageSummaryQuery) *gor
 }
 
 func (s *LogService) dailyUsageStats(userGuid string, query UsageSummaryQuery) (usageDailyStatsResult, error) {
+	return s.usageBucketStats(userGuid, query, usageDateExprSQL())
+}
+
+func (s *LogService) hourlyUsageStats(userGuid string, query UsageSummaryQuery) (usageDailyStatsResult, error) {
+	return s.usageBucketStats(userGuid, query, usageHourExprSQL())
+}
+
+func (s *LogService) usageBucketStats(userGuid string, query UsageSummaryQuery, bucketExpr string) (usageDailyStatsResult, error) {
 	db := s.usageRangeDB(userGuid, query)
-	dateExpr := usageDateExprSQL()
 	requestWeight := usageRequestCountSQL()
 	selectSQL := fmt.Sprintf(`
 		%s as usage_date,
@@ -698,9 +731,9 @@ func (s *LogService) dailyUsageStats(userGuid string, query UsageSummaryQuery) (
 		COALESCE(SUM(use_time_ms), 0) as use_time_ms,
 		%s as first_response_time_ms,
 		COALESCE(SUM(CASE WHEN is_stream THEN %s ELSE 0 END), 0) as stream_requests
-		`, dateExpr, requestWeight, requestWeight, requestWeight, usageCostSumSQL(), usageFirstResponseTimeSumSQL(), requestWeight)
+		`, bucketExpr, requestWeight, requestWeight, requestWeight, usageCostSumSQL(), usageFirstResponseTimeSumSQL(), requestWeight)
 	var rows []usageDailyAggregateRow
-	if err := db.Select(selectSQL).Group(dateExpr).Scan(&rows).Error; err != nil {
+	if err := db.Select(selectSQL).Group(bucketExpr).Scan(&rows).Error; err != nil {
 		return usageDailyStatsResult{}, err
 	}
 	result := usageDailyStatsResult{ByDate: make(map[string]DailyUsageData, len(rows))}
@@ -808,7 +841,7 @@ func (s *LogService) usageModelSeries(userGuid string, query UsageSummaryQuery, 
 	}
 	seriesByModel := map[string]map[string]*DailyUsageData{}
 	db := s.usageRangeDB(userGuid, query).Where("model_name IN ?", modelNames)
-	dateExpr := usageDateExprSQL()
+	dateExpr := usageBucketExprSQL(query)
 	requestWeight := usageRequestCountSQL()
 	selectSQL := fmt.Sprintf(`
 		%s as usage_date,
@@ -1005,6 +1038,21 @@ func buildUsageDayWindows(startTime int64, endTime int64) []usageDayWindow {
 	return windows
 }
 
+func buildUsageHourWindows(startTime int64, endTime int64) []usageDayWindow {
+	if startTime > endTime {
+		startTime, endTime = endTime, startTime
+	}
+	start := beginningOfHour(time.UnixMilli(startTime))
+	end := beginningOfHour(time.UnixMilli(endTime))
+	windows := make([]usageDayWindow, 0, int(end.Sub(start).Hours())+1)
+	for hour := start; !hour.After(end); hour = hour.Add(time.Hour) {
+		windows = append(windows, usageDayWindow{
+			Date: hour.Format("2006-01-02 15:00"),
+		})
+	}
+	return windows
+}
+
 func buildDailyUsageSeries(userGuid string, windows []usageDayWindow, byDate map[string]DailyUsageData) []DailyUsageData {
 	out := make([]DailyUsageData, 0, len(windows))
 	for _, window := range windows {
@@ -1018,12 +1066,34 @@ func buildDailyUsageSeries(userGuid string, windows []usageDayWindow, byDate map
 	return out
 }
 
+func buildHourlyUsageSeries(userGuid string, windows []usageDayWindow, byHour map[string]DailyUsageData) []DailyUsageData {
+	return buildDailyUsageSeries(userGuid, windows, byHour)
+}
+
 func usageCostSumSQL() string {
 	return "COALESCE(SUM(cost), 0)"
 }
 
 func usageDateExprSQL() string {
 	return "TO_CHAR(TO_TIMESTAMP(create_time / 1000.0), 'YYYY-MM-DD')"
+}
+
+func usageHourExprSQL() string {
+	return "TO_CHAR(TO_TIMESTAMP(create_time / 1000.0), 'YYYY-MM-DD HH24:00')"
+}
+
+func usageBucketExprSQL(query UsageSummaryQuery) string {
+	if isHourlyUsageQuery(query) {
+		return usageHourExprSQL()
+	}
+	return usageDateExprSQL()
+}
+
+func isHourlyUsageQuery(query UsageSummaryQuery) bool {
+	if query.StartTime <= 0 || query.EndTime <= 0 || query.EndTime < query.StartTime {
+		return false
+	}
+	return query.EndTime-query.StartTime <= int64(24*time.Hour/time.Millisecond)
 }
 
 func buildModelSeries(seriesByModel map[string]map[string]*DailyUsageData, rankedModels []UsageDimensionStat, dates []DailyUsageData) []UsageNamedSeries {
@@ -1073,4 +1143,9 @@ func fallbackName(primary string, fallback string) string {
 func beginningOfDay(t time.Time) time.Time {
 	year, month, day := t.Date()
 	return time.Date(year, month, day, 0, 0, 0, 0, t.Location())
+}
+
+func beginningOfHour(t time.Time) time.Time {
+	year, month, day := t.Date()
+	return time.Date(year, month, day, t.Hour(), 0, 0, 0, t.Location())
 }

@@ -73,6 +73,20 @@ type WalletBalanceAccount struct {
 	AllowedGroups      string `json:"allowedGroups"`
 }
 
+type AdminWalletRechargeInput struct {
+	UserGuid         string `json:"userGuid"`
+	AmountCents      int64  `json:"amountCents"`
+	RequestID        string `json:"requestId"`
+	Remark           string `json:"remark"`
+	OperatorUserGuid string `json:"-"`
+	OperatorIP       string `json:"-"`
+}
+
+type AdminWalletRechargeResult struct {
+	Wallet WalletBalanceAccount     `json:"wallet"`
+	Record domains.UserWalletRecord `json:"record"`
+}
+
 type WalletRecordQuery struct {
 	vos.PageQuery
 	Type      string `form:"type" json:"type"`
@@ -82,8 +96,16 @@ type WalletRecordQuery struct {
 	EndTime   int64  `form:"endTime" json:"endTime"`
 }
 
+type AdminWalletRecordItem struct {
+	domains.UserWalletRecord
+	Username string `json:"username,omitempty"`
+	NickName string `json:"nickName,omitempty"`
+	Email    string `json:"email,omitempty"`
+}
+
 func (q *WalletRecordQuery) Normalize() {
 	q.PageQuery.Normalize()
+	q.Q = strings.TrimSpace(q.Q)
 	q.Type = strings.ToLower(strings.TrimSpace(q.Type))
 	q.Source = strings.ToLower(strings.TrimSpace(q.Source))
 	q.Direction = strings.ToLower(strings.TrimSpace(q.Direction))
@@ -204,9 +226,9 @@ func (s *UserWalletService) NotifyBalanceReminderAsync(userGuid string, reason s
 	if userGuid == "" {
 		return
 	}
-	go func() {
+	_ = enqueueBackground(func() {
 		_ = s.NotifyBalanceReminder(userGuid, reason)
-	}()
+	})
 }
 
 func (s *UserWalletService) NotifyBalanceReminder(userGuid string, reason string) error {
@@ -304,6 +326,124 @@ func (s *UserWalletService) UpdateBalanceAccount(input WalletBalanceAccount) (*W
 	return &account, nil
 }
 
+// AdminRecharge adds paid balance and creates a matching manual recharge bill.
+// RequestID makes retries idempotent for the selected user.
+func (s *UserWalletService) AdminRecharge(input AdminWalletRechargeInput) (*AdminWalletRechargeResult, error) {
+	input.UserGuid = strings.TrimSpace(input.UserGuid)
+	input.RequestID = strings.TrimSpace(input.RequestID)
+	input.Remark = strings.TrimSpace(input.Remark)
+	input.OperatorUserGuid = strings.TrimSpace(input.OperatorUserGuid)
+	input.OperatorIP = strings.TrimSpace(input.OperatorIP)
+	if input.UserGuid == "" {
+		return nil, errors.New("user guid is required")
+	}
+	if input.AmountCents <= 0 {
+		return nil, errors.New("recharge amount must be greater than zero")
+	}
+	const maxAmountCentsForMicros = int64(^uint64(0)>>1) / amountMicrosPerCent
+	if input.AmountCents > maxAmountCentsForMicros {
+		return nil, errors.New("recharge amount is too large")
+	}
+	if input.RequestID == "" {
+		return nil, errors.New("request id is required")
+	}
+	if len(input.RequestID) > 100 {
+		return nil, errors.New("request id is too long")
+	}
+	if len([]rune(input.Remark)) > 255 {
+		return nil, errors.New("remark is too long")
+	}
+
+	var result AdminWalletRechargeResult
+	err := s.DB().Transaction(func(tx *gorm.DB) error {
+		var userCount int64
+		if err := tx.Model(&commonDomains.SysUser{}).Where("guid = ?", input.UserGuid).Count(&userCount).Error; err != nil {
+			return err
+		}
+		if userCount == 0 {
+			return errors.New("user not found")
+		}
+		if err := s.Ensure(tx, input.UserGuid); err != nil {
+			return err
+		}
+		wallet, err := s.lockWallet(tx, input.UserGuid)
+		if err != nil {
+			return err
+		}
+
+		var existing domains.UserWalletRecord
+		err = tx.Where("user_guid = ? AND type = ? AND source = ? AND related_guid = ?",
+			input.UserGuid,
+			domains.WalletRecordTypeRecharge,
+			domains.WalletSourceManual,
+			input.RequestID,
+		).First(&existing).Error
+		if err == nil {
+			if existing.AmountCents != input.AmountCents {
+				return errors.New("request id has already been used with another amount")
+			}
+			result.Wallet = walletToBalanceAccount(wallet)
+			result.Record = existing
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		currency := defaultString(strings.TrimSpace(wallet.Currency), "CNY")
+		recordInput := normalizeWalletRecordInput(WalletRecordInput{
+			UserGuid:    input.UserGuid,
+			Type:        domains.WalletRecordTypeRecharge,
+			Source:      domains.WalletSourceManual,
+			Title:       "管理员充值",
+			AmountCents: input.AmountCents,
+			Currency:    currency,
+			RelatedGuid: input.RequestID,
+			Remark:      input.Remark,
+			Meta:        adminWalletRechargeMeta(input),
+			OccurredAt:  time.Now().Unix(),
+		})
+		applyWalletIncome(wallet, recordInput)
+		if err := s.saveWallet(tx, wallet); err != nil {
+			return err
+		}
+		record, err := s.createRecordWithResult(
+			tx,
+			wallet,
+			recordInput,
+			domains.WalletRecordDirectionIncome,
+			recordInput.AmountMicros,
+		)
+		if err != nil {
+			return err
+		}
+		result.Wallet = walletToBalanceAccount(wallet)
+		result.Record = *record
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func adminWalletRechargeMeta(input AdminWalletRechargeInput) string {
+	values := map[string]any{
+		"operation": "admin_recharge",
+	}
+	if input.OperatorUserGuid != "" {
+		values["operatorUserGuid"] = input.OperatorUserGuid
+	}
+	if input.OperatorIP != "" {
+		values["operatorIp"] = input.OperatorIP
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
 func (s *UserWalletService) ListRecords(userGuid string, query WalletRecordQuery) (vos.PageResult, error) {
 	userGuid = strings.TrimSpace(userGuid)
 	if userGuid == "" {
@@ -339,6 +479,89 @@ func (s *UserWalletService) ListRecords(userGuid string, query WalletRecordQuery
 		return vos.PageResult{}, err
 	}
 	return vos.PageResult{List: records, Total: total, Page: query.Page, Size: query.Size}, nil
+}
+
+// ListAdminRecords returns wallet records across users for the operations
+// console. User identity is attached in one batch so clients can render a
+// useful audit trail without issuing one request per row.
+func (s *UserWalletService) ListAdminRecords(query WalletRecordQuery) (vos.PageResult, error) {
+	query.Normalize()
+	var records []domains.UserWalletRecord
+	var total int64
+	db := s.RecordCrud.DB().Model(&domains.UserWalletRecord{})
+	if query.Q != "" {
+		keyword := "%" + query.Q + "%"
+		matchingUsers := s.DB().Model(&commonDomains.SysUser{}).
+			Select("guid").
+			Where("username ILIKE ? OR nick_name ILIKE ? OR email ILIKE ? OR guid ILIKE ?", keyword, keyword, keyword, keyword)
+		db = db.Where(
+			"type ILIKE ? OR source ILIKE ? OR title ILIKE ? OR order_no ILIKE ? OR remark ILIKE ? OR user_guid IN (?)",
+			keyword,
+			keyword,
+			keyword,
+			keyword,
+			keyword,
+			matchingUsers,
+		)
+	}
+	if query.Type != "" {
+		db = db.Where("type = ?", query.Type)
+	}
+	if query.Source != "" {
+		db = db.Where("source = ?", query.Source)
+	}
+	if query.Direction != "" {
+		db = db.Where("direction = ?", query.Direction)
+	}
+	if query.StartTime > 0 {
+		db = db.Where("occurred_at >= ?", query.StartTime)
+	}
+	if query.EndTime > 0 {
+		db = db.Where("occurred_at <= ?", query.EndTime)
+	}
+	if err := db.Count(&total).Error; err != nil {
+		return vos.PageResult{}, err
+	}
+	if err := db.Order("id desc").Offset(query.Offset()).Limit(query.Size).Find(&records).Error; err != nil {
+		return vos.PageResult{}, err
+	}
+	items := s.adminWalletRecordItems(records)
+	return vos.PageResult{List: items, Total: total, Page: query.Page, Size: query.Size}, nil
+}
+
+func (s *UserWalletService) adminWalletRecordItems(records []domains.UserWalletRecord) []AdminWalletRecordItem {
+	items := make([]AdminWalletRecordItem, len(records))
+	userGuids := make([]string, 0, len(records))
+	seen := make(map[string]bool, len(records))
+	for i, record := range records {
+		items[i] = AdminWalletRecordItem{UserWalletRecord: record}
+		userGuid := strings.TrimSpace(record.UserGuid)
+		if userGuid != "" && !seen[userGuid] {
+			seen[userGuid] = true
+			userGuids = append(userGuids, userGuid)
+		}
+	}
+	if len(userGuids) == 0 {
+		return items
+	}
+	var users []commonDomains.SysUser
+	if err := s.DB().Where("guid IN ?", userGuids).Find(&users).Error; err != nil {
+		return items
+	}
+	userByGuid := make(map[string]commonDomains.SysUser, len(users))
+	for _, user := range users {
+		userByGuid[user.Guid] = user
+	}
+	for i := range items {
+		user, ok := userByGuid[items[i].UserGuid]
+		if !ok {
+			continue
+		}
+		items[i].Username = user.Username
+		items[i].NickName = user.NickName
+		items[i].Email = user.Email
+	}
+	return items
 }
 
 func (s *UserWalletService) ListActivities(userGuid string, query WalletActivityQuery) ([]WalletActivityItem, error) {

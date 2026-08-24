@@ -2,11 +2,15 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"navapi-go/domains"
@@ -22,7 +26,19 @@ const (
 	streamDialTimeout           = 15 * time.Second
 	streamTLSHandshakeTimeout   = 15 * time.Second
 	streamResponseHeaderTimeout = 10 * time.Minute
+	providerTransportCacheLimit = 64
+	providerTransportCacheTTL   = 10 * time.Minute
 )
+
+type cachedProviderTransport struct {
+	transport *http.Transport
+	createdAt time.Time
+}
+
+var providerTransportCache = struct {
+	sync.Mutex
+	items map[string]cachedProviderTransport
+}{items: make(map[string]cachedProviderTransport)}
 
 func normalizeProviderProxyConfig(provider *domains.VendorMeta) {
 	provider.ProxyURL = strings.TrimSpace(provider.ProxyURL)
@@ -113,7 +129,7 @@ func providerHTTPClient(provider *domains.VendorMeta, timeout time.Duration) (*h
 	if !providerProxyEnabled(provider) {
 		return &http.Client{Timeout: timeout}, nil
 	}
-	transport, err := providerTransport(provider)
+	transport, err := cachedProviderTransportFor(provider, false)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +137,7 @@ func providerHTTPClient(provider *domains.VendorMeta, timeout time.Duration) (*h
 }
 
 func providerStreamHTTPClient(provider *domains.VendorMeta) (*http.Client, error) {
-	transport, err := providerTransportWithMode(provider, true)
+	transport, err := cachedProviderTransportFor(provider, true)
 	if err != nil {
 		return nil, err
 	}
@@ -156,6 +172,66 @@ func (s RelayService) streamClientForProvider(provider *domains.VendorMeta) (*ht
 
 func providerTransport(provider *domains.VendorMeta) (*http.Transport, error) {
 	return providerTransportWithMode(provider, false)
+}
+
+func cachedProviderTransportFor(provider *domains.VendorMeta, streaming bool) (*http.Transport, error) {
+	key := providerTransportKey(provider, streaming)
+	now := time.Now()
+	providerTransportCache.Lock()
+	if cached, ok := providerTransportCache.items[key]; ok && now.Sub(cached.createdAt) < providerTransportCacheTTL {
+		providerTransportCache.Unlock()
+		return cached.transport, nil
+	}
+	providerTransportCache.Unlock()
+
+	transport, err := providerTransportWithMode(provider, streaming)
+	if err != nil {
+		return nil, err
+	}
+	providerTransportCache.Lock()
+	if previous, ok := providerTransportCache.items[key]; ok {
+		previous.transport.CloseIdleConnections()
+	}
+	providerTransportCache.items[key] = cachedProviderTransport{transport: transport, createdAt: now}
+	if len(providerTransportCache.items) > providerTransportCacheLimit {
+		keys := make([]string, 0, len(providerTransportCache.items))
+		for itemKey := range providerTransportCache.items {
+			keys = append(keys, itemKey)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			return providerTransportCache.items[keys[i]].createdAt.Before(providerTransportCache.items[keys[j]].createdAt)
+		})
+		for _, evictKey := range keys[:len(keys)-providerTransportCacheLimit] {
+			providerTransportCache.items[evictKey].transport.CloseIdleConnections()
+			delete(providerTransportCache.items, evictKey)
+		}
+	}
+	providerTransportCache.Unlock()
+	return transport, nil
+}
+
+func providerTransportKey(provider *domains.VendorMeta, streaming bool) string {
+	if provider == nil {
+		return "default"
+	}
+	raw := strings.Join([]string{
+		provider.Guid,
+		provider.ProxyType,
+		provider.ProxyURL,
+		provider.ProxyUsername,
+		provider.ProxyPassword,
+		boolString(provider.ProxyEnabled),
+		boolString(streaming),
+	}, "\x00")
+	digest := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(digest[:])
+}
+
+func boolString(value bool) string {
+	if value {
+		return "1"
+	}
+	return "0"
 }
 
 func providerTransportWithMode(provider *domains.VendorMeta, streaming bool) (*http.Transport, error) {

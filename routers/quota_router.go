@@ -13,6 +13,7 @@ func (r QuotaRouter) InitQuotaRouter(router *gin.RouterGroup) {
 	{
 		group.GET("/list", middlewares.AdminOnly(), quotaApi.List)
 		group.GET("/self", quotaApi.Self)
+		group.POST("/recharge", middlewares.AdminOnly(), quotaApi.Recharge)
 		group.PUT("/", middlewares.AdminOnly(), quotaApi.Update)
 	}
 }

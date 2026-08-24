@@ -75,3 +75,29 @@ func (a QuotaApi) Update(c *gin.Context) {
 	}
 	response.Ok(updated, c)
 }
+
+// Recharge 管理员为指定用户充值
+// @Summary 管理员为指定用户充值
+// @Description 增加指定用户的付费余额，并生成一条管理员手工充值账单
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param data body services.AdminWalletRechargeInput true "管理员充值请求"
+// @Success 200 {object} response.Response{data=services.AdminWalletRechargeResult,msg=string}
+// @Router /balance/recharge [post]
+func (a QuotaApi) Recharge(c *gin.Context) {
+	var input services.AdminWalletRechargeInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	input.OperatorUserGuid = utils.GetUserGuid(c)
+	input.OperatorIP = c.ClientIP()
+	result, err := userWalletService.AdminRecharge(input)
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(result, c)
+}

@@ -137,9 +137,9 @@ func (s *AnnouncementService) Delete(id uint) error {
 }
 
 func (s *AnnouncementService) NotifyEmailAsync(announcement domains.Announcement) {
-	go func() {
+	_ = enqueueBackground(func() {
 		_ = s.NotifyEmail(announcement)
-	}()
+	})
 }
 
 func (s *AnnouncementService) NotifyEmail(announcement domains.Announcement) error {
