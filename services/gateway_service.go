@@ -19,7 +19,7 @@ const GatewayVersion = "v0.1.0"
 const (
 	serviceStatusRecentRequestCount         = 60
 	serviceStatusCacheTTL                   = 30 * time.Second
-	serviceStatusWarningFirstResponseTimeMs = int64(3000)
+	serviceStatusWarningFirstResponseTimeMs = int64(5000)
 	serviceStatusWarningSuccessRate         = 0.99
 	serviceStatusCriticalSuccessRate        = 0.95
 )
