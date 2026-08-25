@@ -49,6 +49,14 @@ type WalletRecordInput struct {
 	OccurredAt       int64
 }
 
+// AdminRechargeStats contains the lifetime income totals shown in the
+// administrator recharge workspace. Values are stored in wallet micro-units
+// so the client can format them with the same currency helper as balances.
+type AdminRechargeStats struct {
+	ManualRechargeAmountMicros int64 `json:"manualRechargeAmountMicros"`
+	RedemptionAmountMicros     int64 `json:"redemptionAmountMicros"`
+}
+
 type WalletBalanceAccount struct {
 	commonDomains.BaseDataEntity
 	UserGuid                      string `json:"userGuid"`
@@ -527,6 +535,28 @@ func (s *UserWalletService) ListAdminRecords(query WalletRecordQuery) (vos.PageR
 	}
 	items := s.adminWalletRecordItems(records)
 	return vos.PageResult{List: items, Total: total, Page: query.Page, Size: query.Size}, nil
+}
+
+// AdminRechargeStats returns non-paginated totals for actual recharge income.
+// Manual recharge and redeemed cards are kept separate so the console can
+// show both sources without summing the current page of records.
+func (s *UserWalletService) AdminRechargeStats() (AdminRechargeStats, error) {
+	var stats AdminRechargeStats
+	query := s.RecordCrud.DB().Model(&domains.UserWalletRecord{}).
+		Where("type = ? AND direction = ? AND source IN ?",
+			domains.WalletRecordTypeRecharge,
+			domains.WalletRecordDirectionIncome,
+			[]string{domains.WalletSourceManual, domains.WalletSourceRedemption},
+		)
+	err := query.Select(
+		"COALESCE(SUM(CASE WHEN source = ? THEN CASE WHEN amount_micros_delta <> 0 THEN amount_micros_delta ELSE amount_cents * ? END ELSE 0 END), 0) AS manual_recharge_amount_micros, "+
+			"COALESCE(SUM(CASE WHEN source = ? THEN CASE WHEN amount_micros_delta <> 0 THEN amount_micros_delta ELSE amount_cents * ? END ELSE 0 END), 0) AS redemption_amount_micros",
+		domains.WalletSourceManual,
+		amountMicrosPerCent,
+		domains.WalletSourceRedemption,
+		amountMicrosPerCent,
+	).Scan(&stats).Error
+	return stats, err
 }
 
 func (s *UserWalletService) adminWalletRecordItems(records []domains.UserWalletRecord) []AdminWalletRecordItem {

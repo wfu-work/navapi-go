@@ -38,6 +38,23 @@ func (a WalletApi) Records(c *gin.Context) {
 	response.Ok(result, c)
 }
 
+// RechargeStats 管理员充值汇总
+// @Summary 管理员充值汇总
+// @Description 返回手工充值和已兑换卡券的实际入账金额，不受分页影响
+// @Tags Navapi模块
+// @Security ApiKeyAuth
+// @Produce json
+// @Success 200 {object} response.Response{data=services.AdminRechargeStats,msg=string}
+// @Router /wallet/recharge-stats [get]
+func (a WalletApi) RechargeStats(c *gin.Context) {
+	stats, err := userWalletService.AdminRechargeStats()
+	if err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.Ok(stats, c)
+}
+
 // Self 当前用户钱包
 // @Summary 当前用户钱包
 // @Description 当前用户钱包

@@ -232,6 +232,7 @@ var navapiAPIPermissionSeeds = []apiPermissionSeed{
 	{Guid: "navapi-api-wallet-self-records", Name: "当前用户钱包流水", Code: "navapi.wallet.self.records", Path: "/wallet/self/records", Verb: "GET", User: true, Sort: 681, Group: "钱包"},
 	{Guid: "navapi-api-wallet-self-activities", Name: "当前用户钱包活动", Code: "navapi.wallet.self.activities", Path: "/wallet/self/activities", Verb: "GET", User: true, Sort: 682, Group: "钱包"},
 	{Guid: "navapi-api-wallet-records", Name: "管理员钱包流水", Code: "navapi.wallet.records", Path: "/wallet/records", Verb: "GET", Sort: 683, Group: "钱包"},
+	{Guid: "navapi-api-wallet-recharge-stats", Name: "管理员充值汇总", Code: "navapi.wallet.rechargeStats", Path: "/wallet/recharge-stats", Verb: "GET", Sort: 684, Group: "钱包"},
 
 	{Guid: "navapi-api-sub-plans", Name: "订阅套餐列表", Code: "navapi.subscription.plans", Path: "/subscription/plans", Verb: "GET", User: true, Sort: 700, Group: "订阅"},
 	{Guid: "navapi-api-sub-plan-get", Name: "订阅套餐详情", Code: "navapi.subscription.plan.get", Path: "/subscription/plan/:id", Verb: "GET", User: true, Sort: 701, Group: "订阅"},

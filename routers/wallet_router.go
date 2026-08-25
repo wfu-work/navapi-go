@@ -12,6 +12,7 @@ func (r WalletRouter) InitWalletRouter(privateGroup *gin.RouterGroup, publicGrou
 	group := privateGroup.Group("wallet")
 	{
 		group.GET("/records", middlewares.AdminOnly(), walletApi.Records)
+		group.GET("/recharge-stats", middlewares.AdminOnly(), walletApi.RechargeStats)
 		group.GET("/self", walletApi.Self)
 		group.GET("/self/records", walletApi.SelfRecords)
 		group.GET("/self/activities", walletApi.SelfActivities)
