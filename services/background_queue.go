@@ -10,7 +10,7 @@ const (
 var backgroundQueue = make(chan func(), backgroundQueueSize)
 
 func init() {
-	for i := 0; i < backgroundWorkerNum; i++ {
+	for range backgroundWorkerNum {
 		go runBackgroundWorker()
 	}
 }
