@@ -28,6 +28,10 @@ const (
 	defaultProviderNotFoundCooldown = 5 * time.Minute
 	defaultProviderThrottleCooldown = time.Minute
 	defaultProviderProbeWait        = 5 * time.Second
+	// A single upstream 429 is a request-level throttle signal, not enough
+	// evidence that the provider is unhealthy. Require two consecutive 429s
+	// before temporarily cooling the affected model/endpoint route.
+	providerThrottleFailureThreshold = 2
 )
 
 type providerCircuitKey struct {
@@ -45,6 +49,7 @@ type providerCircuitEntry struct {
 	ProbeInFlight bool
 	ProbeDone     chan struct{}
 	UpdatedAt     time.Time
+	Outcome       providerCircuitOutcomeKind
 }
 
 type providerCircuitPermit struct {
@@ -111,7 +116,14 @@ func providerCircuitSettingsFromOptions() providerCircuitSettings {
 	}
 }
 
+// TryAcquire returns whether a provider route can be attempted. Relay internals
+// use tryAcquire to also distinguish throttle-only cooling.
 func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName string, endpoint string) (*providerCircuitPermit, time.Duration, <-chan struct{}, bool) {
+	permit, retryAfter, probeDone, available, _ := b.tryAcquire(providerGuid, modelName, endpoint)
+	return permit, retryAfter, probeDone, available
+}
+
+func (b *ProviderCircuitBreaker) tryAcquire(providerGuid string, modelName string, endpoint string) (*providerCircuitPermit, time.Duration, <-chan struct{}, bool, bool) {
 	settings := b.settings()
 	permit := &providerCircuitPermit{
 		globalKey: providerCircuitKey{
@@ -130,7 +142,7 @@ func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName strin
 	}
 	if !settings.Enabled || permit.globalKey.ProviderGuid == "" {
 		permit.circuitDisabled = true
-		return permit, 0, nil, true
+		return permit, 0, nil, true, false
 	}
 
 	now := b.now()
@@ -142,10 +154,19 @@ func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName strin
 	keys := []providerCircuitKey{permit.globalKey, permit.endpointKey}
 	var retryAfter time.Duration
 	var probeDone <-chan struct{}
+	allThrottled := true
+	hasOpenCircuit := false
 	for _, key := range keys {
 		entry := b.entries[key]
 		if entry == nil || entry.OpenUntil.IsZero() {
 			continue
+		}
+		if !entry.OpenUntil.After(now) && !entry.ProbeInFlight {
+			continue
+		}
+		hasOpenCircuit = true
+		if entry.Outcome != providerCircuitThrottled {
+			allThrottled = false
 		}
 		if entry.OpenUntil.After(now) {
 			if wait := entry.OpenUntil.Sub(now); wait > retryAfter {
@@ -163,7 +184,7 @@ func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName strin
 		}
 	}
 	if retryAfter > 0 {
-		return nil, retryAfter, probeDone, false
+		return nil, retryAfter, probeDone, false, hasOpenCircuit && allThrottled
 	}
 
 	for _, key := range keys {
@@ -179,7 +200,7 @@ func (b *ProviderCircuitBreaker) TryAcquire(providerGuid string, modelName strin
 		entry.UpdatedAt = now
 		permit.halfOpenKeys[key] = struct{}{}
 	}
-	return permit, 0, nil, true
+	return permit, 0, nil, true, false
 }
 
 func (b *ProviderCircuitBreaker) Record(permit *providerCircuitPermit, outcome providerCircuitOutcome) {
@@ -201,19 +222,26 @@ func (b *ProviderCircuitBreaker) Record(permit *providerCircuitPermit, outcome p
 		b.releaseHalfOpenLocked(permit, now)
 	case providerCircuitGlobalFailure:
 		b.releaseHalfOpenKeyLocked(permit, permit.endpointKey, now)
-		b.failLocked(permit, permit.globalKey, permit.settings.FailureThreshold, permit.settings.Cooldown, now)
+		b.failLocked(permit, permit.globalKey, permit.settings.FailureThreshold, permit.settings.Cooldown, now, providerCircuitGlobalFailure)
 	case providerCircuitNotFound:
 		b.releaseHalfOpenKeyLocked(permit, permit.globalKey, now)
 		cooldown := minCircuitDuration(defaultProviderNotFoundCooldown, permit.settings.MaxCooldown)
-		b.failLocked(permit, permit.endpointKey, 1, cooldown, now)
+		b.failLocked(permit, permit.endpointKey, 1, cooldown, now, providerCircuitNotFound)
 	case providerCircuitThrottled:
-		b.releaseHalfOpenKeyLocked(permit, permit.endpointKey, now)
+		// Rate limiting is scoped to the current model and endpoint. Do not
+		// remove an otherwise healthy provider from every route because one
+		// model received a transient 429 response.
+		b.releaseHalfOpenKeyLocked(permit, permit.globalKey, now)
 		cooldown := outcome.RetryAfter
 		if cooldown <= 0 {
 			cooldown = defaultProviderThrottleCooldown
 		}
 		cooldown = minCircuitDuration(cooldown, permit.settings.MaxCooldown)
-		b.failLocked(permit, permit.globalKey, 1, cooldown, now)
+		threshold := permit.settings.FailureThreshold
+		if threshold < providerThrottleFailureThreshold {
+			threshold = providerThrottleFailureThreshold
+		}
+		b.failLocked(permit, permit.endpointKey, threshold, cooldown, now, providerCircuitThrottled)
 	}
 }
 
@@ -227,7 +255,7 @@ func (b *ProviderCircuitBreaker) Reset() {
 	b.mu.Unlock()
 }
 
-func (b *ProviderCircuitBreaker) failLocked(permit *providerCircuitPermit, key providerCircuitKey, threshold int, baseCooldown time.Duration, now time.Time) {
+func (b *ProviderCircuitBreaker) failLocked(permit *providerCircuitPermit, key providerCircuitKey, threshold int, baseCooldown time.Duration, now time.Time, outcome providerCircuitOutcomeKind) {
 	entry := b.entries[key]
 	observedGeneration := permit.generations[key]
 	if entry != nil && entry.Generation != observedGeneration && !entry.OpenUntil.IsZero() {
@@ -251,6 +279,7 @@ func (b *ProviderCircuitBreaker) failLocked(permit *providerCircuitPermit, key p
 		entry.OpenCount = 1
 	}
 	entry.OpenUntil = now.Add(exponentialCircuitCooldown(baseCooldown, permit.settings.MaxCooldown, entry.OpenCount))
+	entry.Outcome = outcome
 }
 
 func (b *ProviderCircuitBreaker) clearLocked(permit *providerCircuitPermit, key providerCircuitKey) {

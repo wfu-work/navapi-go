@@ -203,12 +203,16 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 	routeAttempts := make([]RelayAttempt, 0, len(prepared.Candidates))
 	var circuitRetryAfter time.Duration
 	var probeDone <-chan struct{}
+	circuitSkipCount := 0
+	circuitThrottledOnly := true
 	for pass := 0; pass < 2; pass++ {
 		for i := range prepared.Candidates {
 			route := prepared.Candidates[i]
 			current := route.Provider
-			permit, retryAfter, currentProbeDone, available := ProviderCircuitBreakerApp.TryAcquire(current.Guid, prepared.ModelName, endpoint.UpstreamPath)
+			permit, retryAfter, currentProbeDone, available, throttled := ProviderCircuitBreakerApp.tryAcquire(current.Guid, prepared.ModelName, endpoint.UpstreamPath)
 			if !available {
+				circuitSkipCount++
+				circuitThrottledOnly = circuitThrottledOnly && throttled
 				if retryAfter > 0 && (circuitRetryAfter <= 0 || retryAfter < circuitRetryAfter) {
 					circuitRetryAfter = retryAfter
 				}
@@ -279,6 +283,8 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 		routeAttempts = routeAttempts[:0]
 		circuitRetryAfter = 0
 		probeDone = nil
+		circuitSkipCount = 0
+		circuitThrottledOnly = true
 	}
 	useTime := time.Since(start).Milliseconds()
 	if attempts == 0 {
@@ -288,7 +294,11 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts))
 			return nil, err
 		}
-		err = providerCircuitUnavailableError(circuitRetryAfter)
+		if circuitSkipCount > 0 && circuitThrottledOnly {
+			err = providerThrottleUnavailableError(circuitRetryAfter)
+		} else {
+			err = providerCircuitUnavailableError(circuitRetryAfter)
+		}
 		provider = firstRelayProvider(prepared.Candidates)
 		_ = LogServiceApp.CreateCircuitRejection(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts), endpoint.UpstreamPath)
 		return nil, err
@@ -341,12 +351,16 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 	routeAttempts := make([]RelayAttempt, 0, len(prepared.Candidates))
 	var circuitRetryAfter time.Duration
 	var probeDone <-chan struct{}
+	circuitSkipCount := 0
+	circuitThrottledOnly := true
 	for pass := 0; pass < 2; pass++ {
 		for i := range prepared.Candidates {
 			route := prepared.Candidates[i]
 			current := route.Provider
-			permit, retryAfter, currentProbeDone, available := ProviderCircuitBreakerApp.TryAcquire(current.Guid, prepared.ModelName, endpoint.UpstreamPath)
+			permit, retryAfter, currentProbeDone, available, throttled := ProviderCircuitBreakerApp.tryAcquire(current.Guid, prepared.ModelName, endpoint.UpstreamPath)
 			if !available {
+				circuitSkipCount++
+				circuitThrottledOnly = circuitThrottledOnly && throttled
 				if retryAfter > 0 && (circuitRetryAfter <= 0 || retryAfter < circuitRetryAfter) {
 					circuitRetryAfter = retryAfter
 				}
@@ -417,6 +431,8 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 		routeAttempts = routeAttempts[:0]
 		circuitRetryAfter = 0
 		probeDone = nil
+		circuitSkipCount = 0
+		circuitThrottledOnly = true
 	}
 
 	useTime := time.Since(start).Milliseconds()
@@ -427,7 +443,11 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 			_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts))
 			return err
 		}
-		err = providerCircuitUnavailableError(circuitRetryAfter)
+		if circuitSkipCount > 0 && circuitThrottledOnly {
+			err = providerThrottleUnavailableError(circuitRetryAfter)
+		} else {
+			err = providerCircuitUnavailableError(circuitRetryAfter)
+		}
 		provider = firstRelayProvider(prepared.Candidates)
 		_ = LogServiceApp.CreateCircuitRejection(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, 0, usageLogTiming(nil, prepared.Body, attempts), prepared.IsStream, "error", err.Error(), prepared.Body, "", routeAttempts), endpoint.UpstreamPath)
 		return err
@@ -764,6 +784,18 @@ func providerCircuitUnavailableError(retryAfter time.Duration) error {
 	}
 	return &RelayHTTPError{
 		StatusCode: http.StatusServiceUnavailable,
+		Message:    message,
+		RetryAfter: retryAfter,
+	}
+}
+
+func providerThrottleUnavailableError(retryAfter time.Duration) error {
+	message := "all available providers are rate limited"
+	if retryAfter > 0 {
+		message = fmt.Sprintf("all available providers are rate limited, retry after %s", retryAfter.Round(time.Second))
+	}
+	return &RelayHTTPError{
+		StatusCode: http.StatusTooManyRequests,
 		Message:    message,
 		RetryAfter: retryAfter,
 	}
