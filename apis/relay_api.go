@@ -14,6 +14,7 @@ import (
 	"navapi-go/vos"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 type RelayApi struct{}
@@ -125,6 +126,7 @@ func (a RelayApi) Relay(c *gin.Context, endpoint services.RelayEndpoint) {
 		openAIError(c, http.StatusUnauthorized, "token is invalid")
 		return
 	}
+	ensureRelayRequestID(c)
 	result, streamed, err := relayService.RelayHTTP(c, token, endpoint)
 	if err != nil {
 		if streamed && c.Writer.Written() {
@@ -132,11 +134,7 @@ func (a RelayApi) Relay(c *gin.Context, endpoint services.RelayEndpoint) {
 		}
 		var relayErr *services.RelayHTTPError
 		if errors.As(err, &relayErr) {
-			if relayErr.RetryAfter > 0 {
-				seconds := int64((relayErr.RetryAfter + time.Second - 1) / time.Second)
-				c.Header("Retry-After", strconv.FormatInt(seconds, 10))
-			}
-			openAIError(c, relayErr.StatusCode, relayErr.Message)
+			openAIRelayError(c, relayErr)
 			return
 		}
 		openAIError(c, http.StatusBadGateway, err.Error())
@@ -145,7 +143,8 @@ func (a RelayApi) Relay(c *gin.Context, endpoint services.RelayEndpoint) {
 	if streamed {
 		return
 	}
-	for key, values := range result.Header {
+	responseHeaders := services.NormalizeRelayResponseHeaders(result.StatusCode, result.Header)
+	for key, values := range responseHeaders {
 		if key == "Content-Length" || key == "Transfer-Encoding" {
 			continue
 		}
@@ -153,7 +152,7 @@ func (a RelayApi) Relay(c *gin.Context, endpoint services.RelayEndpoint) {
 			c.Writer.Header().Add(key, value)
 		}
 	}
-	contentType := result.Header.Get("Content-Type")
+	contentType := responseHeaders.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/json"
 	}
@@ -249,4 +248,77 @@ func openAIError(c *gin.Context, code int, message string) {
 		Message: message,
 		Type:    "invalid_request_error",
 	}})
+}
+
+func openAIRelayError(c *gin.Context, relayErr *services.RelayHTTPError) {
+	if relayErr == nil {
+		openAIError(c, http.StatusBadGateway, "relay request failed")
+		return
+	}
+	statusCode := relayErr.StatusCode
+	if statusCode <= 0 {
+		statusCode = http.StatusBadGateway
+	}
+	retryAfterSeconds := retryAfterHeaderSeconds(relayErr.RetryAfter)
+	if retryAfterSeconds > 0 {
+		c.Header("Retry-After", strconv.FormatInt(retryAfterSeconds, 10))
+	}
+	requestID := strings.TrimSpace(c.GetHeader("X-Request-Id"))
+	retryable := relayErr.Retryable
+	if !retryable {
+		retryable = statusCode == http.StatusTooManyRequests || statusCode == http.StatusRequestTimeout || statusCode >= http.StatusInternalServerError
+	}
+	errorType := strings.TrimSpace(relayErr.Type)
+	if errorType == "" {
+		if statusCode == http.StatusTooManyRequests {
+			errorType = "rate_limit_error"
+		} else if statusCode >= http.StatusInternalServerError {
+			errorType = "server_error"
+		} else {
+			errorType = "invalid_request_error"
+		}
+	}
+	errorCode := strings.TrimSpace(relayErr.Code)
+	if errorCode == "" {
+		switch {
+		case statusCode == http.StatusTooManyRequests:
+			errorCode = "rate_limited"
+		case statusCode >= http.StatusInternalServerError:
+			errorCode = "service_unavailable"
+		}
+	}
+	c.JSON(statusCode, vos.OpenAIErrorResponse{Error: vos.OpenAIError{
+		Message:           relayErr.Message,
+		Type:              errorType,
+		Code:              errorCode,
+		Retryable:         &retryable,
+		RetryAfterSeconds: retryAfterSeconds,
+		RequestID:         requestID,
+	}})
+}
+
+func ensureRelayRequestID(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	requestID := strings.TrimSpace(c.GetHeader("X-Request-Id"))
+	if requestID == "" {
+		requestID = uuid.NewString()
+		if c.Request != nil {
+			c.Request.Header.Set("X-Request-Id", requestID)
+		}
+	}
+	c.Header("X-Request-Id", requestID)
+	return requestID
+}
+
+func retryAfterHeaderSeconds(value time.Duration) int64 {
+	if value <= 0 {
+		return 0
+	}
+	seconds := int64((value + time.Second - 1) / time.Second)
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
 }

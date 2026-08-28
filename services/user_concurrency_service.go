@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 type UserConcurrencyService struct {
@@ -43,6 +44,10 @@ func (s *UserConcurrencyService) Acquire(userGuid, tokenGuid string) (func(), er
 		return nil, &RelayHTTPError{
 			StatusCode: http.StatusTooManyRequests,
 			Message:    fmt.Sprintf("user concurrency limit exceeded, max concurrency is %d", limit),
+			Type:       "rate_limit_error",
+			Code:       "concurrency_limit",
+			Retryable:  true,
+			RetryAfter: time.Second,
 		}
 	}
 	if userGuid != "" {

@@ -35,7 +35,7 @@ const (
 	defaultRiskModelRateLimitCount         int64 = 60
 	defaultRiskModelRateLimitWindowSeconds int64 = 60
 	defaultRiskProviderAffinitySeconds     int64 = 300
-	defaultRiskProviderFailureThreshold    int64 = 2
+	defaultRiskProviderFailureThreshold    int64 = 3
 	defaultRiskProviderCooldownSeconds     int64 = 30
 	defaultRiskProviderMaxCooldownSeconds  int64 = 600
 	maximumRiskBodyBytes                   int64 = 1 << 30
@@ -172,7 +172,9 @@ func normalizeRiskResponsesEOFTerminalPolicy(value string, legacyEnabled bool) (
 		if legacyEnabled {
 			return responsesEOFTerminalPolicyIncomplete, nil
 		}
-		return responsesEOFTerminalPolicyOff, nil
+		// Keep the default aligned with the stream relay: an explicit terminal
+		// event prevents Codex from interpreting an early EOF as a disconnect.
+		return responsesEOFTerminalPolicyIncomplete, nil
 	}
 	if policy, ok := normalizeResponsesEOFTerminalPolicy(raw); ok {
 		return policy, nil

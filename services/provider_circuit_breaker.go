@@ -29,9 +29,9 @@ const (
 	defaultProviderThrottleCooldown = time.Minute
 	defaultProviderProbeWait        = 5 * time.Second
 	// A single upstream 429 is a request-level throttle signal, not enough
-	// evidence that the provider is unhealthy. Require two consecutive 429s
+	// evidence that the provider is unhealthy. Require three consecutive 429s
 	// before temporarily cooling the affected model/endpoint route.
-	providerThrottleFailureThreshold = 2
+	providerThrottleFailureThreshold = 3
 )
 
 type providerCircuitKey struct {
@@ -96,11 +96,11 @@ func newProviderCircuitBreaker(settings func() providerCircuitSettings) *Provide
 }
 
 func providerCircuitSettingsFromOptions() providerCircuitSettings {
-	threshold := OptionServiceApp.Int64("relay.provider_failure_threshold", 2)
+	threshold := OptionServiceApp.Int64("relay.provider_failure_threshold", 3)
 	cooldownSeconds := OptionServiceApp.Int64("relay.provider_cooldown_seconds", 30)
 	maxCooldownSeconds := OptionServiceApp.Int64("relay.provider_max_cooldown_seconds", 600)
 	if threshold <= 0 {
-		threshold = 2
+		threshold = providerThrottleFailureThreshold
 	}
 	if cooldownSeconds <= 0 {
 		cooldownSeconds = 30

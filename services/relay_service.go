@@ -97,8 +97,21 @@ type preparedRelay struct {
 type RelayHTTPError struct {
 	StatusCode int
 	Message    string
+	Type       string
+	Code       string
+	Retryable  bool
 	RetryAfter time.Duration
 }
+
+const (
+	// Keep transient relay failures from causing clients to reconnect in a
+	// tight loop when no upstream supplied a usable retry interval.
+	defaultRelayRetryAfter            = 2 * time.Second
+	defaultProviderThrottleRetryAfter = time.Second
+	// Bound failover work for one inbound request. A client may retry the
+	// request later, but a single request should not fan out to every route.
+	maxRelayProviderAttempts = 3
+)
 
 type billingReservation struct {
 	AmountMicros   int64
@@ -253,7 +266,8 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 				ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
 			}
 			maybeAutoDisableProvider(&current, result)
-			willRetry := (err != nil || (result != nil && shouldRetryRelayStatus(result.StatusCode))) && i < len(prepared.Candidates)-1
+			canRetry := i < len(prepared.Candidates)-1 && attempts < maxRelayProviderAttempts
+			willRetry := canRetry && (err != nil || (result != nil && shouldRetryRelayStatus(result.StatusCode)))
 			routeAttempts = append(routeAttempts, newRelayAttempt(attempts, &route, prepared.ModelName, result, err, time.Since(attemptStart), willRetry, lease.InflightBefore))
 			if err != nil && willRetry {
 				continue
@@ -390,7 +404,8 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 			forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
 			provider = &current
 			attemptStart := time.Now()
-			result, err = s.forwardStream(c, &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery, i < len(prepared.Candidates)-1)
+			canRetry := i < len(prepared.Candidates)-1 && attempts < maxRelayProviderAttempts
+			result, err = s.forwardStream(c, &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery, canRetry)
 			lease.Release()
 			if result != nil {
 				result.Timing.AttemptCount = attempts
@@ -401,7 +416,7 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 				ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
 			}
 			maybeAutoDisableProvider(&current, result)
-			willRetry := i < len(prepared.Candidates)-1 && ((err != nil && canRetryStreamAttempt(result)) || (err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode)))
+			willRetry := canRetry && ((err != nil && canRetryStreamAttempt(result)) || (err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode)))
 			routeAttempts = append(routeAttempts, newRelayAttempt(attempts, &route, prepared.ModelName, result, err, time.Since(attemptStart), willRetry, lease.InflightBefore))
 			if err != nil && willRetry {
 				continue
@@ -533,14 +548,18 @@ func checkModelRateLimit(token *domains.ApiToken, modelName string) error {
 	if ok {
 		return nil
 	}
+	retryAfter = relayRetryAfter(retryAfter, defaultRelayRetryAfter)
 	message := "rate limit exceeded"
 	if retryAfter > 0 {
-		seconds := int64((retryAfter + time.Second - 1) / time.Second)
+		seconds := int64(retryAfter / time.Second)
 		message = fmt.Sprintf("rate limit exceeded, retry after %ds", seconds)
 	}
 	return &RelayHTTPError{
 		StatusCode: http.StatusTooManyRequests,
 		Message:    message,
+		Type:       "rate_limit_error",
+		Code:       "rate_limit_exceeded",
+		Retryable:  true,
 		RetryAfter: retryAfter,
 	}
 }
@@ -778,25 +797,27 @@ func shouldForgetProviderAffinity(outcome providerCircuitOutcome, result *RelayR
 }
 
 func providerCircuitUnavailableError(retryAfter time.Duration) error {
-	message := "all available providers are cooling down"
-	if retryAfter > 0 {
-		message = fmt.Sprintf("all available providers are cooling down, retry after %s", retryAfter.Round(time.Second))
-	}
+	retryAfter = relayRetryAfter(retryAfter, defaultRelayRetryAfter)
+	message := fmt.Sprintf("all available providers are cooling down, retry after %s", formatRetryAfter(retryAfter))
 	return &RelayHTTPError{
 		StatusCode: http.StatusServiceUnavailable,
 		Message:    message,
+		Type:       "server_error",
+		Code:       "provider_unavailable",
+		Retryable:  true,
 		RetryAfter: retryAfter,
 	}
 }
 
 func providerThrottleUnavailableError(retryAfter time.Duration) error {
-	message := "all available providers are rate limited"
-	if retryAfter > 0 {
-		message = fmt.Sprintf("all available providers are rate limited, retry after %s", retryAfter.Round(time.Second))
-	}
+	retryAfter = relayRetryAfter(retryAfter, defaultProviderThrottleRetryAfter)
+	message := fmt.Sprintf("all available providers are rate limited, retry after %s", formatRetryAfter(retryAfter))
 	return &RelayHTTPError{
 		StatusCode: http.StatusTooManyRequests,
 		Message:    message,
+		Type:       "rate_limit_error",
+		Code:       "rate_limited",
+		Retryable:  true,
 		RetryAfter: retryAfter,
 	}
 }
@@ -805,8 +826,31 @@ func providerCapacityUnavailableError() error {
 	return &RelayHTTPError{
 		StatusCode: http.StatusServiceUnavailable,
 		Message:    "all available providers are at concurrency capacity",
+		Type:       "server_error",
+		Code:       "provider_capacity",
+		Retryable:  true,
 		RetryAfter: time.Second,
 	}
+}
+
+func relayRetryAfter(value time.Duration, fallback time.Duration) time.Duration {
+	if value <= 0 {
+		value = fallback
+	}
+	if value <= 0 {
+		value = time.Second
+	}
+	// Retry-After is serialized as whole seconds. Round up so a positive
+	// duration can never be presented to clients as "0s".
+	seconds := (value + time.Second - 1) / time.Second
+	if seconds < 1 {
+		seconds = 1
+	}
+	return seconds * time.Second
+}
+
+func formatRetryAfter(value time.Duration) string {
+	return fmt.Sprintf("%ds", int64(relayRetryAfter(value, time.Second)/time.Second))
 }
 
 func maybeAutoDisableProvider(provider *domains.VendorMeta, result *RelayResult) {
@@ -931,9 +975,10 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 		if readErr != nil {
 			return &RelayResult{StatusCode: resp.StatusCode, Header: resp.Header.Clone(), Timing: trace.Snapshot(time.Since(requestStart))}, readErr
 		}
+		responseHeaders := relayResponseHeaders(resp.StatusCode, resp.Header)
 		if !willRetry {
-			copyResponseHeaders(c.Writer.Header(), resp.Header)
-			c.Data(resp.StatusCode, contentTypeOrJSON(resp.Header), respBody)
+			copyResponseHeaders(c.Writer.Header(), responseHeaders)
+			c.Data(resp.StatusCode, contentTypeOrJSON(responseHeaders), respBody)
 		}
 		timing := trace.Snapshot(time.Since(requestStart))
 		if timing.ResponseHeaderTimeMs <= 0 {
@@ -1171,6 +1216,13 @@ func resolveResponsesStreamEOFTerminalPolicy(configuredPolicy string, legacyEnab
 	}
 	switch strings.ToLower(strings.TrimSpace(legacyEnabled)) {
 	case "1", "true", "yes", "on":
+		return responsesEOFTerminalPolicyIncomplete
+	case "0", "false", "no", "off":
+		return responsesEOFTerminalPolicyOff
+	case "":
+		// A Responses stream that closes before a terminal event otherwise looks
+		// like a transport failure to clients such as Codex and is retried. The
+		// safe default is to close it with an explicit incomplete terminal event.
 		return responsesEOFTerminalPolicyIncomplete
 	}
 	return responsesEOFTerminalPolicyOff
@@ -1428,6 +1480,28 @@ func contentTypeOrJSON(header http.Header) string {
 		return contentType
 	}
 	return "application/json"
+}
+
+func NormalizeRelayResponseHeaders(statusCode int, header http.Header) http.Header {
+	return relayResponseHeaders(statusCode, header)
+}
+
+func relayResponseHeaders(statusCode int, header http.Header) http.Header {
+	result := header.Clone()
+	if result == nil {
+		result = make(http.Header)
+	}
+	if statusCode != http.StatusTooManyRequests && statusCode != http.StatusRequestTimeout && statusCode < http.StatusInternalServerError {
+		return result
+	}
+	if parseRetryAfter(result.Get("Retry-After"), time.Now()) <= 0 {
+		fallback := defaultRelayRetryAfter
+		if statusCode == http.StatusTooManyRequests {
+			fallback = defaultProviderThrottleRetryAfter
+		}
+		result.Set("Retry-After", strconv.FormatInt(int64(relayRetryAfter(0, fallback)/time.Second), 10))
+	}
+	return result
 }
 
 func applyHeaderOverride(header http.Header, raw string) {

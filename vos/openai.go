@@ -22,9 +22,12 @@ type OpenAIErrorResponse struct {
 }
 
 type OpenAIError struct {
-	Message string `json:"message"`
-	Type    string `json:"type"`
-	Code    string `json:"code,omitempty"`
+	Message           string `json:"message"`
+	Type              string `json:"type"`
+	Code              string `json:"code,omitempty"`
+	Retryable         *bool  `json:"retryable,omitempty"`
+	RetryAfterSeconds int64  `json:"retry_after_seconds,omitempty"`
+	RequestID         string `json:"request_id,omitempty"`
 }
 
 type ModelListResponse struct {
