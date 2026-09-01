@@ -86,12 +86,10 @@ type RelayAttempt struct {
 }
 
 type preparedRelay struct {
-	Body            []byte
-	ModelName       string
-	Candidates      []ProviderRouteCandidate
-	RoutingStrategy string
-	UseAffinity     bool
-	IsStream        bool
+	Body       []byte
+	ModelName  string
+	Candidates []ProviderRouteCandidate
+	IsStream   bool
 }
 
 type RelayHTTPError struct {
@@ -189,18 +187,18 @@ func (s RelayService) prepareRelay(c *gin.Context, token *domains.ApiToken, endp
 	if err := checkModelRateLimit(token, modelName); err != nil {
 		return nil, err
 	}
+	// Failover is an active/passive strategy: every request must start with
+	// the configured primary candidate and only fall back to the next
+	// candidate when that attempt fails.  Do not apply the cross-request
+	// provider affinity cache here.  Remembering the last successful provider
+	// would turn a healthy backup into the next request's primary and could
+	// keep the real primary out of rotation until the affinity TTL expires.
 	candidates := ProviderRouterApp.Order(plan)
-	useAffinity := plan.Strategy == constants.ProviderRoutingFailover
-	if useAffinity {
-		candidates = ProviderServiceApp.ApplyRouteAffinity(token.Guid, modelName, candidates)
-	}
 	return &preparedRelay{
-		Body:            body,
-		ModelName:       modelName,
-		Candidates:      candidates,
-		RoutingStrategy: plan.Strategy,
-		UseAffinity:     useAffinity,
-		IsStream:        isStreamRequest(body),
+		Body:       body,
+		ModelName:  modelName,
+		Candidates: candidates,
+		IsStream:   isStreamRequest(body),
 	}, nil
 }
 
@@ -262,9 +260,6 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 			}
 			outcome := classifyProviderCircuitOutcome(c.Request.Context(), result, err, time.Now())
 			ProviderCircuitBreakerApp.Record(permit, outcome)
-			if prepared.UseAffinity && shouldForgetProviderAffinity(outcome, result, err) {
-				ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
-			}
 			maybeAutoDisableProvider(&current, result)
 			canRetry := i < len(prepared.Candidates)-1 && attempts < maxRelayProviderAttempts
 			willRetry := canRetry && (err != nil || (result != nil && shouldRetryRelayStatus(result.StatusCode)))
@@ -332,9 +327,6 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 		s.cancelReservation(token, reservation, content)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, result.Usage, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, status, content, prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 		return result, nil
-	}
-	if provider != nil && prepared.UseAffinity {
-		ProviderServiceApp.RememberAffinity(token.Guid, prepared.ModelName, provider.Guid)
 	}
 	quota := calculateFinalQuota(prepared.ModelName, token.Group, result.Usage, prepared.Body, 0)
 	if !endpoint.NoBilling {
@@ -412,9 +404,6 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 			}
 			outcome := classifyProviderCircuitOutcome(c.Request.Context(), result, err, time.Now())
 			ProviderCircuitBreakerApp.Record(permit, outcome)
-			if prepared.UseAffinity && shouldForgetProviderAffinity(outcome, result, err) {
-				ProviderServiceApp.ForgetAffinity(token.Guid, prepared.ModelName, current.Guid)
-			}
 			maybeAutoDisableProvider(&current, result)
 			willRetry := canRetry && ((err != nil && canRetryStreamAttempt(result)) || (err == nil && result != nil && shouldRetryRelayStatus(result.StatusCode)))
 			routeAttempts = append(routeAttempts, newRelayAttempt(attempts, &route, prepared.ModelName, result, err, time.Since(attemptStart), willRetry, lease.InflightBefore))
@@ -500,9 +489,6 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 		s.cancelReservation(token, reservation, content)
 		_ = LogServiceApp.Create(buildUsageLog(c, token, provider, prepared.ModelName, vos.Usage{}, 0, useTime, firstResponseTime(result), usageLogTiming(result, prepared.Body, attempts), prepared.IsStream, "synthesized", content, prepared.Body, extractUpstreamRequestID(result), routeAttempts, result))
 		return nil
-	}
-	if provider != nil && prepared.UseAffinity {
-		ProviderServiceApp.RememberAffinity(token.Guid, prepared.ModelName, provider.Guid)
 	}
 	quota := calculateFinalQuota(prepared.ModelName, token.Group, result.Usage, prepared.Body, 0)
 	if endpoint.NoBilling {
@@ -780,22 +766,6 @@ func canRetryStreamAttempt(result *RelayResult) bool {
 	return result == nil || !result.StreamStarted
 }
 
-func shouldForgetProviderAffinity(outcome providerCircuitOutcome, result *RelayResult, err error) bool {
-	if outcome.Kind == providerCircuitIgnored {
-		return false
-	}
-	if outcome.Kind == providerCircuitHealthy && isUpstreamResponseLimitError(err) {
-		return false
-	}
-	if result != nil && result.StreamSynthesized {
-		return true
-	}
-	if err != nil {
-		return true
-	}
-	return result != nil && shouldRetryRelayStatus(result.StatusCode)
-}
-
 func providerCircuitUnavailableError(retryAfter time.Duration) error {
 	retryAfter = relayRetryAfter(retryAfter, defaultRelayRetryAfter)
 	message := fmt.Sprintf("all available providers are cooling down, retry after %s", formatRetryAfter(retryAfter))
@@ -860,7 +830,7 @@ func maybeAutoDisableProvider(provider *domains.VendorMeta, result *RelayResult)
 	if result.StatusCode != http.StatusUnauthorized && result.StatusCode != http.StatusForbidden {
 		return
 	}
-	reason := fmt.Sprintf("auto disabled after upstream status %d", result.StatusCode)
+	reason := fmt.Sprintf("%s%d", providerAutoDisablePrefix, result.StatusCode)
 	if len(result.Body) > 0 {
 		body := string(result.Body)
 		if len(body) > 180 {

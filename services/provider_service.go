@@ -35,6 +35,7 @@ const (
 	balanceAuthProviderBearer = "provider_bearer"
 	providerKeyPresentSQL     = `btrim(COALESCE("key", '')) <> ''`
 	providerKeyMissingSQL     = `btrim(COALESCE("key", '')) = ''`
+	providerAutoDisablePrefix = "auto disabled after upstream status "
 )
 
 type ProviderRecord struct {
@@ -503,6 +504,10 @@ func (s *ProviderService) ApplyAffinity(tokenGuid string, modelName string, cand
 	return candidates
 }
 
+// ApplyRouteAffinity is retained for callers that still need the legacy
+// affinity behavior. The relay's failover strategy deliberately does not call
+// it because active/passive routing must always start with the configured
+// primary on a new request.
 func (s *ProviderService) ApplyRouteAffinity(tokenGuid string, modelName string, candidates []ProviderRouteCandidate) []ProviderRouteCandidate {
 	if providerAffinityTTL() <= 0 || tokenGuid == "" || modelName == "" || len(candidates) <= 1 {
 		return candidates

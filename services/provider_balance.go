@@ -286,6 +286,12 @@ func (s *ProviderService) refreshProviderBalance(ctx context.Context, provider *
 		result.Message = queryErr.Error()
 		updates["balance_query_message"] = clipBalanceMessage(queryErr.Error())
 	}
+	if shouldAutoEnableProviderAfterBalance(provider, result) {
+		// Only reverse an automatic disable. An administrator who explicitly
+		// disabled a provider must not have it re-enabled by a background probe.
+		updates["enabled"] = true
+		updates["remark"] = ""
+	}
 	if err := db.Model(&domains.VendorMeta{}).Where("id = ?", provider.Id).Updates(updates).Error; err != nil {
 		return result, err
 	}
@@ -295,6 +301,36 @@ func (s *ProviderService) refreshProviderBalance(ctx context.Context, provider *
 		result.SuccessTime = provider.BalanceSuccessTime
 	}
 	return result, queryErr
+}
+
+func shouldAutoEnableProviderAfterBalance(provider *domains.VendorMeta, result *ProviderBalanceResult) bool {
+	if provider == nil || provider.Enabled || result == nil || !result.OK {
+		return false
+	}
+	if !strings.HasPrefix(strings.TrimSpace(provider.Remark), providerAutoDisablePrefix) {
+		return false
+	}
+	return balanceRecoveryAvailable(result)
+}
+
+func balanceRecoveryAvailable(result *ProviderBalanceResult) bool {
+	if result == nil || !result.OK {
+		return false
+	}
+	if result.Remaining != nil {
+		return finitePositiveBalance(*result.Remaining)
+	}
+	if result.Total != nil && result.Used != nil {
+		return finitePositiveBalance(*result.Total - *result.Used)
+	}
+	if result.Total != nil {
+		return finitePositiveBalance(*result.Total)
+	}
+	return false
+}
+
+func finitePositiveBalance(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value > 0
 }
 
 func providerBalanceSnapshotUpdates(provider *domains.VendorMeta, result *ProviderBalanceResult) map[string]any {
