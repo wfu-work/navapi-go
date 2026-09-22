@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"navapi-go/constants"
 	"navapi-go/domains"
 	"navapi-go/vos"
 
@@ -69,6 +70,85 @@ func (s *ClientUserService) List(query ClientUserListQuery) (vos.PageResult, err
 		return vos.PageResult{}, err
 	}
 	return vos.PageResult{List: items, Total: total, Page: query.Page, Size: query.Size}, nil
+}
+
+func (s *ClientUserService) Delete(userGuid string) error {
+	userGuid = strings.TrimSpace(userGuid)
+	if userGuid == "" {
+		return errors.New("user guid is required")
+	}
+	db := s.DB()
+	if db == nil {
+		return errors.New("database is not initialized")
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		var user commonDomains.SysUser
+		if err := tx.Where("guid = ?", userGuid).First(&user).Error; err != nil {
+			return err
+		}
+		if strings.EqualFold(user.Username, constants.AdminUsername) {
+			return errors.New("the built-in admin user cannot be deleted")
+		}
+
+		if err := tx.Unscoped().Where("user_guid = ?", userGuid).Delete(&domains.ApiToken{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("user_guid = ?", userGuid).Delete(&domains.UsageLog{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("user_guid = ?", userGuid).Delete(&domains.UserSettings{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("user_guid = ?", userGuid).Delete(&domains.UserWalletRecord{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("user_guid = ?", userGuid).Delete(&domains.UserWallet{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("user_guid = ?", userGuid).Delete(&domains.PaymentOrder{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("user_guid = ?", userGuid).Delete(&domains.UserSubscription{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("user_guid = ?", userGuid).Delete(&domains.Task{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("user_guid = ?", userGuid).Delete(&domains.CheckinRecord{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("user_guid = ?", userGuid).Delete(&domains.QuotaDate{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("used_by = ?", userGuid).Delete(&domains.Redemption{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().
+			Where("inviter_user_guid = ? OR invitee_user_guid = ?", userGuid, userGuid).
+			Delete(&domains.InvitationRelation{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("owner_user_guid = ?", userGuid).Delete(&domains.InvitationCode{}).Error; err != nil {
+			return err
+		}
+		if user.Email != "" {
+			if err := tx.Unscoped().
+				Where("LOWER(recipient_email) = LOWER(?)", user.Email).
+				Delete(&domains.MessageSendRecord{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Unscoped().
+				Where("LOWER(email) = LOWER(?)", user.Email).
+				Delete(&domains.MessageEmailCode{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("user_guid = ?", userGuid).Delete(&commonDomains.SysUserRole{}).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Where("guid = ?", userGuid).Delete(&commonDomains.SysUser{}).Error
+	})
 }
 
 func firstNonEmpty(values ...string) string {

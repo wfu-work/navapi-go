@@ -177,6 +177,8 @@ func (s *ProviderService) Save(provider *domains.VendorMeta) error {
 	provider.BaseURL = strings.TrimSpace(provider.BaseURL)
 	provider.Models = strings.Join(splitCSV(provider.Models), ",")
 	provider.EndpointCapabilities = normalizeEndpointCapabilities(provider.EndpointCapabilities)
+	provider.ResponsesToolPolicy = normalizeResponsesToolPolicy(provider.ResponsesToolPolicy)
+	provider.DisabledResponseTools = normalizeDisabledResponseTools(provider.DisabledResponseTools)
 	provider.ModelOverride = strings.TrimSpace(provider.ModelOverride)
 	provider.QuotaModelWhitelist = strings.Join(splitCSV(provider.QuotaModelWhitelist), ",")
 	provider.ModelMapping = strings.TrimSpace(provider.ModelMapping)
@@ -444,6 +446,34 @@ func normalizeEndpointCapabilities(raw string) string {
 		capabilities = append(capabilities, capability)
 	}
 	return strings.Join(capabilities, ",")
+}
+
+func normalizeResponsesToolPolicy(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case constants.ResponsesToolPolicyRemove:
+		return constants.ResponsesToolPolicyRemove
+	case constants.ResponsesToolPolicyReject:
+		return constants.ResponsesToolPolicyReject
+	default:
+		return constants.ResponsesToolPolicyPassthrough
+	}
+}
+
+func normalizeDisabledResponseTools(raw string) string {
+	seen := make(map[string]struct{})
+	tools := make([]string, 0)
+	for _, tool := range splitCSV(raw) {
+		tool = strings.ToLower(strings.TrimSpace(tool))
+		if tool == "" {
+			continue
+		}
+		if _, ok := seen[tool]; ok {
+			continue
+		}
+		seen[tool] = struct{}{}
+		tools = append(tools, tool)
+	}
+	return strings.Join(tools, ",")
 }
 
 func providerSupportsEndpoint(provider *domains.VendorMeta, endpointPath string) bool {

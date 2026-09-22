@@ -18,6 +18,10 @@ const (
 	ProviderRoutingWeightedRoundRobin = "weighted_round_robin"
 	ProviderRoutingLeastInflight      = "least_inflight"
 
+	ResponsesToolPolicyPassthrough = "passthrough"
+	ResponsesToolPolicyRemove      = "remove"
+	ResponsesToolPolicyReject      = "reject"
+
 	AdminUsername = "admin"
 
 	ContextToken = "navapi_token"

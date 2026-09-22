@@ -56,6 +56,7 @@ type RelayResult struct {
 	Header              http.Header
 	Body                []byte
 	Usage               vos.Usage
+	ResponseModel       string
 	FirstResponseTimeMs int64
 	Timing              UpstreamTiming
 	StreamStarted       bool
@@ -250,9 +251,15 @@ func (s RelayService) relayBuffered(c *gin.Context, token *domains.ApiToken, end
 				preauthorized = true
 			}
 			attempts++
-			forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
-			provider = &current
 			attemptStart := time.Now()
+			forwardBody, upstreamPath, err := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
+			if err != nil {
+				lease.Release()
+				ProviderCircuitBreakerApp.Record(permit, providerCircuitOutcome{Kind: providerCircuitIgnored})
+				routeAttempts = append(routeAttempts, newRelayAttempt(attempts, &route, prepared.ModelName, result, err, time.Since(attemptStart), false, lease.InflightBefore))
+				break
+			}
+			provider = &current
 			result, err = s.forward(c.Request.Context(), &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery)
 			lease.Release()
 			if result != nil {
@@ -393,9 +400,15 @@ func (s RelayService) relayStream(c *gin.Context, token *domains.ApiToken, endpo
 				preauthorized = true
 			}
 			attempts++
-			forwardBody, upstreamPath := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
-			provider = &current
 			attemptStart := time.Now()
+			forwardBody, upstreamPath, err := buildUpstreamRequest(&current, prepared.ModelName, endpoint, prepared.Body, c.GetHeader("Content-Type"))
+			if err != nil {
+				lease.Release()
+				ProviderCircuitBreakerApp.Record(permit, providerCircuitOutcome{Kind: providerCircuitIgnored})
+				routeAttempts = append(routeAttempts, newRelayAttempt(attempts, &route, prepared.ModelName, result, err, time.Since(attemptStart), false, lease.InflightBefore))
+				break
+			}
+			provider = &current
 			canRetry := i < len(prepared.Candidates)-1 && attempts < maxRelayProviderAttempts
 			result, err = s.forwardStream(c, &current, endpoint.Method, upstreamPath, forwardBody, c.Request.Header, c.Request.URL.RawQuery, canRetry)
 			lease.Release()
@@ -841,16 +854,109 @@ func maybeAutoDisableProvider(provider *domains.VendorMeta, result *RelayResult)
 	_ = ProviderServiceApp.AutoDisable(provider.Guid, reason)
 }
 
-func buildUpstreamRequest(provider *domains.VendorMeta, modelName string, endpoint RelayEndpoint, body []byte, contentType string) ([]byte, string) {
+func buildUpstreamRequest(provider *domains.VendorMeta, modelName string, endpoint RelayEndpoint, body []byte, contentType string) ([]byte, string, error) {
 	upstreamModel := ProviderServiceApp.MapModel(provider, modelName)
+	upstreamPath := endpoint.UpstreamPath
 	if endpoint.ModelFromPath {
-		return body, rewriteModelInPath(endpoint.UpstreamPath, upstreamModel)
+		upstreamPath = rewriteModelInPath(endpoint.UpstreamPath, upstreamModel)
 	}
 	forwardBody := rewriteBodyModel(body, upstreamModel, contentType)
 	if endpoint.Format == constants.ProviderTypeOpenAI {
-		forwardBody = ensureOpenAIStreamUsage(forwardBody, contentType, endpoint.UpstreamPath)
+		convertedBody, err := applyResponsesToolPolicy(provider, forwardBody, contentType, endpoint)
+		if err != nil {
+			return nil, upstreamPath, err
+		}
+		forwardBody = ensureOpenAIStreamUsage(convertedBody, contentType, upstreamPath)
 	}
-	return forwardBody, endpoint.UpstreamPath
+	return forwardBody, upstreamPath, nil
+}
+
+func applyResponsesToolPolicy(provider *domains.VendorMeta, body []byte, contentType string, endpoint RelayEndpoint) ([]byte, error) {
+	policy := constants.ResponsesToolPolicyPassthrough
+	if provider != nil {
+		policy = normalizeResponsesToolPolicy(provider.ResponsesToolPolicy)
+	}
+	if provider == nil {
+		return body, nil
+	}
+	if policy == constants.ResponsesToolPolicyPassthrough || len(splitCSV(provider.DisabledResponseTools)) == 0 {
+		return body, nil
+	}
+	if endpoint.Format != constants.ProviderTypeOpenAI || strings.TrimSpace(endpoint.UpstreamPath) != "/v1/responses" {
+		return body, nil
+	}
+	if contentType != "" && !strings.Contains(contentType, "application/json") {
+		return body, nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body, nil
+	}
+	tools, ok := payload["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		return body, nil
+	}
+	disabledTools := make(map[string]struct{})
+	for _, tool := range splitCSV(provider.DisabledResponseTools) {
+		disabledTools[tool] = struct{}{}
+	}
+	keptTools := make([]any, 0, len(tools))
+	blockedTools := make([]string, 0)
+	for _, item := range tools {
+		tool, ok := item.(map[string]any)
+		if !ok {
+			keptTools = append(keptTools, item)
+			continue
+		}
+		toolType, _ := tool["type"].(string)
+		toolType = strings.ToLower(strings.TrimSpace(toolType))
+		if _, disabled := disabledTools[toolType]; disabled {
+			blockedTools = append(blockedTools, toolType)
+			continue
+		}
+		keptTools = append(keptTools, item)
+	}
+	if len(blockedTools) == 0 {
+		return body, nil
+	}
+	if policy == constants.ResponsesToolPolicyReject {
+		return nil, &RelayHTTPError{
+			StatusCode: http.StatusBadRequest,
+			Message:    fmt.Sprintf("provider does not support Responses tool(s): %s", strings.Join(blockedTools, ", ")),
+			Type:       "invalid_request_error",
+			Code:       "responses_tool_not_supported",
+		}
+	}
+	payload["tools"] = keptTools
+	if len(keptTools) == 0 {
+		delete(payload, "tools")
+		removeResponsesToolChoice(payload)
+	} else {
+		removeDisabledResponsesToolChoice(payload, disabledTools)
+	}
+	next, err := json.Marshal(payload)
+	if err != nil {
+		return body, nil
+	}
+	return next, nil
+}
+
+func removeDisabledResponsesToolChoice(payload map[string]any, disabledTools map[string]struct{}) {
+	switch choice := payload["tool_choice"].(type) {
+	case string:
+		if _, disabled := disabledTools[strings.ToLower(strings.TrimSpace(choice))]; disabled {
+			delete(payload, "tool_choice")
+		}
+	case map[string]any:
+		choiceType, _ := choice["type"].(string)
+		if _, disabled := disabledTools[strings.ToLower(strings.TrimSpace(choiceType))]; disabled {
+			delete(payload, "tool_choice")
+		}
+	}
+}
+
+func removeResponsesToolChoice(payload map[string]any) {
+	delete(payload, "tool_choice")
 }
 
 func (s RelayService) forward(ctx context.Context, provider *domains.VendorMeta, method string, upstreamPath string, body []byte, incoming http.Header, rawQuery string) (*RelayResult, error) {
@@ -899,6 +1005,7 @@ func (s RelayService) forward(ctx context.Context, provider *domains.VendorMeta,
 		Header:              resp.Header.Clone(),
 		Body:                respBody,
 		Usage:               parseUsage(respBody, resp.Header.Get("Content-Type")),
+		ResponseModel:       parseResponseModel(respBody),
 		FirstResponseTimeMs: headerResponseTimeMs,
 		Timing:              timing,
 	}, nil
@@ -959,6 +1066,7 @@ func (s RelayService) forwardStream(c *gin.Context, provider *domains.VendorMeta
 			Header:              resp.Header.Clone(),
 			Body:                respBody,
 			Usage:               parseUsage(respBody, resp.Header.Get("Content-Type")),
+			ResponseModel:       parseResponseModel(respBody),
 			FirstResponseTimeMs: headerResponseTimeMs,
 			Timing:              timing,
 			StreamStarted:       !willRetry,
@@ -1157,6 +1265,7 @@ func finishStreamRelayResult(resp *http.Response, tracker *streamUsageTracker, f
 		StatusCode:          resp.StatusCode,
 		Header:              resp.Header.Clone(),
 		Usage:               usage,
+		ResponseModel:       tracker.responseModel,
 		FirstResponseTimeMs: firstResponseTimeMs,
 		Timing:              timing,
 		StreamStarted:       streamStarted,
@@ -1937,6 +2046,23 @@ func parseUsage(body []byte, contentType string) vos.Usage {
 	return normalizeUsage(usage)
 }
 
+func parseResponseModel(body []byte) string {
+	var payload struct {
+		Model    string `json:"model"`
+		Response struct {
+			Model string `json:"model"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	model := strings.TrimSpace(payload.Model)
+	if model == "" {
+		model = strings.TrimSpace(payload.Response.Model)
+	}
+	return model
+}
+
 func normalizeUsage(usage vos.Usage) vos.Usage {
 	if usage.PromptTokens == 0 {
 		usage.PromptTokens = usage.InputTokens
@@ -1984,6 +2110,7 @@ type streamUsageTracker struct {
 	pending             bytes.Buffer
 	eventType           string
 	usage               vos.Usage
+	responseModel       string
 	terminal            string
 	terminalError       string
 	terminalSynthesized bool
@@ -2050,6 +2177,9 @@ func (t *streamUsageTracker) consumeLine(line string) {
 	parsed := parseUsage([]byte(data), "application/json")
 	if parsed.TotalTokens > 0 || parsed.PromptTokens > 0 || parsed.CompletionTokens > 0 {
 		t.usage = parsed
+	}
+	if responseModel := parseResponseModel([]byte(data)); responseModel != "" {
+		t.responseModel = responseModel
 	}
 	eventType, eventError, responseSnapshot, sequenceNumber, hasSequenceNumber := parseResponsesStreamEvent([]byte(data))
 	if eventType == "" {
@@ -2321,6 +2451,7 @@ func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.Ve
 		ProviderGuid:         providerGuid,
 		ProviderName:         providerName,
 		ModelName:            modelName,
+		ResponseModel:        relayResponseModel(relayResults...),
 		Quota:                quota,
 		Cost:                 detail.FinalCost,
 		PromptTokens:         usage.PromptTokens,
@@ -2345,6 +2476,15 @@ func buildUsageLog(c *gin.Context, token *domains.ApiToken, provider *domains.Ve
 		Source:               domains.UsageLogSourceUser,
 		Other:                buildUsageLogOther(token, body, detail, routeAttempts, relayResults...),
 	}
+}
+
+func relayResponseModel(relayResults ...*RelayResult) string {
+	for _, result := range relayResults {
+		if result != nil && strings.TrimSpace(result.ResponseModel) != "" {
+			return strings.TrimSpace(result.ResponseModel)
+		}
+	}
+	return ""
 }
 
 func usageLogBillingDetail(status string, detail QuotaCalculationDetail) QuotaCalculationDetail {

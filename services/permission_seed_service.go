@@ -168,6 +168,7 @@ var navapiAPIPermissionSeeds = []apiPermissionSeed{
 	{Guid: "navapi-api-client-register-settings", Name: "注册设置", Code: "navapi.client.register.settings", Path: "/clients/register/settings", Verb: "GET", Sort: 540, Group: "客户"},
 	{Guid: "navapi-api-client-register-save", Name: "保存注册设置", Code: "navapi.client.register.save", Path: "/clients/register/settings", Verb: "PUT", Sort: 541, Group: "客户"},
 	{Guid: "navapi-api-client-user-list", Name: "用户列表", Code: "navapi.client.user.list", Path: "/clients/users/list", Verb: "GET", Sort: 542, Group: "客户"},
+	{Guid: "navapi-api-client-user-delete", Name: "删除用户", Code: "navapi.client.user.delete", Path: "/clients/users/:userGuid", Verb: "DELETE", Sort: 555, Group: "客户"},
 	{Guid: "navapi-api-client-invite-settings", Name: "邀请设置", Code: "navapi.client.invite.settings", Path: "/clients/invitations/settings", Verb: "GET", Sort: 543, Group: "客户"},
 	{Guid: "navapi-api-client-invite-save", Name: "保存邀请设置", Code: "navapi.client.invite.save", Path: "/clients/invitations/settings", Verb: "PUT", Sort: 544, Group: "客户"},
 	{Guid: "navapi-api-client-invite-codes", Name: "邀请码列表", Code: "navapi.client.invite.codes", Path: "/clients/invitations/codes", Verb: "GET", Sort: 545, Group: "客户"},

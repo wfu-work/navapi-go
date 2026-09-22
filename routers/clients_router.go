@@ -40,6 +40,7 @@ func (r ClientsRouter) InitClientsRouter(router *gin.RouterGroup) {
 		users := clients.Group("users")
 		{
 			users.GET("/list", clientUserApi.List)
+			users.DELETE("/:userGuid", clientUserApi.Delete)
 		}
 	}
 }
